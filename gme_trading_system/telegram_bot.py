@@ -6,6 +6,8 @@ Commands:
   /balance     — live IBKR account balance
   /ticks       — price ticks received today
   /agents      — last run time for each agent
+  /brief       — today's strategy in plain English
+  /update      — sync local data to Supabase immediately
   /halt        — pause all new trades (risk override)
   /resume      — re-enable trading
   /frequency   — show current notification frequency
@@ -13,6 +15,8 @@ Commands:
                low    = daily summary only
                medium = trades + daily summary (default)
                high   = every agent decision + trades + summary
+
+Interactive chat: send plain text questions for LLM responses with trading context.
 
 Run as a thread from orchestrator.py.
 """
@@ -113,7 +117,22 @@ def handle_command(text: str):
     cmd = text.strip().lower().split()[0]
     args = text.strip().split()[1:] if len(text.strip().split()) > 1 else []
 
-    if cmd == "/status":
+    if cmd == "/update":
+        _send("⏳ Syncing to Supabase...")
+        try:
+            import sys, os
+            sys.path.insert(0, os.path.dirname(__file__))
+            from supabase_sync import _get_client, _load_state, sync_once
+            client = _get_client()
+            state = _load_state()
+            state = sync_once(client, state)
+            _send("✅ <b>Supabase sync complete.</b>\nAll local data is now synchronized.")
+            log.info("[tgbot] Manual sync triggered")
+        except Exception as e:
+            _send(f"❌ Sync failed: {e}")
+            log.error(f"[tgbot] Sync command failed: {e}")
+
+    elif cmd == "/status":
         tick_count = _db_scalar("SELECT COUNT(*) FROM price_ticks WHERE date(timestamp)=date('now')")
         last_log   = _db_scalar("SELECT agent_name || ': ' || task_type FROM agent_logs ORDER BY timestamp DESC LIMIT 1")
         halt_str   = "HALTED" if is_halted() else "ACTIVE"
@@ -239,6 +258,7 @@ def handle_command(text: str):
             "/ticks — price data received\n"
             "/agents — last agent activity\n"
             "/brief — today's strategy in plain English\n"
+            "/update — sync data to Supabase now\n"
             "/halt — pause trading\n"
             "/resume — re-enable trading\n"
             "/frequency — notification settings"
