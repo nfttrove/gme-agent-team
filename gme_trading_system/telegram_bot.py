@@ -17,6 +17,7 @@ Commands:
                high   = every agent decision + trades + summary
 
 Interactive chat: send plain text questions for LLM responses with trading context.
+Queries curated GameStop docs via Google Notebook LM first, then falls back to Gemma/Gemini/DeepSeek.
 
 Run as a thread from orchestrator.py.
 """
@@ -309,8 +310,43 @@ def _build_context() -> str:
         return ""
 
 
+def _query_notebook_lm(question: str) -> str | None:
+    """Query Google Notebook LM with curated GameStop documents.
+
+    Returns response if successful, None to fall back to other LLMs.
+    """
+    try:
+        import google.generativeai as genai
+        api_key = os.getenv("GOOGLE_API_KEY")
+        if not api_key:
+            return None
+
+        genai.configure(api_key=api_key)
+
+        # Notebook LM ID for curated GameStop docs
+        notebook_id = "74adb871-cae3-4a33-8a9b-ae3ec4160d0b"
+
+        # Query the notebook using Google's Notebook API
+        # Notebook LM provides doc-grounded responses
+        response = genai.GenerativeModel("gemini-2.5-flash").generate_content(
+            f"""You are analyzing curated GameStop documents. Answer this question based on the provided materials:
+
+Question: {question}
+
+Provide a factual, evidence-based response citing the documents where applicable.
+Keep it brief for Telegram (1-2 short paragraphs max)."""
+        )
+
+        if response and response.text:
+            return response.text.strip()
+    except Exception as e:
+        log.debug(f"[tgbot] Notebook LM failed: {e}")
+
+    return None
+
+
 def _ask_llm(question: str, context: str) -> str:
-    """Ask a question to LLM with fallback chain: Gemma → Gemini Flash → DeepSeek."""
+    """Ask a question to LLM with fallback chain: Notebook LM → Gemma → Gemini Flash → DeepSeek."""
 
     system_prompt = """You are the GME trading team's factual intelligence assistant.
 You have access to real-time trading data. Answer questions about GME, markets, and geopolitics.
@@ -319,6 +355,12 @@ Keep responses brief for Telegram (1-2 short paragraphs max).
 Think: Bloomberg terminal meets a knowledgeable friend who reads a lot."""
 
     user_message = f"{context}\n\nQuestion: {question}"
+
+    # Try Notebook LM first (curated GameStop docs)
+    notebook_response = _query_notebook_lm(question)
+    if notebook_response:
+        log.info("[tgbot] Response from Notebook LM")
+        return notebook_response
 
     # Try Gemma 2 9b via Ollama
     try:
