@@ -48,6 +48,9 @@ gme_trading_system/supabase_sync_state.json
 
 # Node (news ticker repo has node_modules if included)
 node_modules/
+dashboard/node_modules/
+dashboard/dist/
+dashboard/.env.local
 
 # Jupyter
 .ipynb_checkpoints/
