@@ -412,3 +412,34 @@ daily_briefing_task = Task(
     ),
     agent=briefing_agent,
 )
+
+# ── GeoRisk Intelligence (hourly monitoring) ────────────────────────────────────
+
+georisk_task = Task(
+    description=(
+        "Monitor https://finance.worldmonitor.app/ for geopolitical events affecting GME.\n\n"
+        "Focus on these data layers (check the map for active events):\n"
+        "  • Cables: transatlantic fiber cuts (affect supply chain logistics)\n"
+        "  • Pipelines: energy disruptions (increase shipping costs)\n"
+        "  • Sanctions: new trade restrictions (affect retail import costs)\n"
+        "  • Trade Routes: shipping lane blockades (delay inventory)\n"
+        "  • Outages: power/internet grid failures (affect retailers' operations)\n"
+        "  • Weather: severe storms/events (impact retail foot traffic)\n\n"
+        "Steps:\n"
+        "1. Scan the map for RED/ORANGE events (active/recent).\n"
+        "2. For each event, assess: Is it supply chain, consumer confidence, or shipping related?\n"
+        "3. Rate risk: LOW (no immediate impact), MEDIUM (watch closely), HIGH (urgent).\n"
+        "4. Write a 2-3 sentence brief to agent_logs (task_type='georisk', status=risk level).\n\n"
+        "Format: '[RISK_LEVEL] [Location/Event]: [Impact to GME supply chain or operations]'\n"
+        "Examples:\n"
+        "  MEDIUM - Red Sea: Yemen attacks disrupt shipping lanes; +5-10% transit time to US ports\n"
+        "  LOW - Taiwan Weather: Typhoon warning; chip shortages unlikely to worsen\n"
+        "  HIGH - UK Power Outage: National grid failure affecting London port ops; shipping delayed"
+    ),
+    expected_output=(
+        "LOW - No significant supply chain events detected. "
+        "Baltic stable, Suez open, US retail weather normal. "
+        "Monitor weekend weather in Northeast (potential store impact Monday)."
+    ),
+    agent=georisk_agent,
+)

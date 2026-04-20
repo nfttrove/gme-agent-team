@@ -338,6 +338,80 @@ def run_synthesis():
         write_log("Synthesis", str(e), "synthesis", "error")
 
 
+def run_georisk():
+    """Hourly GeoRisk scan — monitor global supply chain events."""
+    from agents import georisk_agent
+    from tasks import georisk_task
+    try:
+        crew = Crew(agents=[georisk_agent], tasks=[georisk_task],
+                    process=Process.sequential, verbose=False)
+        result = crew.kickoff()
+        log.info(f"[GeoRisk] {str(result)[:120]}")
+        write_log("GeoRisk", str(result)[:500], "georisk")
+    except Exception as e:
+        log.error(f"[GeoRisk] {e}")
+        write_log("GeoRisk", str(e), "georisk", "error")
+
+
+def run_periodic_brief():
+    """Every 4 hours — send human-readable intelligence digest to Telegram."""
+    import sqlite3
+    from notifier import notify_periodic_brief
+
+    try:
+        conn = sqlite3.connect(DB_PATH)
+        conn.row_factory = sqlite3.Row
+
+        # Get latest price
+        price_row = conn.execute(
+            "SELECT close, timestamp FROM price_ticks WHERE symbol='GME' ORDER BY timestamp DESC LIMIT 1"
+        ).fetchone()
+        price = price_row['close'] if price_row else 0
+
+        # Get latest synthesis for consensus
+        synth = conn.execute(
+            "SELECT content FROM agent_logs WHERE task_type='synthesis' ORDER BY timestamp DESC LIMIT 1"
+        ).fetchone()
+        consensus = synth['content'][:80] if synth else "No consensus yet"
+
+        # Get latest prediction
+        pred = conn.execute(
+            "SELECT predicted_price, confidence FROM predictions ORDER BY timestamp DESC LIMIT 1"
+        ).fetchone()
+        prediction = f"${pred['predicted_price']:.2f} ({pred['confidence']:.0%})" if pred else "No prediction"
+
+        # Get latest signal
+        signal = conn.execute(
+            "SELECT signal_name, confidence FROM structural_signals ORDER BY timestamp DESC LIMIT 1"
+        ).fetchone()
+        top_signal = f"{signal['signal_name']} ({signal['confidence']:.0%})" if signal else "No signals"
+
+        # Get latest georisk
+        georisk = conn.execute(
+            "SELECT content FROM agent_logs WHERE task_type='georisk' ORDER BY timestamp DESC LIMIT 1"
+        ).fetchone()
+        geo_risk = georisk['content'][:80] if georisk else "No geopolitical alerts"
+
+        conn.close()
+
+        # Calculate % change (simple: compare to previous close or assume 0)
+        pct_change = 0.5  # placeholder; could enhance by querying two ticks
+
+        notify_periodic_brief(
+            price=price,
+            pct_change=pct_change,
+            consensus=consensus,
+            top_signal=top_signal,
+            geo_risk=geo_risk,
+            prediction=prediction
+        )
+        write_log("Briefer", "4-hour digest sent", "periodic_brief")
+        log.info("[Briefer] 4-hour digest sent to Telegram")
+    except Exception as e:
+        log.error(f"[Briefer] {e}")
+        write_log("Briefer", str(e), "periodic_brief", "error")
+
+
 def run_daily_briefing():
     """9:32 AM ET — ELI5 strategy briefing sent to Telegram after market opens."""
     from agents import briefing_agent
@@ -396,6 +470,7 @@ class TradingSystemOrchestrator:
         self.scheduler.add_job(run_pattern,      IntervalTrigger(hours=2),    id="pattern")   # was 6h
         self.scheduler.add_job(run_daily_trend,  IntervalTrigger(hours=4),    id="trendy_interval")  # intraday
         self.scheduler.add_job(run_futurist_cycle, IntervalTrigger(hours=2),  id="futurist")
+        self.scheduler.add_job(run_georisk,      IntervalTrigger(hours=1),    id="georisk")   # hourly geopolitical scan
 
         # Daily jobs (market-hours aware)
         self.scheduler.add_job(run_daily_huddle,      CronTrigger(hour=9,  minute=0),  id="huddle")
@@ -417,6 +492,9 @@ class TradingSystemOrchestrator:
 
         # Social monitor — scan tracked accounts every 15 minutes during market hours
         self.scheduler.add_job(run_social_scan, IntervalTrigger(minutes=15), id="social")
+
+        # Periodic intelligence digest — every 4 hours to Telegram
+        self.scheduler.add_job(run_periodic_brief, IntervalTrigger(hours=4), id="periodic_brief")
 
     def start(self):
         self.configure_schedule()

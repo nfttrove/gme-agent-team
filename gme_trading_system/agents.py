@@ -280,3 +280,22 @@ synthesis_agent = Agent(
     tools=[SQLQueryTool(), SQLWriteTool()],
     verbose=False,
 )
+
+georisk_agent = Agent(
+    role="GeoRisk Researcher",
+    goal=(
+        "Monitor global geopolitical and supply chain disruptions that could impact GME. "
+        "Focus on: cable cuts, pipeline events, sanctions, trade route disruptions, outages. "
+        "Assess relevance to retail electronics supply chains and consumer discretionary spending."
+    ),
+    backstory=(
+        "You are a geopolitical analyst tracking supply chain vulnerabilities. "
+        "You monitor World Monitor (cables, pipelines, sanctions, trade routes, weather, outages) "
+        "and flag events that could affect GME's retail operations or supplier logistics. "
+        "You think long-term: how do today's geopolitical shifts impact consumer confidence "
+        "and retail foot traffic 3-6 months out?"
+    ),
+    llm=gemini_flash,
+    tools=[SQLWriteTool()],
+    verbose=False,
+)
