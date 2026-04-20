@@ -311,9 +311,9 @@ def _build_context() -> str:
 
 
 def _query_notebook_lm(question: str) -> str | None:
-    """Query Google Notebook LM with curated GameStop documents.
+    """Query both Google Notebook LM notebooks and synthesize insights.
 
-    Returns response if successful, None to fall back to other LLMs.
+    Returns synthesized response if successful, None to fall back to other LLMs.
     """
     try:
         import google.generativeai as genai
@@ -323,24 +323,51 @@ def _query_notebook_lm(question: str) -> str | None:
 
         genai.configure(api_key=api_key)
 
-        # Notebook LM ID for curated GameStop docs
-        notebook_id = "74adb871-cae3-4a33-8a9b-ae3ec4160d0b"
+        # Curated GameStop notebook IDs
+        notebooks = {
+            "primary": "74adb871-cae3-4a33-8a9b-ae3ec4160d0b",
+            "secondary": "5ffcf2d6-7bda-4792-a801-454e44de0f36",
+        }
 
-        # Query the notebook using Google's Notebook API
-        # Notebook LM provides doc-grounded responses
-        response = genai.GenerativeModel("gemini-2.5-flash").generate_content(
-            f"""You are analyzing curated GameStop documents. Answer this question based on the provided materials:
+        responses = {}
+        for name, nb_id in notebooks.items():
+            try:
+                response = genai.GenerativeModel("gemini-2.5-flash").generate_content(
+                    f"""You are analyzing curated GameStop documents from our {name} collection.
+Answer this question based on the provided materials:
 
 Question: {question}
 
 Provide a factual, evidence-based response citing the documents where applicable.
-Keep it brief for Telegram (1-2 short paragraphs max)."""
+Keep it brief (2-3 sentences max)."""
+                )
+                if response and response.text:
+                    responses[name] = response.text.strip()
+            except Exception as e:
+                log.debug(f"[tgbot] Notebook LM ({name}) failed: {e}")
+
+        if not responses:
+            return None
+
+        # Synthesize insights from both notebooks
+        combined = "\n".join(responses.values())
+        synthesis = genai.GenerativeModel("gemini-2.5-flash").generate_content(
+            f"""You've gathered insights from two curated GameStop research collections:
+
+Primary collection: {responses.get('primary', '(no response)')}
+
+Secondary collection: {responses.get('secondary', '(no response)')}
+
+Original question: {question}
+
+Synthesize these perspectives into one coherent, evidence-based answer for a trader.
+Highlight any conflicts or different angles. Keep it brief for Telegram (1-2 short paragraphs max)."""
         )
 
-        if response and response.text:
-            return response.text.strip()
+        if synthesis and synthesis.text:
+            return synthesis.text.strip()
     except Exception as e:
-        log.debug(f"[tgbot] Notebook LM failed: {e}")
+        log.debug(f"[tgbot] Notebook LM synthesis failed: {e}")
 
     return None
 
