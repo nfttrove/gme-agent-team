@@ -163,6 +163,27 @@ CREATE TABLE IF NOT EXISTS short_watchlist (
     last_updated     TEXT
 );
 
+CREATE TABLE IF NOT EXISTS social_posts (
+    id          INTEGER PRIMARY KEY AUTOINCREMENT,
+    timestamp   TEXT    NOT NULL,
+    username    TEXT,
+    content     TEXT,
+    signal_type TEXT  -- BULLISH, BEARISH, CRITICAL, INFO
+);
+
+CREATE TABLE IF NOT EXISTS options_snapshots (
+    id                  INTEGER PRIMARY KEY AUTOINCREMENT,
+    timestamp           TEXT    NOT NULL,
+    expiration          TEXT,
+    max_pain_strike     REAL,
+    current_price       REAL,
+    delta_to_max_pain   REAL,
+    call_oi_total       INTEGER,
+    put_oi_total        INTEGER,
+    put_call_ratio      REAL,
+    net_oi_bias         TEXT
+);
+
 CREATE INDEX IF NOT EXISTS idx_stream_comments_displayed ON stream_comments(displayed);
 CREATE INDEX IF NOT EXISTS idx_price_ticks_timestamp ON price_ticks(timestamp);
 CREATE INDEX IF NOT EXISTS idx_daily_candles_date ON daily_candles(date);
@@ -172,3 +193,5 @@ CREATE INDEX IF NOT EXISTS idx_performance_scores_date ON performance_scores(dat
 CREATE INDEX IF NOT EXISTS idx_strategy_history_timestamp ON strategy_history(timestamp);
 CREATE INDEX IF NOT EXISTS idx_structural_signals_ticker ON structural_signals(ticker);
 CREATE INDEX IF NOT EXISTS idx_structural_signals_date ON structural_signals(filing_date);
+CREATE INDEX IF NOT EXISTS idx_social_posts_timestamp ON social_posts(timestamp);
+CREATE INDEX IF NOT EXISTS idx_options_snapshots_timestamp ON options_snapshots(timestamp);

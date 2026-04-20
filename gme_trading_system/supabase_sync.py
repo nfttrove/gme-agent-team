@@ -1,5 +1,8 @@
 """
-Supabase sync — mirrors 5 key SQLite tables to Supabase every 30 seconds.
+Supabase sync — mirrors 10 key SQLite tables to Supabase every 30 seconds.
+Tables: agent_logs, trade_decisions, predictions, stream_comments, structural_signals,
+social_posts, options_snapshots, data_quality_logs, performance_scores, strategy_history.
+
 Progress is tracked in supabase_sync_state.json (last synced row id per table).
 Runs as a daemon thread alongside the orchestrator — if Supabase is unreachable
 it logs a warning and retries next cycle; local SQLite is never blocked.
@@ -45,6 +48,22 @@ TABLES = {
     "structural_signals": [
         "id", "timestamp", "ticker", "signal_name", "filing_type",
         "filing_date", "headline", "url", "confidence", "action", "timeline_months",
+    ],
+    "social_posts": [
+        "id", "timestamp", "username", "content", "signal_type",
+    ],
+    "options_snapshots": [
+        "id", "timestamp", "expiration", "max_pain_strike", "current_price",
+        "delta_to_max_pain", "call_oi_total", "put_oi_total", "put_call_ratio", "net_oi_bias",
+    ],
+    "data_quality_logs": [
+        "id", "timestamp", "check_type", "result", "anomalies", "status",
+    ],
+    "performance_scores": [
+        "id", "date", "agent_name", "metric", "value", "sample_size", "notes",
+    ],
+    "strategy_history": [
+        "id", "timestamp", "parameter", "old_value", "new_value", "reason", "approved_by", "reverted",
     ],
 }
 
