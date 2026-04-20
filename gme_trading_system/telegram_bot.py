@@ -2,6 +2,7 @@
 Two-way Telegram Bot — command interface for the GME trading system.
 
 Commands:
+  /help        — full command guide and chat capabilities
   /status      — system health, agents, tick count
   /balance     — live IBKR account balance
   /ticks       — price ticks received today
@@ -17,7 +18,8 @@ Commands:
                high   = every agent decision + trades + summary
 
 Interactive chat: send plain text questions for LLM responses with trading context.
-Queries curated GameStop docs via Google Notebook LM first, then falls back to Gemma/Gemini/DeepSeek.
+Queries dual curated GameStop research collections via Google Notebook LM first,
+then falls back to Gemma/Gemini/DeepSeek.
 
 Run as a thread from orchestrator.py.
 """
@@ -251,9 +253,34 @@ def handle_command(text: str):
                 f"/frequency high — every agent decision"
             )
 
+    elif cmd == "/help":
+        _send(
+            "<b>📚 GME Trading Bot — Command Guide</b>\n\n"
+            "<b>System Commands:</b>\n"
+            "/status — system health, tick count, last agent activity\n"
+            "/agents — last run time for each agent\n"
+            "/ticks — price data received today\n"
+            "/balance — live IBKR account balance\n\n"
+            "<b>Research & Intel:</b>\n"
+            "/brief — today's strategy brief from synthesis agent\n"
+            "/update — force sync local data to Supabase now\n\n"
+            "<b>Settings:</b>\n"
+            "/frequency [low|medium|high] — notification level\n"
+            "/halt — pause trading (risk override)\n"
+            "/resume — re-enable trading\n\n"
+            "<b>💬 Interactive Chat:</b>\n"
+            "Just send any question (no slash) to ask:\n"
+            "• Current GME price & analysis\n"
+            "• Trading strategies & signals\n"
+            "• Market & geopolitical context\n"
+            "• Questions about curated research docs\n\n"
+            "<i>Responses use curated GameStop research, real-time data, and AI analysis.</i>"
+        )
+
     else:
         _send(
             "<b>Available commands:</b>\n"
+            "/help — full command guide and chat capabilities\n"
             "/status — system health\n"
             "/balance — IBKR account balance\n"
             "/ticks — price data received\n"
@@ -262,7 +289,8 @@ def handle_command(text: str):
             "/update — sync data to Supabase now\n"
             "/halt — pause trading\n"
             "/resume — re-enable trading\n"
-            "/frequency — notification settings"
+            "/frequency — notification settings\n\n"
+            "Send /help for detailed guide."
         )
 
 
