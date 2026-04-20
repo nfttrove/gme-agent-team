@@ -13,6 +13,7 @@ from agents import (
     cto_agent,
     briefing_agent,
     synthesis_agent,
+    georisk_agent,
 )
 
 daily_trend_task = Task(
