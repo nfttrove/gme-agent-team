@@ -1,0 +1,159 @@
+# GME Agent Team Configuration
+# All times in ET (America/New_York). Intervals in minutes/hours/seconds.
+
+# ── Agent Cycles ──────────────────────────────────────────────────────────────
+agents:
+  synthesis:
+    interval_minutes: 5
+    description: "Cross-agent intelligence synthesis — shared context"
+
+  valerie:
+    interval_minutes: 1
+    description: "Data validator — fetch and validate price/volume"
+
+  chatty:
+    interval_seconds: 30
+    description: "Stream commentator — real-time price analysis"
+
+  newsie:
+    interval_minutes: 30
+    description: "News sentiment — aggregate market sentiment"
+
+  pattern:
+    interval_hours: 2
+    description: "Chart pattern recognition — multi-day patterns"
+
+  trendy:
+    interval_hours: 4
+    cron_eod: "20:00"  # 8:00 PM ET
+    description: "Daily trend detector — every 4h + EOD 8 PM ET"
+
+  futurist:
+    interval_hours: 2
+    description: "Price predictor — next candle + self-calibration"
+
+  social:
+    interval_minutes: 15
+    market_hours_only: true
+    description: "Twitter/X monitor — tracked accounts"
+
+# ── Daily Tasks ───────────────────────────────────────────────────────────────
+daily:
+  huddle:
+    cron: "09:00"
+    description: "Boss morning briefing — team mission + yesterday review"
+
+  briefing:
+    cron: "09:32"
+    description: "Daily strategy brief (ELI5) — sent to Telegram"
+
+  cto_brief:
+    cron: "09:05"
+    description: "CTO structural intelligence — PE playbook + shorts"
+
+  investor_intel:
+    cron: "08:00"
+    description: "Key investor intelligence scan — Scion 13F + RC Ventures filings"
+
+  aggregator:
+    cron: "16:35"
+    description: "Daily aggregation — score + archive performance"
+
+  debrief:
+    cron: "16:30"
+    description: "Post-market debrief — compare predictions vs actuals"
+
+# ── Weekly Tasks ──────────────────────────────────────────────────────────────
+weekly:
+  cto_structural_scan:
+    day: "sunday"
+    time: "08:00"
+    description: "Deep structural scan — EDGAR monitoring + short watchlist"
+
+  weekly_review:
+    day: "friday"
+    time: "17:00"
+    description: "Weekly strategy review — agent performance + adaptation"
+
+  options:
+    day: "monday"
+    time: "08:30"
+    description: "Options intelligence — compute max pain for the week"
+
+# ── LLM Configuration ─────────────────────────────────────────────────────────
+llm:
+  primary_provider: "deepseek"
+
+  deepseek:
+    model: "deepseek-chat"
+    temperature: 0.3
+    max_tokens: 2048
+    base_url: "https://api.deepseek.com/v1"
+
+  gemini_flash:
+    model: "gemini-2.5-flash"
+    temperature: 0.2
+    max_tokens: 2048
+
+  gemini_pro:
+    model: "gemini-2.5-pro"
+    temperature: 0.3
+    max_tokens: 4096
+
+# ── Data Sources ──────────────────────────────────────────────────────────────
+data:
+  price:
+    fallback_to_yfinance: true
+    cache_seconds: 60
+
+  news:
+    primary: "supabase_edge"
+    fallback: "finnhub"
+    limit: 15
+    sentiment_scoring: "pre_computed"
+
+  sec:
+    cik_rc_ventures: "0001822844"
+    cik_scion: "0001649339"
+    lookback_days: 30
+
+# ── Telegram Alerts ───────────────────────────────────────────────────────────
+alerts:
+  enabled: true
+
+  confidence_thresholds:
+    high_signal: 0.80  # Score > 80% → alert
+    extreme_volatility: 3.0  # > 3σ move
+    investor_news: true  # RC Ventures / Scion activity
+
+  channels:
+    daily_brief: true
+    signals: true
+    investor_intel: true
+
+# ── Database ──────────────────────────────────────────────────────────────────
+database:
+  path: "agent_memory.db"
+  retention_days: 90  # Auto-cleanup: keep 90 days of logs
+  checkpoint_interval_minutes: 30
+
+# ── Logging ───────────────────────────────────────────────────────────────────
+logging:
+  level: "INFO"
+  file: "orchestrator.log"
+  max_size_mb: 50
+  backup_count: 5  # Keep 5 rotated logs
+
+# ── Market Hours ──────────────────────────────────────────────────────────────
+market:
+  timezone: "America/New_York"
+  session_open: "09:30"
+  session_close: "16:00"
+  premarket_open: "04:00"
+  extended_close: "20:00"
+
+# ── Risk Rules ────────────────────────────────────────────────────────────────
+risk:
+  max_position_size: 0.10  # 10% of portfolio
+  stop_loss_pct: 0.05  # 5%
+  max_daily_loss: 0.02  # 2% daily drawdown limit
