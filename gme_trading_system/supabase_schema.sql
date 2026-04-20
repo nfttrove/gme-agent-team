@@ -68,12 +68,73 @@ CREATE TABLE IF NOT EXISTS structural_signals (
     synced_at        TIMESTAMPTZ DEFAULT NOW()
 );
 
+CREATE TABLE IF NOT EXISTS social_posts (
+    id          BIGINT PRIMARY KEY,
+    timestamp   TEXT NOT NULL,
+    username    TEXT,
+    content     TEXT,
+    signal_type TEXT,
+    synced_at   TIMESTAMPTZ DEFAULT NOW()
+);
+
+CREATE TABLE IF NOT EXISTS options_snapshots (
+    id                  BIGINT PRIMARY KEY,
+    timestamp           TEXT NOT NULL,
+    expiration          TEXT,
+    max_pain_strike     REAL,
+    current_price       REAL,
+    delta_to_max_pain   REAL,
+    call_oi_total       INT,
+    put_oi_total        INT,
+    put_call_ratio      REAL,
+    net_oi_bias         TEXT,
+    synced_at           TIMESTAMPTZ DEFAULT NOW()
+);
+
+CREATE TABLE IF NOT EXISTS data_quality_logs (
+    id          BIGINT PRIMARY KEY,
+    timestamp   TEXT NOT NULL,
+    check_type  TEXT,
+    result      TEXT,
+    anomalies   TEXT,
+    status      TEXT DEFAULT 'ok',
+    synced_at   TIMESTAMPTZ DEFAULT NOW()
+);
+
+CREATE TABLE IF NOT EXISTS performance_scores (
+    id          BIGINT PRIMARY KEY,
+    date        TEXT NOT NULL,
+    agent_name  TEXT NOT NULL,
+    metric      TEXT NOT NULL,
+    value       REAL,
+    sample_size INT,
+    notes       TEXT,
+    synced_at   TIMESTAMPTZ DEFAULT NOW()
+);
+
+CREATE TABLE IF NOT EXISTS strategy_history (
+    id          BIGINT PRIMARY KEY,
+    timestamp   TEXT NOT NULL,
+    parameter   TEXT NOT NULL,
+    old_value   REAL,
+    new_value   REAL,
+    reason      TEXT,
+    approved_by TEXT,
+    reverted    INT,
+    synced_at   TIMESTAMPTZ DEFAULT NOW()
+);
+
 -- Enable Row Level Security (recommended for Supabase)
 ALTER TABLE agent_logs         ENABLE ROW LEVEL SECURITY;
 ALTER TABLE trade_decisions     ENABLE ROW LEVEL SECURITY;
 ALTER TABLE predictions         ENABLE ROW LEVEL SECURITY;
 ALTER TABLE stream_comments     ENABLE ROW LEVEL SECURITY;
 ALTER TABLE structural_signals  ENABLE ROW LEVEL SECURITY;
+ALTER TABLE social_posts        ENABLE ROW LEVEL SECURITY;
+ALTER TABLE options_snapshots   ENABLE ROW LEVEL SECURITY;
+ALTER TABLE data_quality_logs   ENABLE ROW LEVEL SECURITY;
+ALTER TABLE performance_scores  ENABLE ROW LEVEL SECURITY;
+ALTER TABLE strategy_history    ENABLE ROW LEVEL SECURITY;
 
 -- Allow service role full access (used by the sync module)
 CREATE POLICY "service_all" ON agent_logs        FOR ALL USING (true);
@@ -81,3 +142,8 @@ CREATE POLICY "service_all" ON trade_decisions    FOR ALL USING (true);
 CREATE POLICY "service_all" ON predictions        FOR ALL USING (true);
 CREATE POLICY "service_all" ON stream_comments    FOR ALL USING (true);
 CREATE POLICY "service_all" ON structural_signals FOR ALL USING (true);
+CREATE POLICY "service_all" ON social_posts       FOR ALL USING (true);
+CREATE POLICY "service_all" ON options_snapshots  FOR ALL USING (true);
+CREATE POLICY "service_all" ON data_quality_logs  FOR ALL USING (true);
+CREATE POLICY "service_all" ON performance_scores FOR ALL USING (true);
+CREATE POLICY "service_all" ON strategy_history   FOR ALL USING (true);

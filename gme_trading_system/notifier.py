@@ -190,6 +190,21 @@ def notify_daily_summary(pnl: float, win_rate: float, trades: int,
     return _send(msg)
 
 
+def notify_periodic_brief(price: float, pct_change: float, consensus: str,
+                         top_signal: str, geo_risk: str, prediction: str) -> bool:
+    """Send a 4-hour intelligence digest (human-readable)."""
+    ts = datetime.now().strftime("%I:%M %p")
+    msg = (
+        f"📊 <b>GME INTELLIGENCE BRIEF</b> — {ts} ET\n\n"
+        f"💰 <b>PRICE</b>: ${price:.2f} ({pct_change:+.1f}%)\n"
+        f"🧠 <b>CONSENSUS</b>: {consensus}\n"
+        f"🔮 <b>PREDICTION</b>: {prediction}\n"
+        f"📰 <b>TOP SIGNAL</b>: {top_signal}\n"
+        f"🌍 <b>GEOPOLITICAL RISK</b>: {geo_risk}"
+    )
+    return _send(msg)
+
+
 # ── Test ───────────────────────────────────────────────────────────────────────
 
 def test_connection() -> bool:

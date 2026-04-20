@@ -245,6 +245,116 @@ def handle_command(text: str):
         )
 
 
+def _build_context() -> str:
+    """Gather recent agent context for LLM chat."""
+    try:
+        conn = sqlite3.connect(DB_PATH)
+        conn.row_factory = sqlite3.Row
+
+        # Latest price
+        price = conn.execute(
+            "SELECT close, timestamp FROM price_ticks WHERE symbol='GME' ORDER BY timestamp DESC LIMIT 1"
+        ).fetchone()
+
+        # Latest synthesis
+        synthesis = conn.execute(
+            "SELECT content FROM agent_logs WHERE task_type='synthesis' ORDER BY timestamp DESC LIMIT 1"
+        ).fetchone()
+
+        # Latest prediction
+        pred = conn.execute(
+            "SELECT predicted_price, confidence FROM predictions ORDER BY timestamp DESC LIMIT 1"
+        ).fetchone()
+
+        # Latest Chatty commentary
+        chatty = conn.execute(
+            "SELECT content FROM agent_logs WHERE agent_name='Chatty' ORDER BY timestamp DESC LIMIT 1"
+        ).fetchone()
+
+        conn.close()
+
+        context = "Recent trading context:\n"
+        if price:
+            context += f"- Latest price: ${price['close']:.2f} (from {price['timestamp'][:10]})\n"
+        if synthesis:
+            context += f"- Team consensus: {synthesis['content'][:200]}\n"
+        if pred:
+            context += f"- Next prediction: ${pred['predicted_price']:.2f} (confidence {pred['confidence']:.0%})\n"
+        if chatty:
+            context += f"- Latest commentary: {chatty['content'][:150]}\n"
+
+        return context
+    except Exception as e:
+        log.error(f"[tgbot] context build failed: {e}")
+        return ""
+
+
+def _ask_llm(question: str, context: str) -> str:
+    """Ask a question to LLM with fallback chain: Gemma → Gemini Flash → DeepSeek."""
+
+    system_prompt = """You are the GME trading team's factual intelligence assistant.
+You have access to real-time trading data. Answer questions about GME, markets, and geopolitics.
+Be factual and honest — tell the truth even if it contradicts bullish sentiment.
+Keep responses brief for Telegram (1-2 short paragraphs max).
+Think: Bloomberg terminal meets a knowledgeable friend who reads a lot."""
+
+    user_message = f"{context}\n\nQuestion: {question}"
+
+    # Try Gemma 2 9b via Ollama
+    try:
+        r = requests.post("http://localhost:11434/api/generate", json={
+            "model": "gemma2:9b",
+            "prompt": f"{system_prompt}\n\n{user_message}",
+            "stream": False,
+        }, timeout=30)
+        if r.status_code == 200:
+            return r.json().get("response", "").strip()
+    except Exception as e:
+        log.debug(f"[tgbot] Gemma failed: {e}")
+
+    # Try Gemini Flash
+    try:
+        import google.generativeai as genai
+        genai.configure(api_key=os.getenv("GOOGLE_API_KEY"))
+        model = genai.GenerativeModel("gemini-2.5-flash")
+        response = model.generate_content(f"{system_prompt}\n\n{user_message}")
+        return response.text.strip()
+    except Exception as e:
+        log.debug(f"[tgbot] Gemini failed: {e}")
+
+    # Try DeepSeek
+    try:
+        r = requests.post("https://api.deepseek.com/v1/chat/completions", json={
+            "model": "deepseek-chat",
+            "messages": [
+                {"role": "system", "content": system_prompt},
+                {"role": "user", "content": user_message},
+            ],
+            "temperature": 0.3,
+            "max_tokens": 500,
+        }, headers={
+            "Authorization": f"Bearer {os.getenv('DEEPSEEK_API_KEY')}",
+        }, timeout=30)
+        if r.status_code == 200:
+            return r.json()["choices"][0]["message"]["content"].strip()
+    except Exception as e:
+        log.debug(f"[tgbot] DeepSeek failed: {e}")
+
+    return "Sorry, no LLMs available right now. Try again later."
+
+
+def _handle_chat(text: str):
+    """Handle plain-text questions by asking LLM with context."""
+    try:
+        context = _build_context()
+        response = _ask_llm(text, context)
+        _send(f"🤖 <i>{response}</i>")
+        log.info(f"[tgbot] Chat: {text[:50]}... → response sent")
+    except Exception as e:
+        log.error(f"[tgbot] chat handler failed: {e}")
+        _send("❌ Error processing your question. Try again.")
+
+
 def run_bot():
     if not ENABLED:
         log.warning("[tgbot] Telegram not configured — bot disabled")
@@ -270,6 +380,9 @@ def run_bot():
                 if text.startswith("/"):
                     log.info(f"[tgbot] Command: {text}")
                     handle_command(text)
+                elif text:
+                    log.info(f"[tgbot] Chat: {text[:50]}")
+                    _handle_chat(text)
         except Exception as e:
             log.error(f"[tgbot] Poll error: {e}")
             time.sleep(5)
