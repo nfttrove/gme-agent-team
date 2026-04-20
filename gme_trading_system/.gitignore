@@ -1,0 +1,9 @@
+.env
+agent_memory.db
+*.pyc
+__pycache__/
+data/
+notebooklm_cache/
+.venv/
+venv/
+*.log

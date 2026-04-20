@@ -1,0 +1,53 @@
+# Secrets — never commit
+.env
+*.env
+.env.*
+!.env.example
+
+# Databases
+*.db
+*.sqlite
+*.sqlite3
+
+# Python
+__pycache__/
+*.py[cod]
+*.pyo
+*.pyd
+.Python
+*.egg-info/
+dist/
+build/
+.eggs/
+
+# Virtual environments
+venv/
+.venv/
+env/
+gme_trading_system/venv/
+
+# Logs
+*.log
+orchestrator.log
+
+# Runtime state
+halt.flag
+supabase_sync_state.json
+gme_trading_system/supabase_sync_state.json
+
+# Claude
+.claude/worktrees/
+
+# macOS
+.DS_Store
+**/.DS_Store
+
+# JetBrains
+.idea/
+*.iml
+
+# Node (news ticker repo has node_modules if included)
+node_modules/
+
+# Jupyter
+.ipynb_checkpoints/

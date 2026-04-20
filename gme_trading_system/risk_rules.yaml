@@ -1,0 +1,111 @@
+# ═══════════════════════════════════════════════════════════════
+# GME Trading System — Risk Rules
+# Account: £100 target (deposit pending — update limits when cleared)
+# Broker:  Interactive Brokers (IBKR) — account U8493296
+# ═══════════════════════════════════════════════════════════════
+
+paper_trading: false
+
+account:
+  starting_capital_gbp: 100        # target balance — deposit pending (1-3 days to clear)
+  starting_capital_usd: 135        # approximate at 1.35 GBP/USD
+  currency: GBP
+  broker: ibkr
+  account_type: margin
+
+# ── Position limits ────────────────────────────────────────────
+position_limits:
+  # £100 account → max $30 per trade (~1 share at $25/share)
+  max_position_size_usd: 30
+
+  max_open_positions: 1
+
+  # Hard daily loss cap — 8% of £100 account
+  max_daily_loss_usd: 10
+
+  # Hard stop on any single trade
+  max_single_trade_loss_usd: 5
+
+  max_trades_per_day: 2
+
+# ── Entry rules ────────────────────────────────────────────────
+entry_rules:
+  # Higher threshold for live money vs paper (was 0.70)
+  min_confidence_score: 0.75
+
+  # Boss requires Newsie AND trend agents to agree before approving
+  require_news_confirmation: true
+  require_trend_alignment: true
+
+  # Only trade when volume is healthy (avoid thinly traded sessions)
+  min_volume_percentile: 50
+
+  # Do not enter if position would be >25% of account value
+  max_account_exposure_pct: 0.25
+
+# ── Exit rules ─────────────────────────────────────────────────
+exit_rules:
+  # Hard stop: close if position loses 3% (matches strategy.json)
+  stop_loss_pct: 0.03
+
+  # Take profit at 6% gain
+  take_profit_pct: 0.06
+
+  # Trailing stop: lock in gains once up 3%, trail by 2%
+  trailing_stop_pct: 0.02
+
+  # Never hold overnight when first starting out — too much gap risk
+  max_hold_hours: 6
+
+  # Close all positions 15 minutes before market close (3:45 PM ET)
+  # Avoids after-hours price gaps and halts
+  close_before_eod_minutes: 15
+
+# ── Safety overrides ────────────────────────────────────────────
+risk_overrides:
+  # Auto-halt all trading if daily loss limit is hit
+  halt_on_daily_loss: true
+
+  # Auto-halt if Alpaca API is unreachable (can't monitor position)
+  halt_on_api_error: true
+
+  # No pre-market or after-hours trading — too volatile, thin liquidity
+  allow_premarket: false
+  allow_afterhours: false
+
+  # CTO must not flag any GME immunity RED before trades are permitted
+  require_gme_immunity_green: true
+
+  # If TradingView webhook has been silent >5 min, no new entries
+  # (can't trust the data we're trading on)
+  require_live_data_feed: true
+
+# ── Agent veto rules ────────────────────────────────────────────
+agent_veto_rules:
+  # Boss (project_manager_agent) must approve every trade
+  manager_must_approve: true
+
+  # At least 2 of: Trendy, Pattern, Newsie, Futurist must agree
+  min_agents_agree: 2
+
+  # Safety gate must pass before any LLM call runs
+  safety_gate_required: true
+
+  # CTO structural brief must be GREEN for GME
+  cto_immunity_required: true
+
+# ── Broker execution ────────────────────────────────────────────
+execution:
+  # Use bracket orders: entry + stop + take-profit submitted in one call
+  # This protects the position even if the orchestrator crashes
+  order_type: bracket
+
+  # Limit orders within 0.5% of current price (avoids bad fills on volatile GME)
+  # If limit doesn't fill within 30s, cancel and re-evaluate
+  entry_order_type: limit
+  limit_slippage_pct: 0.005
+  unfilled_cancel_seconds: 30
+
+  # Fractional shares enabled (Alpaca supports this)
+  # Allows precise $30 position sizing regardless of GME share price
+  fractional_shares: true

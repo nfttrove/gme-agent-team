@@ -1,0 +1,50 @@
+{
+  "name": "GME VWAP + RSI(14) + EMA Daily Strategy",
+  "symbol": "GME",
+  "timeframe": "1d",
+  "description": "Daily bias filter using VWAP and EMA(8) for trend, RSI(14) for momentum (appropriate for daily bars). RSI(3) is reserved for intraday 1-min scalping only.",
+
+  "long_entry": {
+    "description": "Buy when price is in a bullish regime and RSI(14) signals oversold pullback into trend",
+    "conditions": [
+      { "indicator": "above_vwap",    "operator": "==", "value": true,  "label": "Price above VWAP" },
+      { "indicator": "above_ema8",    "operator": "==", "value": true,  "label": "Price above EMA(8)" },
+      { "indicator": "above_ema21",   "operator": "==", "value": true,  "label": "Price above EMA(21)" },
+      { "indicator": "rsi14",         "operator": "<=", "value": 45,    "label": "RSI(14) pullback (<= 45)" },
+      { "indicator": "pct_from_vwap", "operator": "<=", "value": 2.0,   "label": "Not overextended from VWAP (<= 2%)" }
+    ]
+  },
+
+  "short_entry": {
+    "description": "Sell/short when price is in a bearish regime and RSI(14) signals overbought bounce",
+    "conditions": [
+      { "indicator": "above_vwap",    "operator": "==", "value": false, "label": "Price below VWAP" },
+      { "indicator": "above_ema8",    "operator": "==", "value": false, "label": "Price below EMA(8)" },
+      { "indicator": "above_ema21",   "operator": "==", "value": false, "label": "Price below EMA(21)" },
+      { "indicator": "rsi14",         "operator": ">=", "value": 55,    "label": "RSI(14) bounce (>= 55)" },
+      { "indicator": "pct_from_vwap", "operator": ">=", "value": -2.0,  "label": "Not overextended below VWAP (>= -2%)" }
+    ]
+  },
+
+  "exit_conditions": {
+    "long":  { "rsi14_cross_above": 65, "hard_stop_pct": 0.03, "take_profit_pct": 0.06 },
+    "short": { "rsi14_cross_below": 35, "hard_stop_pct": 0.03, "take_profit_pct": 0.06 }
+  },
+
+  "bias_detection": {
+    "bullish": { "above_vwap": true,  "above_ema8": true },
+    "bearish": { "above_vwap": false, "above_ema8": false }
+  },
+
+  "intraday_scalp": {
+    "_note": "RSI(3) conditions for 1-min tick data — only used by logger_daemon when 1-sec webhook is active",
+    "long":  { "rsi3_below": 20, "above_vwap": true },
+    "short": { "rsi3_above": 80, "above_vwap": false }
+  },
+
+  "risk": {
+    "max_position_pct": 0.01,
+    "max_pct_from_vwap": 2.0,
+    "daily_trade_limit": 3
+  }
+}

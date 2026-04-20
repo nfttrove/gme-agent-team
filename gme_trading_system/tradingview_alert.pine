@@ -1,0 +1,34 @@
+// ─────────────────────────────────────────────────────────────────────────────
+// GME 1-Second Webhook Alert
+// Paste this into TradingView Pine Editor, then set up an Alert on it.
+//
+// Steps:
+//   1. Open TradingView → GME chart → set timeframe to 1 second
+//   2. Pine Editor (bottom) → New → paste this script → Save → Add to chart
+//   3. Click the Alert (⏰) button on the chart
+//   4. Condition: select "GME Webhook" indicator → "bar_close"
+//   5. Trigger: "Once Per Bar Close"
+//   6. Notifications → Webhook URL:
+//        Local (ngrok):  https://xxxx.ngrok.io/tick
+//        Railway:        https://your-app.up.railway.app/tick
+//   7. Message (replace entire message box with this JSON):
+//        {
+//          "symbol": "{{ticker}}",
+//          "time":   "{{time}}",
+//          "open":   {{open}},
+//          "high":   {{high}},
+//          "low":    {{low}},
+//          "close":  {{close}},
+//          "volume": {{volume}}
+//        }
+//   8. Save the alert.
+// ─────────────────────────────────────────────────────────────────────────────
+
+//@version=5
+indicator("GME Webhook", overlay=true, max_bars_back=1)
+
+// Fires on every bar close — used purely as the alert trigger.
+bar_close = close
+
+// Optional: plot a dot so you can see the indicator is active.
+plotchar(bar_close, char="·", location=location.belowbar, color=color.new(color.blue, 80), size=size.tiny)
