@@ -73,10 +73,20 @@ cd gme_trading_system
 python orchestrator.py
 ```
 
-**View dashboard** (real-time agent activity, logs, signals):
+**View dashboard** (React UI with Supabase Realtime live updates):
 ```bash
+cd dashboard
+cp .env.local.example .env.local
+# Edit .env.local with VITE_SUPABASE_URL and VITE_SUPABASE_ANON_KEY
+npm run dev
+# Opens at http://localhost:5173
+```
+
+**Legacy Streamlit dashboard** (still available for debugging):
+```bash
+cd gme_trading_system
 python dashboard.py
-# Opens Streamlit at http://localhost:8501
+# Opens at http://localhost:8501
 ```
 
 **View logs**:
@@ -88,6 +98,48 @@ tail -f orchestrator.log
 ```bash
 pkill -f orchestrator.py
 ```
+
+## React Dashboard (Realtime)
+
+The modern React dashboard displays all agent activity with **live Supabase Realtime subscriptions** (no polling).
+
+### Setup
+
+```bash
+cd dashboard
+cp .env.local.example .env.local
+```
+
+Edit `.env.local` with your Supabase credentials:
+```
+VITE_SUPABASE_URL=https://your-project.supabase.co
+VITE_SUPABASE_ANON_KEY=eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9...
+```
+
+Get these from [Supabase dashboard](https://app.supabase.com/project/[PROJECT_ID]/settings/api).
+
+### Run
+
+```bash
+npm run dev
+# Opens at http://localhost:5173
+```
+
+### Pages
+
+| Page | Data Source | Update Rate |
+|------|-------------|------------|
+| **Console** | agent_logs | Realtime |
+| **Price** | daily_candles, price_ticks | Realtime |
+| **Options** | options_snapshots | Realtime |
+| **Trades** | trade_decisions | Realtime |
+| **CTO** | structural_signals, short_watchlist | Realtime |
+| **Social** | social_posts | Realtime |
+| **Predictions** | predictions | Realtime |
+| **Logs** | agent_logs (filtered) | Realtime |
+| **Quality** | data_quality_logs, performance_scores, strategy_history | Realtime |
+
+All data syncs from SQLite → Supabase every 30 seconds via `supabase_sync.py`.
 
 ## Agent Roles
 
@@ -115,7 +167,8 @@ pkill -f orchestrator.py
 - **`tools.py`** — Data tools (SQL queries, news API, price feeds, indicators)
 - **`indicators.py`** — Technical indicators (EMA, RSI, ATR, VWAP, etc.)
 - **`sec_scanner.py`** — SEC EDGAR monitoring (13F holdings, insider filings)
-- **`dashboard.py`** — Streamlit UI (agent logs, signals, memory browser)
+- **`dashboard/`** — React + TypeScript UI (Tailwind CSS, Recharts, Supabase Realtime)
+- **`dashboard.py`** — Legacy Streamlit UI (still available for debugging)
 - **`llm_config.py`** — LLM routing (DeepSeek, Gemini Flash, Gemini Pro)
 - **`agent_memory.db`** — SQLite: agent outputs, predictions, trade history, logs
 
@@ -124,9 +177,11 @@ pkill -f orchestrator.py
 1. **Orchestrator** starts a scheduled cycle
 2. **Each agent's task** runs in CrewAI Crew (potentially parallel)
 3. **Tools** fetch live data (price, news, SEC filings, indicators)
-4. **Agent outputs** written to `agent_logs` table with task_type, timestamp, score
-5. **Synthesis agent** reads recent outputs, produces consensus brief
-6. **Dashboard** displays latest 24h of activity; broadcasts alerts if score > threshold
+4. **Agent outputs** written to SQLite `agent_logs` table with task_type, timestamp, score
+5. **Supabase Sync** mirrors SQLite tables to Supabase every 30 seconds (10 tables)
+6. **Dashboard** (React) subscribes to Supabase Realtime for live updates
+7. **Synthesis agent** reads recent outputs, produces consensus brief
+8. **Alerts** broadcast to Telegram if confidence > threshold
 
 ### Model Selection
 
@@ -265,8 +320,9 @@ MIT
 **Status**: Active development. Agents running 24/7 in production mode since Jan 2026.
 
 **Next Milestones**:
+- [x] Web dashboard (React + TypeScript with Supabase Realtime)
 - [ ] Fine-tune prediction models on historical GME patterns
 - [ ] Add portfolio backtesting engine
 - [ ] Integrate live broker orders (IBKR)
 - [ ] Cloud deployment (Docker + Lambda)
-- [ ] Web dashboard (React/Next.js upgrade from Streamlit)
+- [ ] Test Supabase schema on cloud instance
