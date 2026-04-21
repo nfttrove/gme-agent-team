@@ -1,12 +1,19 @@
 """
-GME tick logger with two data paths:
+GME tick logger with multi-source data paths:
 
-  1. PRIMARY — TradingView webhook (1-second candles from your paid account)
-     TradingView POSTs each bar close to POST /tick on this server.
+  1. PRIMARY — TradingView webhook (1-second, paid)
+     TradingView POSTs each bar close to POST /tick.
      Requires a public URL: use ngrok locally, Railway in production.
 
-  2. FALLBACK — yfinance polling (1-minute candles, free)
-     Runs automatically if no webhook data arrives for > 5 minutes.
+  2. BACKUP 1 — Alpaca IEX stream (1-second, free)
+     Fills gaps if TradingView misses a tick. Auto-enabled with API keys.
+
+  3. BACKUP 2 — Yahoo Finance polling (5-minute, after-hours)
+     Runs every 5 min, fills after-hours gaps. No setup needed.
+     Watchdog only alerts during market hours (no after-hours alerts).
+
+  4. BACKUP 3 — IBKR real-time feed (5-second, via TWS)
+     Lowest priority, only writes if no other source has timestamp.
 
 Run:
     python logger_daemon.py              # starts on port 8765
@@ -24,6 +31,7 @@ from pathlib import Path
 from flask import Flask, request, jsonify
 from dotenv import load_dotenv
 from alpaca_feed import start_alpaca_feed
+from market_hours import is_market_open
 from notifier import notify_watchdog_alert
 
 load_dotenv()
@@ -186,13 +194,13 @@ WEBHOOK_STALE_ALERT_S = int(os.getenv("WEBHOOK_STALE_ALERT_S", "300"))  # 5 minu
 
 def _webhook_watchdog(check_interval_s: int = 60):
     """
-    Monitors webhook freshness. If no tick received for WEBHOOK_STALE_ALERT_S seconds,
-    logs a CRITICAL alert and writes a system error to agent_logs.
+    Monitors webhook freshness. If no tick received for WEBHOOK_STALE_ALERT_S seconds
+    DURING MARKET HOURS, logs a CRITICAL alert.
 
-    NOTE: We do NOT fall back to yfinance silently — mixed-frequency data
-    corrupts indicators. An alert fires instead so the operator can intervene.
+    NOTE: No alerts during after-hours since no data is expected.
+    Yahoo Finance fallback fills after-hours gaps if needed.
     """
-    print(f"[watchdog] Webhook watchdog started (alerts if silent for {WEBHOOK_STALE_ALERT_S}s)")
+    print(f"[watchdog] Webhook watchdog started (alerts if silent for {WEBHOOK_STALE_ALERT_S}s during market hours)")
     alerted = False
 
     while True:
@@ -207,10 +215,16 @@ def _webhook_watchdog(check_interval_s: int = 60):
                 alerted = False
             continue
 
+        # Skip alerts during after-hours — Yahoo Finance handles it
+        if not is_market_open():
+            if alerted:
+                print(f"[watchdog] After-hours — no alert needed")
+                alerted = False
+            continue
+
         if not alerted:
             msg = (
-                f"CRITICAL: TradingView webhook silent for {int(age)}s. "
-                f"No fallback activated — data frequency mismatch would corrupt indicators. "
+                f"CRITICAL: TradingView webhook silent for {int(age)}s during market hours. "
                 f"Check ngrok/Railway tunnel and TradingView alert configuration."
             )
             print(f"[watchdog] {msg}")
@@ -234,12 +248,19 @@ def start(port: int = PORT):
     init_db()
     init_csv()
 
-    # Webhook watchdog — alerts if TradingView goes silent (no silent degradation)
+    # Webhook watchdog — alerts if TradingView goes silent during market hours only
     t = threading.Thread(target=_webhook_watchdog, daemon=True)
     t.start()
 
     # Alpaca 1-second backup feed — fills gaps if TradingView misses a tick
     start_alpaca_feed()
+
+    # Yahoo Finance poller — after-hours and outage fallback (free, no API key)
+    try:
+        from yahoo_finance_feed import start_yahoo_feed
+        start_yahoo_feed()
+    except Exception as e:
+        print(f"[yahoo_feed] Could not start: {e}")
 
     # IBKR real-time feed — third source, uses INSERT OR IGNORE (lowest priority)
     try:
@@ -253,10 +274,11 @@ def start(port: int = PORT):
 ║  GME Tick Logger                                     ║
 ║  PRIMARY:  TradingView webhook (5-sec, paid)         ║
 ║  BACKUP 1: Alpaca IEX stream   (1-sec, free)         ║
-║  BACKUP 2: IBKR real-time feed (5-sec, via TWS)      ║
+║  BACKUP 2: Yahoo Finance       (5-min, after-hours)  ║
+║  BACKUP 3: IBKR real-time feed (5-sec, via TWS)      ║
 ║  Webhook:  POST http://localhost:{port}/tick          ║
 ║  Health:   GET  http://localhost:{port}/health        ║
-║  Priority: TradingView > Alpaca > IBKR               ║
+║  Priority: TradingView > Alpaca > Yahoo > IBKR       ║
 ╚══════════════════════════════════════════════════════╝
     """)
     app.run(host="0.0.0.0", port=port, debug=False)
