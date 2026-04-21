@@ -38,6 +38,7 @@ from learner import AgentLearner
 from telegram_bot import start_bot_thread, is_halted
 from supabase_sync import start_sync_thread
 from safe_kickoff import safe_kickoff, CrewTimeout
+from db_maintenance import enable_wal_mode
 
 load_dotenv()
 
@@ -81,6 +82,7 @@ def init_db():
     conn.executescript(open(os.path.join(os.path.dirname(__file__), "db_schema.sql")).read())
     conn.commit()
     conn.close()
+    enable_wal_mode(DB_PATH)
 
 
 def write_log(agent: str, content: str, task_type: str, status: str = "ok"):
@@ -559,6 +561,10 @@ class TradingSystemOrchestrator:
 
         # Periodic intelligence digest — every 4 hours to Telegram
         self.scheduler.add_job(run_periodic_brief, IntervalTrigger(hours=4), id="periodic_brief")
+
+        # Nightly DB maintenance: backup + prune old backups + log cleanup (3 AM ET)
+        from db_maintenance import nightly_maintenance
+        self.scheduler.add_job(nightly_maintenance, CronTrigger(hour=3, minute=0), id="db_nightly")
 
     def start(self):
         self.configure_schedule()
