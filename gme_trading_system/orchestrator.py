@@ -17,6 +17,8 @@ import os
 import sqlite3
 import logging
 import time
+import signal
+import sys
 from datetime import datetime
 from zoneinfo import ZoneInfo
 
@@ -35,6 +37,7 @@ from market_hours import is_market_open, market_hours_required
 from learner import AgentLearner
 from telegram_bot import start_bot_thread, is_halted
 from supabase_sync import start_sync_thread
+from output_validator import validate_agent_output, log_validation_result, ensure_validation_table
 
 load_dotenv()
 
@@ -53,6 +56,7 @@ def init_db():
     conn.executescript(open(os.path.join(os.path.dirname(__file__), "db_schema.sql")).read())
     conn.commit()
     conn.close()
+    ensure_validation_table(DB_PATH)
 
 
 def write_log(agent: str, content: str, task_type: str, status: str = "ok"):
@@ -68,6 +72,38 @@ def write_log(agent: str, content: str, task_type: str, status: str = "ok"):
         log.error(f"write_log failed: {e}")
 
 
+def write_log_validated(agent: str, content: str, task_type: str, status: str = "ok"):
+    """Write log with output validation and error recovery."""
+    try:
+        # Validate output
+        validation_result = validate_agent_output(content, agent, task_type)
+        validated_content = validation_result['content']
+
+        # Log the validation result for audit trail
+        log_validation_result(DB_PATH, agent, task_type, content, validation_result)
+
+        # Write to agent_logs with validated content
+        conn = sqlite3.connect(DB_PATH)
+        conn.execute(
+            "INSERT INTO agent_logs (agent_name, timestamp, task_type, content, status) VALUES (?,?,?,?,?)",
+            (agent, datetime.now(ET).isoformat(), task_type, validated_content, status),
+        )
+        conn.commit()
+        conn.close()
+
+        # Log if output was sanitized
+        if validation_result['recovery_action'] == 'sanitized':
+            log.warning(f"[Validator] {agent} output was sanitized during insertion")
+
+    except Exception as e:
+        log.error(f"write_log_validated failed: {e}")
+        # Fall back to writing a minimal error log
+        try:
+            write_log(agent, f"[LOG ERROR] {str(e)[:200]}", task_type, "error")
+        except Exception as e2:
+            log.critical(f"Failed to write error log: {e2}")
+
+
 # ── Individual cycle functions ─────────────────────────────────────────────────
 
 def run_validation():
@@ -78,7 +114,7 @@ def run_validation():
         crew = Crew(agents=[valerie_agent], tasks=[validate_data_task],
                     process=Process.sequential, verbose=False)
         result = crew.kickoff()
-        write_log("Valerie", str(result)[:500], "validation")
+        write_log_validated("Valerie", str(result), "validation")
     except Exception as e:
         log.error(f"[Valerie] {e}")
         write_log("Valerie", str(e), "validation", "error")
@@ -93,7 +129,7 @@ def run_commentary():
                     process=Process.sequential, verbose=False)
         result = crew.kickoff()
         log.info(f"[Chatty] {str(result)[:120]}")
-        write_log("Chatty", str(result)[:500], "commentary")
+        write_log_validated("Chatty", str(result), "commentary")
     except Exception as e:
         log.error(f"[Chatty] {e}")
         write_log("Chatty", str(e), "commentary", "error")
@@ -110,7 +146,7 @@ def run_news():
             crew = Crew(agents=[news_analyst_agent], tasks=[news_task],
                         process=Process.sequential, verbose=True)
             result = crew.kickoff()
-            write_log("Newsie", str(result)[:1000], "news")
+            write_log_validated("Newsie", str(result), "news")
         except Exception as e:
             log.error(f"[Newsie] {e}")
             write_log("Newsie", str(e), "news", "error")
@@ -127,7 +163,7 @@ def run_pattern():
             crew = Crew(agents=[multiday_trend_agent], tasks=[multiday_trend_task],
                         process=Process.sequential, verbose=True)
             result = crew.kickoff()
-            write_log("Pattern", str(result)[:1000], "pattern")
+            write_log_validated("Pattern", str(result), "pattern")
         except Exception as e:
             log.error(f"[Pattern] {e}")
             write_log("Pattern", str(e), "pattern", "error")
@@ -143,7 +179,7 @@ def run_daily_trend():
             crew = Crew(agents=[daily_trend_agent], tasks=[daily_trend_task],
                         process=Process.sequential, verbose=True)
             result = crew.kickoff()
-            write_log("Trendy", str(result)[:1000], "daily_trend")
+            write_log_validated("Trendy", str(result), "daily_trend")
         except Exception as e:
             log.error(f"[Trendy] {e}")
             write_log("Trendy", str(e), "daily_trend", "error")
@@ -190,7 +226,7 @@ def run_futurist_cycle():
                 verbose=True,
             )
             result = crew.kickoff()
-            write_log("Futurist", str(result)[:1000], "full_cycle")
+            write_log_validated("Futurist", str(result), "full_cycle")
             metrics.snapshot()
         except Exception as e:
             log.error(f"[Futurist] {e}")
@@ -268,7 +304,7 @@ def run_cto_daily_brief():
         crew = Crew(agents=[cto_agent], tasks=[cto_daily_brief_task],
                     process=Process.sequential, verbose=True)
         result = crew.kickoff()
-        write_log("CTO", str(result)[:2000], "structural_brief")
+        write_log_validated("CTO", str(result), "structural_brief")
         log.info(f"[CTO] Brief complete")
     except Exception as e:
         log.error(f"[CTO] Brief failed: {e}")
@@ -317,7 +353,7 @@ def run_cto_structural_scan():
         crew = Crew(agents=[cto_agent], tasks=[cto_structural_scan_task],
                     process=Process.sequential, verbose=True)
         result = crew.kickoff()
-        write_log("CTO", str(result)[:2000], "structural_scan")
+        write_log_validated("CTO", str(result), "structural_scan")
     except Exception as e:
         log.error(f"[CTO] Structural scan failed: {e}")
         write_log("CTO", str(e), "structural_scan", "error")
@@ -332,7 +368,7 @@ def run_synthesis():
                     process=Process.sequential, verbose=False)
         result = crew.kickoff()
         log.info(f"[Synthesis] {str(result)[:120]}")
-        write_log("Synthesis", str(result)[:500], "synthesis")
+        write_log_validated("Synthesis", str(result), "synthesis")
     except Exception as e:
         log.error(f"[Synthesis] {e}")
         write_log("Synthesis", str(e), "synthesis", "error")
@@ -347,7 +383,7 @@ def run_georisk():
                     process=Process.sequential, verbose=False)
         result = crew.kickoff()
         log.info(f"[GeoRisk] {str(result)[:120]}")
-        write_log("GeoRisk", str(result)[:500], "georisk")
+        write_log_validated("GeoRisk", str(result), "georisk")
     except Exception as e:
         log.error(f"[GeoRisk] {e}")
         write_log("GeoRisk", str(e), "georisk", "error")
@@ -448,14 +484,27 @@ def run_daily_huddle():
         write_log("Boss", str(e), "daily_huddle", "error")
 
 
+def handle_shutdown_signal(signum, frame):
+    """Handle SIGTERM/SIGINT for graceful shutdown."""
+    log.info(f"Received signal {signum}. Shutting down gracefully...")
+    orchestrator = TradingSystemOrchestrator._instance
+    if orchestrator and orchestrator.scheduler.running:
+        orchestrator.scheduler.shutdown(wait=True)
+    log.info("Orchestrator shutdown complete.")
+    sys.exit(0)
+
+
 # ── Orchestrator class ─────────────────────────────────────────────────────────
 
 class TradingSystemOrchestrator:
+    _instance = None  # singleton for signal handlers
+
     def __init__(self):
         init_db()
         self.scheduler = BackgroundScheduler(timezone="America/New_York")
         with open(os.path.join(os.path.dirname(__file__), "risk_rules.yaml")) as f:
             self.risk_rules = yaml.safe_load(f)
+        TradingSystemOrchestrator._instance = self
 
     def configure_schedule(self):
         # Synthesis — runs first so all agents have fresh shared context
@@ -497,7 +546,26 @@ class TradingSystemOrchestrator:
         self.scheduler.add_job(run_periodic_brief, IntervalTrigger(hours=4), id="periodic_brief")
 
     def start(self):
+        # Register signal handlers for graceful shutdown
+        signal.signal(signal.SIGTERM, handle_shutdown_signal)
+        signal.signal(signal.SIGINT, handle_shutdown_signal)
+        log.info(f"[Orchestrator] PID {os.getpid()} — signal handlers registered")
+
         self.configure_schedule()
+
+        # Add health check job (every 5 minutes — verify DB connectivity)
+        def health_check():
+            try:
+                conn = sqlite3.connect(DB_PATH)
+                conn.execute("SELECT 1 FROM agent_logs LIMIT 1")
+                conn.close()
+                log.debug("[Health] Database OK")
+            except Exception as e:
+                log.error(f"[Health] Database connectivity check failed: {e}")
+                write_log("Orchestrator", f"Health check failed: {e}", "health_check", "error")
+
+        self.scheduler.add_job(health_check, IntervalTrigger(minutes=5), id="health_check")
+
         self.scheduler.start()
         start_bot_thread()
         start_sync_thread()

@@ -24,6 +24,7 @@ Usage:
 import json
 import logging
 import os
+import random
 import sqlite3
 import time
 from dataclasses import dataclass
@@ -132,21 +133,74 @@ class SECScanner:
     def __init__(self):
         self._last_request = 0.0
 
-    def _get(self, url: str, params: dict = None) -> dict | None:
-        """Throttled EDGAR GET request."""
-        elapsed = time.time() - self._last_request
-        if elapsed < _REQUEST_INTERVAL:
-            time.sleep(_REQUEST_INTERVAL - elapsed)
-        try:
-            resp = requests.get(url, headers=SEC_HEADERS, params=params, timeout=15)
-            self._last_request = time.time()
-            if resp.status_code == 200:
-                return resp.json()
-            log.warning(f"[sec] HTTP {resp.status_code} for {url}")
-            return None
-        except requests.RequestException as e:
-            log.error(f"[sec] Request failed: {e}")
-            return None
+    def _get(self, url: str, params: dict = None, max_retries: int = 5) -> dict | None:
+        """
+        Throttled EDGAR GET request with exponential backoff for 429 errors.
+
+        Rate limit handling:
+          - Normal 200: proceeds immediately
+          - 429 (rate limit): exponential backoff with Retry-After header respect
+          - Transient errors (timeout, connection): 500ms delay, retry up to 5 times
+          - Hard failure: returns None after max_retries exceeded
+        """
+        base_backoff_s = 1.0
+        max_backoff_s = 60.0
+
+        for attempt in range(max_retries):
+            # Respect base request throttle (200ms = 5 req/s)
+            elapsed = time.time() - self._last_request
+            if elapsed < _REQUEST_INTERVAL:
+                time.sleep(_REQUEST_INTERVAL - elapsed)
+
+            try:
+                resp = requests.get(url, headers=SEC_HEADERS, params=params, timeout=15)
+                self._last_request = time.time()
+
+                # Success
+                if resp.status_code == 200:
+                    return resp.json()
+
+                # Rate limit — exponential backoff
+                if resp.status_code == 429:
+                    retry_after = int(resp.headers.get('Retry-After', base_backoff_s))
+                    backoff = min(retry_after, max_backoff_s)
+                    jitter = random.uniform(0, backoff * 0.1)  # ±10% jitter
+                    wait_time = backoff + jitter
+                    log.warning(f"[sec] 429 rate limit on attempt {attempt+1}/{max_retries} — backing off {wait_time:.1f}s")
+                    time.sleep(wait_time)
+                    continue
+
+                # Other HTTP errors (4xx, 5xx except 429) — fail
+                if attempt == max_retries - 1:
+                    log.error(f"[sec] HTTP {resp.status_code} after {max_retries} attempts for {url}")
+                    return None
+
+                # Retry on 5xx errors
+                log.warning(f"[sec] HTTP {resp.status_code} on attempt {attempt+1}/{max_retries} — retrying")
+                time.sleep(0.5)
+                continue
+
+            except requests.Timeout:
+                if attempt == max_retries - 1:
+                    log.error(f"[sec] Request timeout after {max_retries} attempts for {url}")
+                    return None
+                log.warning(f"[sec] Request timeout on attempt {attempt+1}/{max_retries} — retrying in 500ms")
+                time.sleep(0.5)
+                continue
+
+            except requests.ConnectionError:
+                if attempt == max_retries - 1:
+                    log.error(f"[sec] Connection error after {max_retries} attempts for {url}")
+                    return None
+                log.warning(f"[sec] Connection error on attempt {attempt+1}/{max_retries} — retrying in 500ms")
+                time.sleep(0.5)
+                continue
+
+            except requests.RequestException as e:
+                log.error(f"[sec] Unexpected request error: {e}")
+                return None
+
+        return None
 
     def _full_text_search(self, query: str, ticker: str, days_back: int = 7) -> list[dict]:
         """Search EDGAR full-text for recent filings containing a phrase."""
