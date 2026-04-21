@@ -116,24 +116,103 @@ def _ensure_settings_table():
         pass
 
 
+def _run_agent_refresh():
+    """Run key agents and collect their outputs for a quick system refresh."""
+    results = {}
+    try:
+        from crewai import Crew, Process
+        from agents import valerie_agent, synthesis_agent, news_analyst_agent, cto_agent
+        from tasks import validate_data_task, synthesis_task, news_task, cto_daily_brief_task
+        from datetime import datetime
+
+        # Valerie — data quality check (fast)
+        try:
+            crew = Crew(agents=[valerie_agent], tasks=[validate_data_task],
+                       process=Process.sequential, verbose=False)
+            result = crew.kickoff()
+            results['valerie'] = str(result)[:300]
+            log.info("[tgbot] Valerie report collected")
+        except Exception as e:
+            results['valerie'] = f"Error: {str(e)[:100]}"
+
+        # Synthesis — team consensus (fast, 5-min refresh)
+        try:
+            crew = Crew(agents=[synthesis_agent], tasks=[synthesis_task],
+                       process=Process.sequential, verbose=False)
+            result = crew.kickoff()
+            results['synthesis'] = str(result)[:300]
+            log.info("[tgbot] Synthesis report collected")
+        except Exception as e:
+            results['synthesis'] = f"Error: {str(e)[:100]}"
+
+        # News sentiment (fast)
+        try:
+            from market_hours import is_market_open
+            if is_market_open():
+                crew = Crew(agents=[news_analyst_agent], tasks=[news_task],
+                           process=Process.sequential, verbose=False)
+                result = crew.kickoff()
+                results['news'] = str(result)[:300]
+                log.info("[tgbot] News report collected")
+            else:
+                results['news'] = "Market closed — skipping news scan"
+        except Exception as e:
+            results['news'] = f"Error: {str(e)[:100]}"
+
+        # CTO brief (structural intel)
+        try:
+            crew = Crew(agents=[cto_agent], tasks=[cto_daily_brief_task],
+                       process=Process.sequential, verbose=False)
+            result = crew.kickoff()
+            results['cto'] = str(result)[:300]
+            log.info("[tgbot] CTO report collected")
+        except Exception as e:
+            results['cto'] = f"Error: {str(e)[:100]}"
+
+    except Exception as e:
+        log.error(f"[tgbot] Agent refresh failed: {e}")
+        results['error'] = str(e)
+
+    return results
+
+
 def handle_command(text: str):
     cmd = text.strip().lower().split()[0]
     args = text.strip().split()[1:] if len(text.strip().split()) > 1 else []
 
     if cmd == "/update":
-        _send("⏳ Syncing to Supabase...")
+        _send("⏳ Running system refresh — agents updating...")
         try:
             import sys, os
             sys.path.insert(0, os.path.dirname(__file__))
-            from supabase_sync import _get_client, _load_state, sync_once
-            client = _get_client()
-            state = _load_state()
-            state = sync_once(client, state)
-            _send("✅ <b>Supabase sync complete.</b>\nAll local data is now synchronized.")
-            log.info("[tgbot] Manual sync triggered")
+
+            # Run agent refresh
+            agent_results = _run_agent_refresh()
+
+            # Build response
+            msg_lines = ["<b>📊 SYSTEM REFRESH COMPLETE</b>\n"]
+            msg_lines.append(f"<b>Data Validator (Valerie):</b>\n{agent_results.get('valerie', 'N/A')[:200]}\n")
+            msg_lines.append(f"<b>Team Consensus (Synthesis):</b>\n{agent_results.get('synthesis', 'N/A')[:200]}\n")
+            msg_lines.append(f"<b>News Sentiment:</b>\n{agent_results.get('news', 'N/A')[:200]}\n")
+            msg_lines.append(f"<b>Structural Intel (CTO):</b>\n{agent_results.get('cto', 'N/A')[:200]}\n")
+
+            _send("\n".join(msg_lines))
+
+            # Also sync Supabase
+            try:
+                from supabase_sync import _get_client, _load_state, sync_once
+                client = _get_client()
+                state = _load_state()
+                state = sync_once(client, state)
+                _send("✅ <b>Supabase sync complete.</b>")
+                log.info("[tgbot] Manual /update with agent refresh triggered")
+            except Exception as e:
+                log.error(f"[tgbot] Supabase sync failed: {e}")
+                _send(f"⚠️ Sync warning: {str(e)[:100]}")
+
         except Exception as e:
-            _send(f"❌ Sync failed: {e}")
-            log.error(f"[tgbot] Sync command failed: {e}")
+            _send(f"❌ Refresh failed: {str(e)[:200]}")
+            log.error(f"[tgbot] Update command failed: {e}")
 
     elif cmd == "/status":
         tick_count = _db_scalar("SELECT COUNT(*) FROM price_ticks WHERE date(timestamp)=date('now')")
