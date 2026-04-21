@@ -332,6 +332,64 @@ def handle_command(text: str):
                 f"/frequency high — every agent decision"
             )
 
+    elif cmd == "/learn":
+        # /learn "claim" --why "rationale"
+        import subprocess, sys
+        import os as os_module
+        agent_dir = os_module.path.dirname(__file__)
+        learn_script = os_module.path.join(agent_dir, "..", ".agent", "tools", "learn.py")
+
+        try:
+            full_text = text.strip()
+            if "--why" not in full_text:
+                _send("❌ Usage: /learn \"<lesson>\" --why \"<reason>\"\nExample: /learn \"High IV = premium decay\" --why \"IV rank > 70% = better theta\"")
+                return
+
+            parts = full_text.split("--why", 1)
+            claim = parts[0].replace("/learn", "").strip().strip('"\'')
+            why = parts[1].strip().strip('"\'') if len(parts) > 1 else ""
+
+            if not claim or not why:
+                _send("❌ Both claim and reason required.")
+                return
+
+            # Run learn.py
+            result = subprocess.run(
+                [sys.executable, learn_script, claim, "--why", why],
+                capture_output=True, text=True, timeout=5
+            )
+
+            if result.returncode == 0:
+                _send(f"✅ <b>Lesson graduated!</b>\n\n<i>{claim}</i>\n\nWhy: {why}")
+                log.info(f"[tgbot] Lesson learned: {claim}")
+            else:
+                _send(f"⚠️ Learn failed: {result.stderr[:200]}")
+        except Exception as e:
+            _send(f"❌ Error: {str(e)[:200]}")
+            log.error(f"[tgbot] /learn failed: {e}")
+
+    elif cmd == "/lessons":
+        import subprocess, sys
+        import os as os_module
+        agent_dir = os_module.path.dirname(__file__)
+        recall_script = os_module.path.join(agent_dir, "..", ".agent", "tools", "recall.py")
+
+        try:
+            # Get query from args
+            query = " ".join(args) if args else "trading strategy"
+            result = subprocess.run(
+                [sys.executable, recall_script, query],
+                capture_output=True, text=True, timeout=5
+            )
+
+            if result.returncode == 0 and result.stdout:
+                _send(f"<b>📚 Lessons for: {query}</b>\n\n{result.stdout[:2000]}")
+            else:
+                _send(f"No lessons found for: {query}\n\nTeach one with: /learn \"<lesson>\" --why \"<reason>\"")
+        except Exception as e:
+            _send(f"❌ Recall error: {str(e)[:200]}")
+            log.error(f"[tgbot] /lessons failed: {e}")
+
     elif cmd == "/help":
         _send(
             "<b>📚 GME Trading Bot — Command Guide</b>\n\n"
@@ -343,6 +401,9 @@ def handle_command(text: str):
             "<b>Research & Intel:</b>\n"
             "/brief — today's strategy brief from synthesis agent\n"
             "/update — force sync local data to Supabase now\n\n"
+            "<b>🧠 Agent Learning:</b>\n"
+            "/learn \"<lesson>\" --why \"<reason>\" — teach agents a rule\n"
+            "/lessons [topic] — show lessons agents learned\n\n"
             "<b>Settings:</b>\n"
             "/frequency [low|medium|high] — notification level\n"
             "/halt — pause trading (risk override)\n"
