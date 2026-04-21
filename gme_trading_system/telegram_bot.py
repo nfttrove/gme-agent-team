@@ -410,7 +410,7 @@ Highlight any conflicts or different angles. Keep it brief for Telegram (1-2 sho
 
 
 def _ask_llm(question: str, context: str) -> str:
-    """Ask a question to LLM with fallback chain: Notebook LM → Gemma (local) → DeepSeek."""
+    """Ask a question to LLM with fallback chain: Notebook LM → Gemma → DeepSeek → Gemini (paid)."""
 
     system_prompt = """You are the GME trading team's factual intelligence assistant.
 You have access to real-time trading data. Answer questions about GME, markets, and geopolitics.
@@ -438,7 +438,7 @@ Think: Bloomberg terminal meets a knowledgeable friend who reads a lot."""
     except Exception as e:
         log.debug(f"[tgbot] Gemma failed: {e}")
 
-    # Try DeepSeek (cheapest cloud option)
+    # Try DeepSeek (cheap)
     try:
         r = requests.post("https://api.deepseek.com/v1/chat/completions", json={
             "model": "deepseek-chat",
@@ -455,6 +455,16 @@ Think: Bloomberg terminal meets a knowledgeable friend who reads a lot."""
             return r.json()["choices"][0]["message"]["content"].strip()
     except Exception as e:
         log.debug(f"[tgbot] DeepSeek failed: {e}")
+
+    # Try Gemini Flash (paid fallback, only if free options fail)
+    try:
+        import google.generativeai as genai
+        genai.configure(api_key=os.getenv("GOOGLE_API_KEY"))
+        model = genai.GenerativeModel("gemini-2.5-flash")
+        response = model.generate_content(f"{system_prompt}\n\n{user_message}")
+        return response.text.strip()
+    except Exception as e:
+        log.debug(f"[tgbot] Gemini failed: {e}")
 
     return "Sorry, no LLMs available right now. Try again later."
 

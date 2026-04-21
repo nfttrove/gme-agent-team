@@ -1,38 +1,61 @@
 from crewai import Agent
-from llm_config import deepseek_v3, gemma_local
+from llm_config import deepseek_v3, gemini_flash, gemini_pro, gemma_local
 from tools import SQLQueryTool, SQLWriteTool, NewsAPITool, PriceDataTool, IndicatorTool
 from mission import OPERATIVE_DIRECTIVE
 from pe_playbook import ANTI_PATTERNS, GME_STRUCTURAL_THESIS, GME_IMMUNITY_CHECKS, PLAYBOOK_SIGNALS
 
 
 class ResilientAgent(Agent):
-    """Agent that switches to a fallback LLM on quota/rate errors."""
+    """Agent that switches through fallback LLMs on quota/rate/billing errors.
+
+    Fallback chain: primary → fallback1 → fallback2
+    """
 
     primary_llm: object = None
-    fallback_llm: object = None
+    fallback1_llm: object = None
+    fallback2_llm: object = None
 
     model_config = {"arbitrary_types_allowed": True}
 
-    def __init__(self, primary_llm, fallback_llm, **kwargs):
+    def __init__(self, primary_llm, fallback_llm=None, fallback2_llm=None, **kwargs):
         super().__init__(llm=primary_llm, **kwargs)
         self.primary_llm = primary_llm
-        self.fallback_llm = fallback_llm
+        self.fallback1_llm = fallback_llm
+        self.fallback2_llm = fallback2_llm
 
     def execute_task(self, task, context=None, tools=None):
-        try:
-            return super().execute_task(task, context=context, tools=tools)
-        except Exception as e:
-            err = str(e).lower()
-            if any(kw in err for kw in ("quota", "rate", "limit", "429", "503")):
-                print(f"[ResilientAgent] {self.role}: switching to fallback LLM")
-                self.llm = self.fallback_llm
+        llms_to_try = [self.primary_llm]
+        if self.fallback1_llm:
+            llms_to_try.append(self.fallback1_llm)
+        if self.fallback2_llm:
+            llms_to_try.append(self.fallback2_llm)
+
+        last_error = None
+        for i, llm in enumerate(llms_to_try):
+            try:
+                self.llm = llm
                 return super().execute_task(task, context=context, tools=tools)
-            raise
+            except Exception as e:
+                err = str(e).lower()
+                last_error = e
+                # Continue to next LLM on quota/rate/billing errors
+                if any(kw in err for kw in ("quota", "rate", "limit", "429", "503", "402", "billing")):
+                    if i < len(llms_to_try) - 1:
+                        print(f"[ResilientAgent] {self.role}: {err[:60]} — trying next LLM")
+                    continue
+                # Re-raise for other errors
+                raise
+
+        # All LLMs exhausted
+        if last_error:
+            raise last_error
+        raise Exception(f"[ResilientAgent] {self.role}: no LLMs available")
 
 
 daily_trend_agent = ResilientAgent(
     primary_llm=deepseek_v3,
     fallback_llm=gemma_local,
+    fallback2_llm=gemini_flash,
     role="Daily Trend Analyst",
     goal="Identify trend lines, support, and resistance from daily candle data for GME",
     backstory=(
@@ -46,6 +69,7 @@ daily_trend_agent = ResilientAgent(
 multiday_trend_agent = ResilientAgent(
     primary_llm=deepseek_v3,
     fallback_llm=gemma_local,
+    fallback2_llm=gemini_flash,
     role="Triangle Breakout & Multi-Day Pattern Specialist",
     goal=(
         "Identify triangle, wedge, flag, and pennant patterns in GME's daily chart. "
@@ -68,6 +92,7 @@ multiday_trend_agent = ResilientAgent(
 news_analyst_agent = ResilientAgent(
     primary_llm=deepseek_v3,
     fallback_llm=gemma_local,
+    fallback2_llm=gemini_flash,
     role="News Analyst",
     goal="Fetch and score the sentiment of the latest GME news, rating each headline -1.0 to +1.0",
     backstory=(
@@ -81,6 +106,7 @@ news_analyst_agent = ResilientAgent(
 futurist_agent = ResilientAgent(
     primary_llm=deepseek_v3,
     fallback_llm=gemma_local,
+    fallback2_llm=gemini_pro,
     role="Market Futurist",
     goal="Predict GME price for the next 1h, 4h, and 24h with a confidence score for each horizon",
     backstory=(
@@ -96,6 +122,7 @@ futurist_agent = ResilientAgent(
 project_manager_agent = ResilientAgent(
     primary_llm=deepseek_v3,
     fallback_llm=gemma_local,
+    fallback2_llm=gemini_flash,
     role="Project Manager",
     goal=(
         "Review all agent outputs, enforce risk rules from risk_rules.yaml, "
@@ -174,6 +201,7 @@ _IMMUNITY_SUMMARY = "\n".join(
 cto_agent = ResilientAgent(
     primary_llm=deepseek_v3,
     fallback_llm=gemma_local,
+    fallback2_llm=gemini_pro,
     role="Chief Technology & Market Structure Officer",
     goal=(
         "Provide the team with daily structural intelligence on GME and PE-targeted short opportunities. "
@@ -226,6 +254,7 @@ cto_agent = ResilientAgent(
 memoria_agent = ResilientAgent(
     primary_llm=deepseek_v3,
     fallback_llm=gemma_local,
+    fallback2_llm=gemini_pro,
     role="Historical Researcher",
     goal=(
         "Answer questions about past GME patterns, prior predictions, and historical trade outcomes "
@@ -262,7 +291,10 @@ briefing_agent = Agent(
     verbose=False,
 )
 
-synthesis_agent = Agent(
+synthesis_agent = ResilientAgent(
+    primary_llm=deepseek_v3,
+    fallback_llm=gemma_local,
+    fallback2_llm=gemini_flash,
     role="Intelligence Synthesiser",
     goal=(
         "Every 5 minutes, read all recent agent outputs and produce a single structured "
@@ -276,12 +308,14 @@ synthesis_agent = Agent(
         "that Chatty references when commenting and Futurist references when predicting. "
         "Without you, each agent works in isolation. With you, the team learns together."
     ),
-    llm=deepseek_v3,
     tools=[SQLQueryTool(), SQLWriteTool()],
     verbose=False,
 )
 
-georisk_agent = Agent(
+georisk_agent = ResilientAgent(
+    primary_llm=deepseek_v3,
+    fallback_llm=gemma_local,
+    fallback2_llm=gemini_flash,
     role="GeoRisk Researcher",
     goal=(
         "Monitor global geopolitical and supply chain disruptions that could impact GME. "
@@ -295,7 +329,6 @@ georisk_agent = Agent(
         "You think long-term: how do today's geopolitical shifts impact consumer confidence "
         "and retail foot traffic 3-6 months out?"
     ),
-    llm=deepseek_v3,
     tools=[SQLWriteTool()],
     verbose=False,
 )
