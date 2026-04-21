@@ -1,0 +1,33 @@
+version: "3.9"
+services:
+  trading-system:
+    build: ./gme_trading_system
+    env_file: ./gme_trading_system/.env
+    ports:
+      - "8765:8765"   # TradingView webhook + Prometheus /metrics
+      - "8000:8000"   # dashboard API server
+    volumes:
+      - ./gme_trading_system/agent_memory.db:/app/agent_memory.db
+      - ./gme_trading_system/data:/app/data
+      - ./.agent:/app/.agent
+    extra_hosts:
+      - "host.docker.internal:host-gateway"  # Allow access to host Ollama
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8765/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 10s
+
+  ollama:
+    image: ollama/ollama:latest
+    ports:
+      - "11434:11434"
+    volumes:
+      - ollama_data:/root/.ollama
+    restart: unless-stopped
+    profiles: ["with-ollama"]  # Optional: run with `docker compose --profile with-ollama up`
+
+volumes:
+  ollama_data:

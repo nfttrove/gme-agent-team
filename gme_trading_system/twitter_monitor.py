@@ -36,6 +36,8 @@ from datetime import datetime
 import requests
 from dotenv import load_dotenv
 
+from circuit_breaker import get_breaker, CircuitOpenError
+
 load_dotenv()
 
 log = logging.getLogger(__name__)
@@ -99,19 +101,26 @@ class XAPIClient:
 
     def get_user_id(self, username: str) -> str | None:
         """Resolve @username → numeric user ID (needed for timeline endpoint)."""
-        resp = requests.get(
-            f"{self._BASE}/users/by/username/{username}",
-            headers=self._headers,
-            timeout=10,
-        )
-        if resp.status_code == 200:
-            return resp.json().get("data", {}).get("id")
-        log.warning(f"[twitter] Failed to resolve @{username}: {resp.status_code}")
-        return None
+        breaker = get_breaker("twitter")
+        try:
+            resp = breaker.call(
+                requests.get,
+                f"{self._BASE}/users/by/username/{username}",
+                headers=self._headers,
+                timeout=10,
+            )
+            if resp.status_code == 200:
+                return resp.json().get("data", {}).get("id")
+            log.warning(f"[twitter] Failed to resolve @{username}: {resp.status_code}")
+            return None
+        except CircuitOpenError:
+            log.warning(f"[twitter] circuit open for @{username}")
+            return None
 
     def get_recent_tweets(self, user_id: str, since_id: str | None = None,
                           max_results: int = 5) -> list[dict]:
         """Fetch recent tweets for a user. Returns list of tweet dicts."""
+        breaker = get_breaker("twitter")
         params = {
             "max_results": max_results,
             "tweet.fields": "created_at,text,public_metrics",
@@ -120,18 +129,24 @@ class XAPIClient:
         if since_id:
             params["since_id"] = since_id
 
-        resp = requests.get(
-            f"{self._BASE}/users/{user_id}/tweets",
-            headers=self._headers,
-            params=params,
-            timeout=10,
-        )
-        if resp.status_code == 200:
-            return resp.json().get("data", [])
-        if resp.status_code == 429:
-            log.warning("[twitter] Rate limit hit — backing off 15 minutes")
-        else:
-            log.warning(f"[twitter] Tweet fetch failed {resp.status_code}: {resp.text[:200]}")
+        try:
+            resp = breaker.call(
+                requests.get,
+                f"{self._BASE}/users/{user_id}/tweets",
+                headers=self._headers,
+                params=params,
+                timeout=10,
+            )
+            if resp.status_code == 200:
+                return resp.json().get("data", [])
+            if resp.status_code == 429:
+                log.warning("[twitter] Rate limit hit — backing off 15 minutes")
+            else:
+                log.warning(f"[twitter] Tweet fetch failed {resp.status_code}: {resp.text[:200]}")
+            return []
+        except CircuitOpenError:
+            log.warning(f"[twitter] circuit open for user {user_id}")
+            return []
         return []
 
 

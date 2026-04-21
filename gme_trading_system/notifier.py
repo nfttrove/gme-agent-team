@@ -25,6 +25,8 @@ from datetime import datetime
 import requests
 from dotenv import load_dotenv
 
+from circuit_breaker import get_breaker, CircuitOpenError
+
 load_dotenv()
 
 log = logging.getLogger(__name__)
@@ -42,8 +44,10 @@ def _send(text: str, parse_mode: str = "HTML") -> bool:
     if not _ENABLED:
         log.info(f"[notify] Telegram not configured. Message would have been:\n{text}")
         return False
+    breaker = get_breaker("telegram")
     try:
-        resp = requests.post(
+        resp = breaker.call(
+            requests.post,
             f"{_BASE_URL}/sendMessage",
             json={"chat_id": TELEGRAM_CHAT_ID, "text": text, "parse_mode": parse_mode},
             timeout=10,
@@ -51,6 +55,9 @@ def _send(text: str, parse_mode: str = "HTML") -> bool:
         if resp.status_code == 200:
             return True
         log.warning(f"[notify] Telegram error {resp.status_code}: {resp.text[:200]}")
+        return False
+    except CircuitOpenError:
+        log.warning(f"[notify] Telegram circuit open — skipping notification")
         return False
     except requests.RequestException as e:
         log.error(f"[notify] Telegram send failed: {e}")

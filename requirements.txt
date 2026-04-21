@@ -1,4 +1,5 @@
 flask
+flask-cors
 supervisor
 crewai>=0.28.0
 crewai-tools
@@ -20,3 +21,6 @@ yfinance
 ib_insync
 websocket-client
 supabase
+discord.py
+prometheus-client
+pydantic

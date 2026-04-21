@@ -32,6 +32,8 @@ from datetime import date, datetime, timedelta
 import requests
 from dotenv import load_dotenv
 
+from circuit_breaker import get_breaker, CircuitOpenError
+
 load_dotenv()
 
 log = logging.getLogger(__name__)
@@ -137,12 +139,22 @@ class SECScanner:
         elapsed = time.time() - self._last_request
         if elapsed < _REQUEST_INTERVAL:
             time.sleep(_REQUEST_INTERVAL - elapsed)
+        breaker = get_breaker("sec_edgar")
         try:
-            resp = requests.get(url, headers=SEC_HEADERS, params=params, timeout=15)
+            resp = breaker.call(
+                requests.get,
+                url,
+                headers=SEC_HEADERS,
+                params=params,
+                timeout=15,
+            )
             self._last_request = time.time()
             if resp.status_code == 200:
                 return resp.json()
             log.warning(f"[sec] HTTP {resp.status_code} for {url}")
+            return None
+        except CircuitOpenError:
+            log.warning(f"[sec] circuit open for {url}")
             return None
         except requests.RequestException as e:
             log.error(f"[sec] Request failed: {e}")

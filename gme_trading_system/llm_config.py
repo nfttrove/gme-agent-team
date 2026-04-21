@@ -16,8 +16,9 @@ gemini_flash = LLM(
     temperature=0,
 )
 
+ollama_host = os.getenv("OLLAMA_HOST", "http://localhost:11434")
 gemma_local = LLM(
     model="ollama/gemma2:9b",
-    base_url="http://localhost:11434",
+    base_url=ollama_host,
     temperature=0.1,
 )

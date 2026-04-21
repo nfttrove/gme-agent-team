@@ -8,6 +8,8 @@ import os
 import requests
 from typing import Any
 
+from circuit_breaker import get_breaker, CircuitOpenError
+
 DB_PATH = os.path.join(os.path.dirname(__file__), "agent_memory.db")
 
 
@@ -47,10 +49,19 @@ def fetch_news(query: str = "GME") -> dict:
     api_key = os.getenv("NEWS_API_KEY")
     if not api_key:
         return {"error": "NEWS_API_KEY not set"}
+    breaker = get_breaker("newsapi")
     try:
         url = "https://newsapi.org/v2/everything"
         params = {"q": query, "sortBy": "publishedAt", "language": "en"}
-        resp = requests.get(url, params=params, headers={"X-Api-Key": api_key}, timeout=5)
+        resp = breaker.call(
+            requests.get,
+            url,
+            params=params,
+            headers={"X-Api-Key": api_key},
+            timeout=5,
+        )
         return resp.json()
+    except CircuitOpenError:
+        return {"error": "newsapi circuit open"}
     except Exception as e:
         return {"error": str(e)}

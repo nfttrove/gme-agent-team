@@ -30,9 +30,12 @@ from pathlib import Path
 
 from flask import Flask, request, jsonify
 from dotenv import load_dotenv
+from prometheus_client import Counter, Gauge, Histogram, generate_latest, CONTENT_TYPE_LATEST
+
 from alpaca_feed import start_alpaca_feed
 from market_hours import is_market_open
 from notifier import notify_watchdog_alert
+from circuit_breaker import list_breakers
 
 load_dotenv()
 
@@ -47,6 +50,14 @@ app = Flask(__name__)
 # Shared: time of last webhook tick (used by fallback watchdog)
 _last_webhook_ts: float = 0.0
 _lock = threading.Lock()
+
+# Prometheus metrics
+AGENT_CYCLES = Counter('gme_agent_cycles_total', 'Crew kickoffs', ['name', 'status'])
+AGENT_DURATION = Histogram('gme_agent_duration_seconds', 'Crew run time', ['name'])
+DB_SIZE_BYTES = Gauge('gme_db_size_bytes', 'SQLite DB file size')
+TICK_COUNT = Gauge('gme_price_ticks_total', 'Rows in price_ticks')
+CIRCUIT_STATE = Gauge('gme_circuit_state', 'Circuit breaker state (0=closed, 1=half, 2=open)', ['service'])
+CIRCUIT_FAILURES = Counter('gme_circuit_failures_total', 'CB failure count', ['service'])
 
 
 # ── Database / CSV helpers ─────────────────────────────────────────────────────
@@ -185,6 +196,32 @@ def health():
     count = conn.execute("SELECT COUNT(*) FROM price_ticks WHERE symbol=?", (SYMBOL,)).fetchone()[0]
     conn.close()
     return jsonify({"status": "ok", "tick_count": count, "symbol": SYMBOL})
+
+
+def _refresh_metrics():
+    """Update all gauge metrics from current state."""
+    try:
+        conn = sqlite3.connect(DB_PATH)
+        tick_count = conn.execute("SELECT COUNT(*) FROM price_ticks WHERE symbol=?", (SYMBOL,)).fetchone()[0]
+        conn.close()
+        TICK_COUNT.set(tick_count)
+
+        db_size = os.path.getsize(DB_PATH) if os.path.exists(DB_PATH) else 0
+        DB_SIZE_BYTES.set(db_size)
+
+        breakers = list_breakers()
+        for service, state_info in breakers.items():
+            CIRCUIT_STATE.labels(service=service).set(state_info["state_code"])
+            CIRCUIT_FAILURES.labels(service=service)._value.get()  # ensure label exists
+    except Exception:
+        pass
+
+
+@app.route("/metrics", methods=["GET"])
+def metrics():
+    """Prometheus metrics endpoint."""
+    _refresh_metrics()
+    return generate_latest(), 200, {"Content-Type": CONTENT_TYPE_LATEST}
 
 
 # ── yfinance fallback watchdog ─────────────────────────────────────────────────

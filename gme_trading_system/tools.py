@@ -4,6 +4,8 @@ import requests
 from typing import Optional
 from crewai.tools import BaseTool
 
+from circuit_breaker import get_breaker, CircuitOpenError
+
 DB_PATH = os.path.join(os.path.dirname(__file__), "agent_memory.db")
 
 
@@ -65,9 +67,11 @@ class NewsAPITool(BaseTool):
         supabase_key = os.getenv("SUPABASE_KEY", "")
         if not supabase_url or not supabase_key:
             return []
+        breaker = get_breaker("supabase_edge")
         try:
             endpoint = f"{supabase_url.rstrip('/')}/functions/v1/gamestop-news"
-            resp = requests.get(
+            resp = breaker.call(
+                requests.get,
                 endpoint,
                 headers={
                     "Authorization": f"Bearer {supabase_key}",
@@ -93,6 +97,8 @@ class NewsAPITool(BaseTool):
                 for a in articles
                 if a.get("title")
             ]
+        except CircuitOpenError:
+            return [{"error": "supabase_edge circuit open"}]
         except Exception as e:
             return [{"error": str(e)}]
 
@@ -100,11 +106,13 @@ class NewsAPITool(BaseTool):
         api_key = os.getenv("FINNHUB_KEY") or os.getenv("FINHUB_KEY") or os.getenv("FINNHUB_API_KEY")
         if not api_key:
             return [{"headline": "GME: No news source configured", "sentiment": "neutral"}]
+        breaker = get_breaker("finnhub")
         try:
             from datetime import datetime, timedelta
             today = datetime.now().strftime("%Y-%m-%d")
             week_ago = (datetime.now() - timedelta(days=7)).strftime("%Y-%m-%d")
-            resp = requests.get(
+            resp = breaker.call(
+                requests.get,
                 "https://finnhub.io/api/v1/company-news",
                 params={"symbol": "GME", "from": week_ago, "to": today, "token": api_key},
                 timeout=10,
@@ -114,6 +122,8 @@ class NewsAPITool(BaseTool):
                 {"headline": n.get("headline", ""), "source": n.get("source", ""), "sentiment": "neutral"}
                 for n in news[:10]
             ]
+        except CircuitOpenError:
+            return [{"error": "finnhub circuit open"}]
         except Exception as e:
             return [{"error": str(e)}]
 
