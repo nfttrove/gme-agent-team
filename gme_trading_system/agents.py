@@ -1,59 +1,27 @@
 from crewai import Agent
-from llm_config import gemini_flash, gemini_pro, gemma_local
+from llm_config import gemma_local
 from mission import OPERATIVE_DIRECTIVE
 from pe_playbook import ANTI_PATTERNS, GME_STRUCTURAL_THESIS, GME_IMMUNITY_CHECKS, PLAYBOOK_SIGNALS
 
 
 class ResilientAgent(Agent):
-    """Agent that switches through fallback LLMs on quota/rate/billing errors.
+    """Gemma-only agent (local LLM, no external API calls, no fallbacks).
 
-    Fallback chain: primary → fallback1 → fallback2
+    Disables tool use since Gemma 2:9b doesn't support structured outputs/tools.
+    All data is injected into task descriptions instead.
     """
-
-    primary_llm: object = None
-    fallback1_llm: object = None
-    fallback2_llm: object = None
 
     model_config = {"arbitrary_types_allowed": True}
 
-    def __init__(self, primary_llm, fallback_llm=None, fallback2_llm=None, **kwargs):
-        super().__init__(llm=primary_llm, **kwargs)
-        self.primary_llm = primary_llm
-        self.fallback1_llm = fallback_llm
-        self.fallback2_llm = fallback2_llm
-
-    def execute_task(self, task, context=None, tools=None):
-        llms_to_try = [self.primary_llm]
-        if self.fallback1_llm:
-            llms_to_try.append(self.fallback1_llm)
-        if self.fallback2_llm:
-            llms_to_try.append(self.fallback2_llm)
-
-        last_error = None
-        for i, llm in enumerate(llms_to_try):
-            try:
-                self.llm = llm
-                return super().execute_task(task, context=context, tools=tools)
-            except Exception as e:
-                err = str(e).lower()
-                last_error = e
-                # Continue to next LLM on quota/rate/billing errors
-                if any(kw in err for kw in ("quota", "rate", "limit", "429", "503", "402", "billing", "none or empty", "invalid response", "empty response")):
-                    if i < len(llms_to_try) - 1:
-                        print(f"[ResilientAgent] {self.role}: {err[:60]} — trying next LLM")
-                    continue
-                # Re-raise for other errors
-                raise
-
-        # All LLMs exhausted
-        if last_error:
-            raise last_error
-        raise Exception(f"[ResilientAgent] {self.role}: no LLMs available")
+    def __init__(self, primary_llm=None, fallback_llm=None, fallback2_llm=None, **kwargs):
+        # Always use gemma_local, ignore fallback parameters (for backwards compatibility)
+        # Disable tool use (tools=None, allow_code_execution=False)
+        kwargs.setdefault("tools", [])
+        kwargs.setdefault("allow_code_execution", False)
+        super().__init__(llm=gemma_local, **kwargs)
 
 
 daily_trend_agent = ResilientAgent(
-    primary_llm=gemma_local,
-    fallback_llm=gemini_flash,
     role="Daily Trend Analyst",
     goal="Identify trend lines, support, and resistance from daily candle data for GME",
     backstory=(
@@ -66,8 +34,6 @@ daily_trend_agent = ResilientAgent(
 )
 
 multiday_trend_agent = ResilientAgent(
-    primary_llm=gemma_local,
-    fallback_llm=gemini_flash,
     role="Triangle Breakout & Multi-Day Pattern Specialist",
     goal=(
         "Identify triangle, wedge, flag, and pennant patterns in GME's daily chart. "
@@ -89,8 +55,6 @@ multiday_trend_agent = ResilientAgent(
 )
 
 news_analyst_agent = ResilientAgent(
-    primary_llm=gemma_local,
-    fallback_llm=gemini_flash,
     role="News Analyst",
     goal="Fetch and score the sentiment of the latest GME news, rating each headline -1.0 to +1.0",
     backstory=(
@@ -103,8 +67,6 @@ news_analyst_agent = ResilientAgent(
 )
 
 futurist_agent = ResilientAgent(
-    primary_llm=gemma_local,
-    fallback_llm=gemini_pro,
     role="Market Futurist",
     goal="Predict GME price for the next 1h, 4h, and 24h with a confidence score for each horizon",
     backstory=(
@@ -118,8 +80,6 @@ futurist_agent = ResilientAgent(
 )
 
 project_manager_agent = ResilientAgent(
-    primary_llm=gemma_local,
-    fallback_llm=gemini_flash,
     role="Project Manager",
     goal=(
         "Review all agent outputs, enforce risk rules from risk_rules.yaml, "
@@ -152,8 +112,6 @@ trader_agent = Agent(
 # ── New agents (Valerie, Chatty, Memoria) ─────────────────────────────────────
 
 valerie_agent = ResilientAgent(
-    primary_llm=gemma_local,
-    fallback_llm=gemini_flash,
     role="Data Validator",
     goal=(
         "Detect missing timestamps, price gaps, and anomalous ticks in the price_ticks table "
@@ -169,8 +127,6 @@ valerie_agent = ResilientAgent(
 )
 
 chatty_agent = ResilientAgent(
-    primary_llm=gemma_local,
-    fallback_llm=gemini_flash,
     role="Stream Commentator",
     goal=(
         "Generate ONE short, engaging observation (max 120 characters) about the latest GME price action, "
@@ -198,8 +154,6 @@ _IMMUNITY_SUMMARY = "\n".join(
 )
 
 cto_agent = ResilientAgent(
-    primary_llm=gemma_local,
-    fallback_llm=gemini_pro,
     role="Chief Technology & Market Structure Officer",
     goal=(
         "Provide the team with daily structural intelligence on GME and PE-targeted short opportunities. "
@@ -250,8 +204,6 @@ cto_agent = ResilientAgent(
 )
 
 memoria_agent = ResilientAgent(
-    primary_llm=gemma_local,
-    fallback_llm=gemini_pro,
     role="Historical Researcher",
     goal=(
         "Answer questions about past GME patterns, prior predictions, and historical trade outcomes "
@@ -267,8 +219,6 @@ memoria_agent = ResilientAgent(
 )
 
 briefing_agent = ResilientAgent(
-    primary_llm=gemma_local,
-    fallback_llm=gemini_flash,
     role="Strategy Briefing Officer",
     goal=(
         "Produce a clear, plain-English daily strategy briefing for the CEO. "
@@ -290,8 +240,6 @@ briefing_agent = ResilientAgent(
 )
 
 synthesis_agent = ResilientAgent(
-    primary_llm=gemma_local,
-    fallback_llm=gemini_flash,
     role="Intelligence Synthesiser",
     goal=(
         "Every 5 minutes, read all recent agent outputs and produce a single structured "
@@ -310,8 +258,6 @@ synthesis_agent = ResilientAgent(
 )
 
 georisk_agent = ResilientAgent(
-    primary_llm=gemma_local,
-    fallback_llm=gemini_flash,
     role="GeoRisk Researcher",
     goal=(
         "Monitor global geopolitical and supply chain disruptions that could impact GME. "
