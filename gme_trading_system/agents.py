@@ -154,7 +154,10 @@ trader_agent = Agent(
 
 # ── New agents (Valerie, Chatty, Memoria) ─────────────────────────────────────
 
-valerie_agent = Agent(
+valerie_agent = ResilientAgent(
+    primary_llm=deepseek_v3,
+    fallback_llm=gemma_local,
+    fallback2_llm=gemini_flash,
     role="Data Validator",
     goal=(
         "Detect missing timestamps, price gaps, and anomalous ticks in the price_ticks table "
@@ -165,12 +168,14 @@ valerie_agent = Agent(
         "price moves > 20% from the previous close, and zero-volume bars. "
         "You flag problems immediately so agents downstream can trust the data."
     ),
-    llm=deepseek_v3,
     tools=[SQLQueryTool(), SQLWriteTool()],
     verbose=False,
 )
 
-chatty_agent = Agent(
+chatty_agent = ResilientAgent(
+    primary_llm=deepseek_v3,
+    fallback_llm=gemma_local,
+    fallback2_llm=gemini_flash,
     role="Stream Commentator",
     goal=(
         "Generate ONE short, engaging observation (max 120 characters) about the latest GME price action, "
@@ -183,7 +188,6 @@ chatty_agent = Agent(
         "Examples: 'Consensus BULLISH 65%: volume 2.3× avg, triangle holding.' | "
         "'Team cautious — news bearish despite tick up. Wait for confirmation.'"
     ),
-    llm=deepseek_v3,
     tools=[SQLQueryTool(), SQLWriteTool()],
     verbose=False,
 )
@@ -269,7 +273,10 @@ memoria_agent = ResilientAgent(
     verbose=True,
 )
 
-briefing_agent = Agent(
+briefing_agent = ResilientAgent(
+    primary_llm=deepseek_v3,
+    fallback_llm=gemma_local,
+    fallback2_llm=gemini_flash,
     role="Strategy Briefing Officer",
     goal=(
         "Produce a clear, plain-English daily strategy briefing for the CEO. "
@@ -286,7 +293,6 @@ briefing_agent = Agent(
         "5. Risk (what would cancel today's plan) "
         "Keep each bullet under 2 sentences. No jargon. Confidence scores as percentages."
     ),
-    llm=deepseek_v3,
     tools=[SQLQueryTool()],
     verbose=False,
 )
