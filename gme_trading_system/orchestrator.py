@@ -1,17 +1,17 @@
 """
 GME Trading System Orchestrator — 10-agent, BackgroundScheduler edition.
 
-Agent schedule:
-  Valerie  (data validator)    — every 1 minute
-  Chatty   (stream commentator) — every 30 seconds
+Agent schedule (cost-optimized):
+  Valerie  (data validator)    — every 5 minutes
+  Chatty   (stream commentator) — every 5 minutes
   Newsie   (news sentiment)    — every 30 minutes
-  Pattern  (multi-day pattern) — every 6 hours
-  Trendy   (daily trend)       — daily at 8 PM ET
+  Pattern  (multi-day pattern) — every 2 hours
+  Trendy   (daily trend)       — every 4 hours + 8 PM ET
   Futurist (price predictor)   — every 2 hours
-  Boss     (risk + approval)   — after every Futurist run
-  Memoria  (history)           — on-demand via futurist context
-  Trader Joe (execution)       — event-driven after Boss approval
-  Daily aggregator             — daily at 4:35 PM ET
+  GeoRisk  (geopolitical)      — every 1 hour
+  Briefing (strategy)          — daily at 9:32 AM ET
+  CTO      (structural intel)  — daily at 9:05 AM ET
+  Weekly review                — Fridays at 5 PM ET
 """
 import os
 import sqlite3
@@ -461,9 +461,9 @@ class TradingSystemOrchestrator:
         # Synthesis — runs first so all agents have fresh shared context
         self.scheduler.add_job(run_synthesis,    IntervalTrigger(minutes=5),   id="synthesis")
 
-        # High-frequency local agents (Gemma — no API cost)
-        self.scheduler.add_job(run_validation,  IntervalTrigger(minutes=1),   id="valerie")
-        self.scheduler.add_job(run_commentary,  IntervalTrigger(seconds=30),  id="chatty")
+        # Intraday agents with fallback to Gemma
+        self.scheduler.add_job(run_validation,  IntervalTrigger(minutes=5),   id="valerie")
+        self.scheduler.add_job(run_commentary,  IntervalTrigger(minutes=5),   id="chatty")
 
         # Cloud agents — rate-limited
         self.scheduler.add_job(run_news,         IntervalTrigger(minutes=30), id="newsie")
