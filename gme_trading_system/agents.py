@@ -1,5 +1,5 @@
 from crewai import Agent
-from llm_config import deepseek_v3, gemini_flash, gemini_pro, gemma_local
+from llm_config import deepseek_v3, gemma_local
 from tools import SQLQueryTool, SQLWriteTool, NewsAPITool, PriceDataTool, IndicatorTool
 from mission import OPERATIVE_DIRECTIVE
 from pe_playbook import ANTI_PATTERNS, GME_STRUCTURAL_THESIS, GME_IMMUNITY_CHECKS, PLAYBOOK_SIGNALS
@@ -32,7 +32,7 @@ class ResilientAgent(Agent):
 
 daily_trend_agent = ResilientAgent(
     primary_llm=deepseek_v3,
-    fallback_llm=gemini_flash,
+    fallback_llm=gemma_local,
     role="Daily Trend Analyst",
     goal="Identify trend lines, support, and resistance from daily candle data for GME",
     backstory=(
@@ -45,7 +45,7 @@ daily_trend_agent = ResilientAgent(
 
 multiday_trend_agent = ResilientAgent(
     primary_llm=deepseek_v3,
-    fallback_llm=gemini_flash,
+    fallback_llm=gemma_local,
     role="Triangle Breakout & Multi-Day Pattern Specialist",
     goal=(
         "Identify triangle, wedge, flag, and pennant patterns in GME's daily chart. "
@@ -67,7 +67,7 @@ multiday_trend_agent = ResilientAgent(
 
 news_analyst_agent = ResilientAgent(
     primary_llm=deepseek_v3,
-    fallback_llm=gemini_flash,
+    fallback_llm=gemma_local,
     role="News Analyst",
     goal="Fetch and score the sentiment of the latest GME news, rating each headline -1.0 to +1.0",
     backstory=(
@@ -80,7 +80,7 @@ news_analyst_agent = ResilientAgent(
 
 futurist_agent = ResilientAgent(
     primary_llm=deepseek_v3,
-    fallback_llm=gemini_pro,
+    fallback_llm=gemma_local,
     role="Market Futurist",
     goal="Predict GME price for the next 1h, 4h, and 24h with a confidence score for each horizon",
     backstory=(
@@ -95,7 +95,7 @@ futurist_agent = ResilientAgent(
 
 project_manager_agent = ResilientAgent(
     primary_llm=deepseek_v3,
-    fallback_llm=gemini_flash,
+    fallback_llm=gemma_local,
     role="Project Manager",
     goal=(
         "Review all agent outputs, enforce risk rules from risk_rules.yaml, "
@@ -173,7 +173,7 @@ _IMMUNITY_SUMMARY = "\n".join(
 
 cto_agent = ResilientAgent(
     primary_llm=deepseek_v3,
-    fallback_llm=gemini_pro,
+    fallback_llm=gemma_local,
     role="Chief Technology & Market Structure Officer",
     goal=(
         "Provide the team with daily structural intelligence on GME and PE-targeted short opportunities. "
@@ -224,8 +224,8 @@ cto_agent = ResilientAgent(
 )
 
 memoria_agent = ResilientAgent(
-    primary_llm=gemini_pro,
-    fallback_llm=deepseek_v3,
+    primary_llm=deepseek_v3,
+    fallback_llm=gemma_local,
     role="Historical Researcher",
     goal=(
         "Answer questions about past GME patterns, prior predictions, and historical trade outcomes "
@@ -276,7 +276,7 @@ synthesis_agent = Agent(
         "that Chatty references when commenting and Futurist references when predicting. "
         "Without you, each agent works in isolation. With you, the team learns together."
     ),
-    llm=gemini_flash,   # Gemma doesn't support tool calls; Gemini Flash free tier handles this fine
+    llm=deepseek_v3,
     tools=[SQLQueryTool(), SQLWriteTool()],
     verbose=False,
 )
@@ -295,7 +295,7 @@ georisk_agent = Agent(
         "You think long-term: how do today's geopolitical shifts impact consumer confidence "
         "and retail foot traffic 3-6 months out?"
     ),
-    llm=gemini_flash,
+    llm=deepseek_v3,
     tools=[SQLWriteTool()],
     verbose=False,
 )

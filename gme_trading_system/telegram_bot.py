@@ -342,6 +342,7 @@ def _query_notebook_lm(question: str) -> str | None:
     """Query both Google Notebook LM notebooks and synthesize insights.
 
     Returns synthesized response if successful, None to fall back to other LLMs.
+    Gracefully handles billing errors (402) by falling back.
     """
     try:
         import google.generativeai as genai
@@ -372,6 +373,10 @@ Keep it brief (2-3 sentences max)."""
                 if response and response.text:
                     responses[name] = response.text.strip()
             except Exception as e:
+                err = str(e)
+                if "402" in err or "Insufficient Balance" in err:
+                    log.warning(f"[tgbot] Notebook LM ({name}): Google API billing error — skipping to free LLMs")
+                    return None
                 log.debug(f"[tgbot] Notebook LM ({name}) failed: {e}")
 
         if not responses:
@@ -395,13 +400,17 @@ Highlight any conflicts or different angles. Keep it brief for Telegram (1-2 sho
         if synthesis and synthesis.text:
             return synthesis.text.strip()
     except Exception as e:
+        err = str(e)
+        if "402" in err or "Insufficient Balance" in err:
+            log.warning(f"[tgbot] Notebook LM synthesis: Google API billing error — skipping to free LLMs")
+            return None
         log.debug(f"[tgbot] Notebook LM synthesis failed: {e}")
 
     return None
 
 
 def _ask_llm(question: str, context: str) -> str:
-    """Ask a question to LLM with fallback chain: Notebook LM → Gemma → Gemini Flash → DeepSeek."""
+    """Ask a question to LLM with fallback chain: Notebook LM → Gemma (local) → DeepSeek."""
 
     system_prompt = """You are the GME trading team's factual intelligence assistant.
 You have access to real-time trading data. Answer questions about GME, markets, and geopolitics.
@@ -417,7 +426,7 @@ Think: Bloomberg terminal meets a knowledgeable friend who reads a lot."""
         log.info("[tgbot] Response from Notebook LM")
         return notebook_response
 
-    # Try Gemma 2 9b via Ollama
+    # Try Gemma 2 9b via Ollama (free, local)
     try:
         r = requests.post("http://localhost:11434/api/generate", json={
             "model": "gemma2:9b",
@@ -429,17 +438,7 @@ Think: Bloomberg terminal meets a knowledgeable friend who reads a lot."""
     except Exception as e:
         log.debug(f"[tgbot] Gemma failed: {e}")
 
-    # Try Gemini Flash
-    try:
-        import google.generativeai as genai
-        genai.configure(api_key=os.getenv("GOOGLE_API_KEY"))
-        model = genai.GenerativeModel("gemini-2.5-flash")
-        response = model.generate_content(f"{system_prompt}\n\n{user_message}")
-        return response.text.strip()
-    except Exception as e:
-        log.debug(f"[tgbot] Gemini failed: {e}")
-
-    # Try DeepSeek
+    # Try DeepSeek (cheapest cloud option)
     try:
         r = requests.post("https://api.deepseek.com/v1/chat/completions", json={
             "model": "deepseek-chat",
