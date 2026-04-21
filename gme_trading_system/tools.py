@@ -97,7 +97,7 @@ class NewsAPITool(BaseTool):
             return [{"error": str(e)}]
 
     def _finnhub_news(self) -> list:
-        api_key = os.getenv("FINNHUB_API_KEY")
+        api_key = os.getenv("FINNHUB_KEY") or os.getenv("FINHUB_KEY") or os.getenv("FINNHUB_API_KEY")
         if not api_key:
             return [{"headline": "GME: No news source configured", "sentiment": "neutral"}]
         try:
@@ -181,3 +181,38 @@ class IndicatorTool(BaseTool):
             for r in raw if r.get("close") or r.get("Close")
         ]
         return compute_all(candles)
+
+
+class TroveScoreTool(BaseTool):
+    name: str = "Trove Score"
+    description: str = (
+        "Score stocks using the Trove deep-value framework (Valuation/Capital Structure/Quality pillars, max 100 pts). "
+        "Input: comma-separated tickers, e.g. 'GME,VIPS,AAPL'. Max 10 tickers per call. "
+        "Returns a ranked list with score, star rating, pillar breakdown, and immunity flags."
+    )
+
+    def _run(self, tickers: str) -> list:
+        from trove import fetch, score, DEFAULT_WATCHLIST
+        ticker_list = (
+            [t.strip().upper() for t in tickers.split(",") if t.strip()]
+            if tickers.strip()
+            else DEFAULT_WATCHLIST[:10]
+        )
+        results = []
+        for ticker in ticker_list[:10]:
+            inp = fetch(ticker)
+            if inp is None:
+                continue
+            r = score(inp)
+            results.append({
+                "ticker":       ticker,
+                "score":        r["total"],
+                "rating":       r["rating"],
+                "pillar_A":     r["pillars"]["A"],
+                "pillar_B":     r["pillars"]["B"],
+                "pillar_C":     r["pillars"]["C"],
+                "immunity":     f"{r['immunity_count']}/5",
+                "net_cash_pct": f"{round(inp.net_cash_pct * 100, 1)}%",
+                "altman_z":     inp.altman_z,
+            })
+        return sorted(results, key=lambda x: x["score"], reverse=True)

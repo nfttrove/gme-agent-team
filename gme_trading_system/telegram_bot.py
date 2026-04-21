@@ -332,6 +332,91 @@ def handle_command(text: str):
                 f"/frequency high — every agent decision"
             )
 
+    elif cmd == "/learn":
+        # /learn "claim" --why "rationale"
+        import subprocess, sys
+        import os as os_module
+        agent_dir = os_module.path.dirname(__file__)
+        learn_script = os_module.path.join(agent_dir, "..", ".agent", "tools", "learn.py")
+
+        try:
+            full_text = text.strip()
+            if "--why" not in full_text:
+                _send("❌ Usage: /learn \"<lesson>\" --why \"<reason>\"\nExample: /learn \"High IV = premium decay\" --why \"IV rank > 70% = better theta\"")
+                return
+
+            parts = full_text.split("--why", 1)
+            claim = parts[0].replace("/learn", "").strip().strip('"\'')
+            why = parts[1].strip().strip('"\'') if len(parts) > 1 else ""
+
+            if not claim or not why:
+                _send("❌ Both claim and reason required.")
+                return
+
+            # Run learn.py
+            result = subprocess.run(
+                [sys.executable, learn_script, claim, "--why", why],
+                capture_output=True, text=True, timeout=5
+            )
+
+            if result.returncode == 0:
+                _send(f"✅ <b>Lesson graduated!</b>\n\n<i>{claim}</i>\n\nWhy: {why}")
+                log.info(f"[tgbot] Lesson learned: {claim}")
+            else:
+                _send(f"⚠️ Learn failed: {result.stderr[:200]}")
+        except Exception as e:
+            _send(f"❌ Error: {str(e)[:200]}")
+            log.error(f"[tgbot] /learn failed: {e}")
+
+    elif cmd == "/trove":
+        tickers = [a.strip("'\"/").upper() for a in args if a.strip("'\"/")] if args else None
+        label   = " ".join(tickers) if tickers else "default watchlist"
+        _send(f"⏳ Running Trove Score on <b>{label}</b>…")
+        try:
+            import sys, os as _os
+            sys.path.insert(0, _os.path.dirname(__file__))
+            from trove import run_screen, DEFAULT_WATCHLIST
+            ticker_list = tickers if tickers else DEFAULT_WATCHLIST
+            results = run_screen(ticker_list, max_tickers=20)
+            if not results:
+                _send("❌ No data returned — check ticker symbols.")
+            else:
+                lines = ["<b>📊 Trove Score Rankings</b>\n"]
+                for r in results:
+                    imm    = "🛡️" * r["immunity"]
+                    lines.append(
+                        f"<b>{r['ticker']}</b>  {r['score']:.1f}/100  {r['rating']}  {imm}\n"
+                        f"  A={r['pillar_A']:.0f}/30  B={r['pillar_B']:.0f}/45  C={r['pillar_C']:.0f}/25  "
+                        f"NetCash {r['net_cash_pct']}%  AltZ {r['altman_z']}"
+                    )
+                lines.append("\n<i>A=Valuation · B=Capital · C=Quality</i>")
+                _send("\n".join(lines))
+        except Exception as e:
+            _send(f"❌ Trove error: {str(e)[:200]}")
+            log.error(f"[tgbot] /trove failed: {e}")
+
+    elif cmd == "/lessons":
+        import subprocess, sys
+        import os as os_module
+        agent_dir = os_module.path.dirname(__file__)
+        recall_script = os_module.path.join(agent_dir, "..", ".agent", "tools", "recall.py")
+
+        try:
+            # Get query from args
+            query = " ".join(args) if args else "trading strategy"
+            result = subprocess.run(
+                [sys.executable, recall_script, query],
+                capture_output=True, text=True, timeout=5
+            )
+
+            if result.returncode == 0 and result.stdout:
+                _send(f"<b>📚 Lessons for: {query}</b>\n\n{result.stdout[:2000]}")
+            else:
+                _send(f"No lessons found for: {query}\n\nTeach one with: /learn \"<lesson>\" --why \"<reason>\"")
+        except Exception as e:
+            _send(f"❌ Recall error: {str(e)[:200]}")
+            log.error(f"[tgbot] /lessons failed: {e}")
+
     elif cmd == "/help":
         _send(
             "<b>📚 GME Trading Bot — Command Guide</b>\n\n"
@@ -342,7 +427,11 @@ def handle_command(text: str):
             "/balance — live IBKR account balance\n\n"
             "<b>Research & Intel:</b>\n"
             "/brief — today's strategy brief from synthesis agent\n"
-            "/update — force sync local data to Supabase now\n\n"
+            "/update — force sync local data to Supabase now\n"
+            "/trove [TICKERS] — deep-value Trove Score screen (default watchlist if no tickers)\n\n"
+            "<b>🧠 Agent Learning:</b>\n"
+            "/learn \"<lesson>\" --why \"<reason>\" — teach agents a rule\n"
+            "/lessons [topic] — show lessons agents learned\n\n"
             "<b>Settings:</b>\n"
             "/frequency [low|medium|high] — notification level\n"
             "/halt — pause trading (risk override)\n"
@@ -366,6 +455,7 @@ def handle_command(text: str):
             "/agents — last agent activity\n"
             "/brief — today's strategy in plain English\n"
             "/update — sync data to Supabase now\n"
+            "/trove [TICKERS] — deep-value score screen\n"
             "/halt — pause trading\n"
             "/resume — re-enable trading\n"
             "/frequency — notification settings\n\n"
@@ -557,6 +647,9 @@ def _register_commands():
         {"command": "halt", "description": "Pause all new trades (risk override)"},
         {"command": "resume", "description": "Re-enable trading"},
         {"command": "frequency", "description": "Show/set notification frequency"},
+        {"command": "trove", "description": "Deep-value screen: /trove [TICKER ...] — scores up to 20 tickers"},
+        {"command": "learn", "description": "Teach agents a rule: /learn \"<lesson>\" --why \"<reason>\""},
+        {"command": "lessons", "description": "Recall learned lessons by topic"},
     ]
     try:
         requests.post(f"{BASE_URL}/setMyCommands", json={"commands": commands}, timeout=10)

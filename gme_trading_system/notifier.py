@@ -226,7 +226,7 @@ def test_connection() -> bool:
         "  • PE playbook signals on any stock\n"
         "  • GME immunity status changes\n"
         "  • Weekly max pain updates\n"
-        "  • Ryan Cohen / Michael Burry posts\n"
+        "  • Ryan Cohen / Burry / Roaring Kitty / Larry Cheng posts\n"
         "  • Data feed alerts\n"
         "  • Daily P&amp;L summary\n\n"
         "<i>System online.</i>"

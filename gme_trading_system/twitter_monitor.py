@@ -324,12 +324,9 @@ class TwitterMonitor:
         text_lower = text.lower()
         alert_level = account.get("alert_level", "INFO")
 
-        # Critical accounts: any post is escalated
+        # CRITICAL accounts always fire 🚨 regardless of content
         if alert_level == "CRITICAL":
-            # Check for bearish keywords first
-            if any(kw in text_lower for kw in account.get("keywords_bearish", []) + GLOBAL_BEARISH_KEYWORDS):
-                return "BEARISH"
-            return "BULLISH" if alert_level == "CRITICAL" else "INFO"
+            return "CRITICAL"
 
         # For other accounts: keyword-driven classification
         bullish_hits = sum(1 for kw in GLOBAL_BULLISH_KEYWORDS if kw in text_lower)
@@ -343,11 +340,7 @@ class TwitterMonitor:
 
     def _should_notify(self, username: str, signal_type: str, account: dict) -> bool:
         """Only push notifications that are actionable."""
-        if account.get("alert_level") == "CRITICAL":
-            return True  # always notify for critical accounts
-        if signal_type in ("BULLISH", "BEARISH"):
-            return True
-        return False
+        return signal_type in ("CRITICAL", "BULLISH", "BEARISH")
 
     def _already_stored(self, tweet_id: str) -> bool:
         if not tweet_id:

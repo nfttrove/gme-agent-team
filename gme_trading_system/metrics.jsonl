@@ -8,3 +8,6 @@
 {"event": "cycle", "name": "pattern", "duration_s": 22.11, "status": "ok", "ts": "2026-04-20T20:35:45.379771"}
 {"event": "cycle", "name": "daily_trend", "duration_s": 24.61, "status": "ok", "ts": "2026-04-20T20:36:09.994268"}
 {"event": "cycle", "name": "news", "duration_s": 40.83, "status": "ok", "ts": "2026-04-20T20:52:40.217882"}
+{"event": "cycle", "name": "daily_trend", "duration_s": 21.12, "status": "ok", "ts": "2026-04-21T10:38:27.664000"}
+{"event": "cycle", "name": "news", "duration_s": 9.11, "status": "ok", "ts": "2026-04-21T15:25:22.440205"}
+{"event": "cycle", "name": "news", "duration_s": 19.71, "status": "ok", "ts": "2026-04-21T15:27:46.338906"}

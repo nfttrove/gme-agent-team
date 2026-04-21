@@ -1,5 +1,5 @@
 """
-Supabase sync — mirrors 10 key SQLite tables to Supabase every 60 seconds.
+Supabase sync — mirrors 10 key SQLite tables to Supabase every 30 seconds.
 Tables: agent_logs, trade_decisions, predictions, stream_comments, structural_signals,
 social_posts, options_snapshots, data_quality_logs, performance_scores, strategy_history.
 
@@ -126,7 +126,7 @@ def sync_once(client, state: dict) -> dict:
 
 
 def _sync_loop():
-    log.info("[Supabase] Sync thread started (interval: 60s)")
+    log.info("[Supabase] Sync thread started (interval: 30s)")
     state = _load_state()
     try:
         client = _get_client()
@@ -139,7 +139,7 @@ def _sync_loop():
             state = sync_once(client, state)
         except Exception as e:
             log.error(f"[Supabase] Sync cycle error: {e}")
-        time.sleep(60)  # Reduced from 30s to 60s; still keeps dashboard ~1 min fresh
+        time.sleep(30)
 
 
 def start_sync_thread() -> threading.Thread | None:

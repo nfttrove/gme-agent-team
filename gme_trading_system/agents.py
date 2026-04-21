@@ -39,7 +39,7 @@ class ResilientAgent(Agent):
                 err = str(e).lower()
                 last_error = e
                 # Continue to next LLM on quota/rate/billing errors
-                if any(kw in err for kw in ("quota", "rate", "limit", "429", "503", "402", "billing")):
+                if any(kw in err for kw in ("quota", "rate", "limit", "429", "503", "402", "billing", "none or empty", "invalid response", "empty response")):
                     if i < len(llms_to_try) - 1:
                         print(f"[ResilientAgent] {self.role}: {err[:60]} — trying next LLM")
                     continue
