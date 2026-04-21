@@ -59,16 +59,16 @@ class TestTaskDefinitions:
 class TestResilientAgentFallback:
     def test_fallback_triggers_on_quota_error(self, monkeypatch):
         from agents import ResilientAgent
-        from llm_config import deepseek_v3, gemini_flash
+        from llm_config import gemini_flash, gemma_local
 
         agent = ResilientAgent(
-            primary_llm=deepseek_v3,
-            fallback_llm=gemini_flash,
+            primary_llm=gemini_flash,
+            fallback_llm=gemma_local,
             role="Test",
             goal="Test",
             backstory="Test",
         )
-        assert agent.llm == deepseek_v3
+        assert agent.llm == gemini_flash
 
         call_count = {"n": 0}
 
@@ -85,5 +85,5 @@ class TestResilientAgentFallback:
 
         from tasks import daily_trend_task
         result = agent.execute_task(daily_trend_task)
-        assert agent.llm == gemini_flash
+        assert agent.llm == gemma_local
         assert result == "fallback result"

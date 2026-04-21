@@ -45,18 +45,17 @@ ollama_llm = LLM(
     temperature=0.2,
 )
 
-# Cloud Reasoning Model (DeepSeek)
-deepseek_llm = LLM(
-    model="deepseek/deepseek-chat",
-    api_key=os.getenv("DEEPSEEK_API_KEY"),
-    base_url="https://api.deepseek.com/v1",
+# Cloud API Model (Gemini)
+gemini_llm = LLM(
+    model="gemini/gemini-2.5-flash",
+    api_key=os.getenv("GOOGLE_API_KEY"),
     temperature=0.3,
 )
 
 # Roles
 ANALYST_MODEL = ollama_llm
 STRATEGIST_MODEL = ollama_llm
-MANAGER_MODEL = deepseek_llm
+MANAGER_MODEL = gemini_llm
 
 # ---------------------------
 # 3. DEFINE AGENTS & TASKS

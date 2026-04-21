@@ -52,7 +52,7 @@ class AgentCostResponse(BaseModel):
     id: int
     agent_name: str
     run_timestamp: datetime
-    llm_provider: str  # "deepseek", "gemini", "gemma"
+    llm_provider: str  # "gemini", "gemma"
     tokens_used: int
     cost_usd: float
     task_type: Optional[str] = None
@@ -68,7 +68,7 @@ class DailyCostSummary(BaseModel):
     budget_daily: float
     percent_used: float
     by_agent: List[Dict[str, Any]]  # [{"agent": "Synthesis", "cost": 0.12, "tokens": 500}, ...]
-    by_provider: Dict[str, float]   # {"deepseek": 0.30, "gemini": 0.17}
+    by_provider: Dict[str, float]   # {"gemini": 0.17, "gemma": 0.0}
 
 
 # Trading

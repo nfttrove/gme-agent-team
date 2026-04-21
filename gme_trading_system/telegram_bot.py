@@ -19,7 +19,7 @@ Commands:
 
 Interactive chat: send plain text questions for LLM responses with trading context.
 Queries dual curated GameStop research collections via Google Notebook LM first,
-then falls back to Gemma/Gemini/DeepSeek.
+then falls back to Gemma/Gemini.
 
 Run as a thread from orchestrator.py.
 """
@@ -517,24 +517,6 @@ Think: Bloomberg terminal meets a knowledgeable friend who reads a lot."""
     except Exception as e:
         log.debug(f"[tgbot] Gemma failed: {e}")
 
-    # Try DeepSeek (cheap)
-    try:
-        r = requests.post("https://api.deepseek.com/v1/chat/completions", json={
-            "model": "deepseek-chat",
-            "messages": [
-                {"role": "system", "content": system_prompt},
-                {"role": "user", "content": user_message},
-            ],
-            "temperature": 0.3,
-            "max_tokens": 500,
-        }, headers={
-            "Authorization": f"Bearer {os.getenv('DEEPSEEK_API_KEY')}",
-        }, timeout=30)
-        if r.status_code == 200:
-            return r.json()["choices"][0]["message"]["content"].strip()
-    except Exception as e:
-        log.debug(f"[tgbot] DeepSeek failed: {e}")
-
     # Try Gemini Flash (paid fallback, only if free options fail)
     try:
         import google.generativeai as genai
@@ -560,12 +542,36 @@ def _handle_chat(text: str):
         _send("❌ Error processing your question. Try again.")
 
 
+def _register_commands():
+    """Register bot commands with Telegram so they appear in autocomplete."""
+    if not ENABLED:
+        return
+    commands = [
+        {"command": "help", "description": "Full command guide and chat capabilities"},
+        {"command": "status", "description": "System health, agents, tick count"},
+        {"command": "balance", "description": "Live IBKR account balance"},
+        {"command": "ticks", "description": "Price ticks received today"},
+        {"command": "agents", "description": "Last run time for each agent"},
+        {"command": "brief", "description": "Today's strategy in plain English"},
+        {"command": "update", "description": "Force sync local data to Supabase now"},
+        {"command": "halt", "description": "Pause all new trades (risk override)"},
+        {"command": "resume", "description": "Re-enable trading"},
+        {"command": "frequency", "description": "Show/set notification frequency"},
+    ]
+    try:
+        requests.post(f"{BASE_URL}/setMyCommands", json={"commands": commands}, timeout=10)
+        log.info("[tgbot] Commands registered with Telegram")
+    except Exception as e:
+        log.warning(f"[tgbot] Failed to register commands: {e}")
+
+
 def run_bot():
     if not ENABLED:
         log.warning("[tgbot] Telegram not configured — bot disabled")
         return
 
     _ensure_settings_table()
+    _register_commands()
     log.info("[tgbot] Two-way Telegram bot started")
     _send("🤖 <b>GME Bot online.</b> Send /status for system health.")
 

@@ -505,7 +505,7 @@ class TradingSystemOrchestrator:
 
         log.info("""
 ╔══════════════════════════════════════════════════════════════════╗
-║      GME Multi-Agent Trading System — ONLINE (DeepSeek-first)   ║
+║      GME Multi-Agent Trading System — ONLINE (Gemini-first)     ║
 ╠══════════════════════════════════════════════════════════════════╣
 ║  Synthesis (cross-agent brief) every 5 min — shared context      ║
 ║  Valerie  (data validator)     every 1 min                       ║

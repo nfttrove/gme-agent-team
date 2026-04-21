@@ -11,38 +11,37 @@ def test_ollama_gemma():
     assert "GEMMA" in response.upper() or "OK" in response.upper(), f"Unexpected: {response}"
     print(f"  PASS — got: {response.strip()}")
 
-def test_deepseek():
-    print("Testing DeepSeek API — cloud, pay-per-use...")
-    key = os.getenv("DEEPSEEK_API_KEY")
-    assert key and key != "your_key_here", "DEEPSEEK_API_KEY not set in .env"
+def test_gemini():
+    print("Testing Gemini API — cloud, pay-per-use...")
+    key = os.getenv("GOOGLE_API_KEY")
+    assert key and key != "your_key_here", "GOOGLE_API_KEY not set in .env"
     llm = LLM(
-        model="deepseek/deepseek-chat",
+        model="gemini/gemini-2.5-flash",
         api_key=key,
-        base_url="https://api.deepseek.com/v1",
         temperature=0,
     )
     try:
-        response = llm.call([{"role": "user", "content": "Reply with only: DEEPSEEK_OK"}])
-        assert "DEEPSEEK" in response.upper() or "OK" in response.upper(), f"Unexpected: {response}"
+        response = llm.call([{"role": "user", "content": "Reply with only: GEMINI_OK"}])
+        assert "GEMINI" in response.upper() or "OK" in response.upper(), f"Unexpected: {response}"
         print(f"  PASS — got: {response.strip()}")
         return True
     except Exception as e:
-        if "402" in str(e) or "Insufficient Balance" in str(e):
-            print("  SKIP — DeepSeek account has no balance. Top up at platform.deepseek.com to enable.")
+        if "quota" in str(e).lower() or "rate" in str(e).lower():
+            print("  SKIP — Gemini quota exceeded. Try again later.")
         else:
             print(f"  FAIL — {e}")
         return False
 
 if __name__ == "__main__":
     ollama_ok = True
-    deepseek_ok = False
+    gemini_ok = False
 
     test_ollama_gemma()
-    deepseek_ok = test_deepseek()
+    gemini_ok = test_gemini()
 
     print()
-    if deepseek_ok:
-        print("Both models ready. main.py will use Gemma for Analyst/Strategist and DeepSeek for Manager.")
+    if gemini_ok:
+        print("Both models ready. main.py will use Gemma for Analyst/Strategist and Gemini for Manager.")
     else:
         print("Only Ollama is ready. To run fully local, Manager can also use Gemma (free, no account needed).")
-        print("To switch: open main.py and change  MANAGER_MODEL = deepseek_llm  to  MANAGER_MODEL = ollama_llm")
+        print("To switch: open main.py and change  MANAGER_MODEL = gemini_llm  to  MANAGER_MODEL = ollama_llm")

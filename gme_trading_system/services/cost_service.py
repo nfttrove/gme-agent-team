@@ -12,11 +12,9 @@ load_dotenv()
 log = logging.getLogger(__name__)
 
 DB_PATH = "agent_memory.db"
-DEEPSEEK_API_KEY = os.getenv("DEEPSEEK_API_KEY", "")
 
 # Cost estimates per LLM (rough, update with actual provider pricing)
 COST_PER_1K_TOKENS = {
-    "deepseek": 0.00014,      # $0.14 per 1M tokens
     "gemini": 0.0001,          # Free tier, $1 for high volume
     "gemma": 0.0,              # Free (local Ollama)
 }
@@ -204,69 +202,20 @@ class CostService:
             "alert": remaining < (self.daily_budget * 0.2)  # Alert at 80% usage
         }
 
-    def get_deepseek_balance(self) -> Dict[str, Any]:
-        """Get actual DeepSeek account balance."""
-        if not DEEPSEEK_API_KEY:
-            return {
-                "error": "DEEPSEEK_API_KEY not set",
-                "balance_usd": None
-            }
-
-        try:
-            response = requests.get(
-                "https://api.deepseek.com/user/balance",
-                headers={"Authorization": f"Bearer {DEEPSEEK_API_KEY}"},
-                timeout=10
-            )
-
-            if response.status_code == 200:
-                data = response.json()
-                balance_usd = data.get("balance_usd") or data.get("balance", 0)
-
-                return {
-                    "balance_usd": round(float(balance_usd), 2),
-                    "currency": "USD",
-                    "status": "active",
-                    "last_checked": datetime.now().isoformat()
-                }
-            else:
-                log.warning(f"[cost] DeepSeek balance check failed: {response.status_code}")
-                return {
-                    "error": f"API error {response.status_code}",
-                    "balance_usd": None
-                }
-
-        except requests.RequestException as e:
-            log.error(f"[cost] DeepSeek balance request failed: {e}")
-            return {
-                "error": str(e),
-                "balance_usd": None
-            }
-
     def get_account_health(self) -> Dict[str, Any]:
-        """Check overall account health: budget, actual balance, burn rate."""
+        """Check overall account health: budget and burn rate."""
         daily_cost = self.get_daily_cost()
-        deepseek_balance = self.get_deepseek_balance()
         budget_status = self.check_budget_status()
-
-        balance = deepseek_balance.get("balance_usd")
         daily_burn = daily_cost
 
-        if balance is not None and daily_burn > 0:
-            days_until_empty = balance / daily_burn
-        else:
-            days_until_empty = None
-
         return {
-            "deepseek_balance": balance,
             "daily_burn": round(daily_cost, 4),
-            "days_until_empty": round(days_until_empty, 1) if days_until_empty else None,
             "daily_budget": self.daily_budget,
-            "status": "HEALTHY" if balance and balance > (daily_cost * 7) else "WARNING" if balance and balance > daily_cost else "CRITICAL",
-            "alerts": self._generate_alerts(balance, daily_cost, budget_status)
+            "status": "HEALTHY" if daily_cost < (self.daily_budget * 0.7) else "WARNING" if daily_cost < self.daily_budget else "OVER_BUDGET",
+            "alerts": self._generate_alerts(daily_cost, budget_status)
         }
 
-    def _generate_alerts(self, balance: Optional[float], daily_burn: float, budget_status: Dict) -> List[str]:
+    def _generate_alerts(self, daily_burn: float, budget_status: Dict) -> List[str]:
         """Generate alerts if issues detected."""
         alerts = []
 
@@ -274,13 +223,5 @@ class CostService:
             cost = budget_status.get('total_cost_usd', 0)
             budget = budget_status.get('budget_daily', 0)
             alerts.append(f"⚠️ Daily budget at {budget_status['percent_used']}% (${cost:.2f} of ${budget:.2f})")
-
-        if balance is not None:
-            if balance < (daily_burn * 1):
-                alerts.append(f"🔴 CRITICAL: DeepSeek balance ${balance:.2f} is less than 1 day of spending")
-            elif balance < (daily_burn * 3):
-                alerts.append(f"⚠️ LOW: DeepSeek balance ${balance:.2f} is less than 3 days of spending")
-            elif balance < (daily_burn * 7):
-                alerts.append(f"ℹ️ INFO: DeepSeek balance ${balance:.2f} is less than 1 week of spending")
 
         return alerts
