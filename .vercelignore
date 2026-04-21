@@ -1,0 +1,15 @@
+gme_trading_system/
+.agent/
+*.db
+.env
+.env.*
+venv/
+__pycache__/
+*.pyc
+.git
+.gitignore
+CLAUDE.md
+docker-compose.yml
+Dockerfile
+requirements.txt
+supervisord.conf
