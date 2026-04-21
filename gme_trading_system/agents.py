@@ -1,6 +1,5 @@
 from crewai import Agent
 from llm_config import gemini_flash, gemini_pro, gemma_local
-from tools import SQLQueryTool, SQLWriteTool, NewsAPITool, PriceDataTool, IndicatorTool
 from mission import OPERATIVE_DIRECTIVE
 from pe_playbook import ANTI_PATTERNS, GME_STRUCTURAL_THESIS, GME_IMMUNITY_CHECKS, PLAYBOOK_SIGNALS
 
@@ -59,9 +58,10 @@ daily_trend_agent = ResilientAgent(
     goal="Identify trend lines, support, and resistance from daily candle data for GME",
     backstory=(
         "You are an expert technical analyst specialising in GME. "
-        "You read OHLCV data and produce precise support/resistance levels and trend direction."
+        "You read OHLCV data and produce precise support/resistance levels and trend direction.\n\n"
+        "IMPORTANT: You cannot use tools directly. Instead, output SQL queries and calculations in your response. "
+        "Include any SELECT statements you need to run: e.g., 'SELECT * FROM daily_candles WHERE symbol=\"GME\" ...'"
     ),
-    tools=[SQLQueryTool(), PriceDataTool(), IndicatorTool()],
     verbose=True,
 )
 
@@ -81,9 +81,10 @@ multiday_trend_agent = ResilientAgent(
         "(2) Ascending triangles — flat resistance + rising support, bullish bias. "
         "(3) Descending triangles — flat support + falling resistance, bearish bias. "
         "(4) Flags & pennants — short consolidations after strong moves. "
-        "You always state: pattern type, the breakout price level, direction bias, and confidence."
+        "You always state: pattern type, the breakout price level, direction bias, and confidence.\n\n"
+        "IMPORTANT: You cannot use tools directly. Instead, output SQL queries in your response. "
+        "Include any SELECT statements you need: e.g., 'SELECT * FROM daily_candles WHERE symbol=\"GME\" ...'"
     ),
-    tools=[SQLQueryTool(), PriceDataTool(), IndicatorTool()],
     verbose=True,
 )
 
@@ -94,9 +95,10 @@ news_analyst_agent = ResilientAgent(
     goal="Fetch and score the sentiment of the latest GME news, rating each headline -1.0 to +1.0",
     backstory=(
         "You monitor every GME headline across financial news, Reddit, and SEC filings. "
-        "You assign a precise sentiment score and flag high-impact stories."
+        "You assign a precise sentiment score and flag high-impact stories.\n\n"
+        "IMPORTANT: You cannot use tools directly. Output SQL queries to fetch news data. "
+        "Reference: NewsAPI endpoint at newsapi.org; include 'fetch_news(query=\"GME\")' in your response if needed."
     ),
-    tools=[NewsAPITool(), SQLQueryTool()],
     verbose=True,
 )
 
@@ -109,9 +111,9 @@ futurist_agent = ResilientAgent(
         f"{OPERATIVE_DIRECTIVE}\n\n"
         "You synthesise technical analysis, news sentiment, and historical patterns "
         "to produce probabilistic price forecasts. You never guess — you reason step by step. "
-        "Your predictions exist to generate profitable trade decisions. Accuracy is not an academic exercise."
+        "Your predictions exist to generate profitable trade decisions. Accuracy is not an academic exercise.\n\n"
+        "IMPORTANT: You cannot use tools directly. Output SQL queries in your response to fetch data you need."
     ),
-    tools=[SQLQueryTool(), PriceDataTool(), IndicatorTool()],
     verbose=True,
 )
 
@@ -128,9 +130,9 @@ project_manager_agent = ResilientAgent(
         "You are the final gatekeeper. The mission is profit. You only approve trades when "
         "the trend analyst, futurist, and news analyst are aligned and confidence exceeds the threshold. "
         "A rejected trade that would have won costs nothing. An approved trade that loses costs capital. "
-        "Protect the capital. Always."
+        "Protect the capital. Always.\n\n"
+        "IMPORTANT: You cannot use tools directly. Output SQL queries in your response if needed."
     ),
-    tools=[SQLQueryTool()],
     verbose=True,
     allow_delegation=True,
 )
@@ -140,10 +142,10 @@ trader_agent = Agent(
     goal="Execute approved paper trades on BitGet and log the result to the database",
     backstory=(
         "You receive a structured trade decision and execute it precisely. "
-        "In paper mode you simulate the fill and record it. You never deviate from the approved parameters."
+        "In paper mode you simulate the fill and record it. You never deviate from the approved parameters.\n\n"
+        "IMPORTANT: You cannot use tools directly. Output SQL INSERT statements in your response to log trades."
     ),
     llm=gemma_local,
-    tools=[SQLQueryTool()],
     verbose=True,
 )
 
@@ -160,9 +162,9 @@ valerie_agent = ResilientAgent(
     backstory=(
         "You are a data integrity specialist. You scan every incoming tick for gaps > 2 seconds, "
         "price moves > 20% from the previous close, and zero-volume bars. "
-        "You flag problems immediately so agents downstream can trust the data."
+        "You flag problems immediately so agents downstream can trust the data.\n\n"
+        "IMPORTANT: You cannot use tools directly. Output SQL queries and INSERT statements in your response."
     ),
-    tools=[SQLQueryTool(), SQLWriteTool()],
     verbose=False,
 )
 
@@ -179,9 +181,9 @@ chatty_agent = ResilientAgent(
         "You check the latest Synthesis brief first — it tells you the team's consensus view — "
         "then you combine that with the raw price tick to produce one punchy insight. "
         "Examples: 'Consensus BULLISH 65%: volume 2.3× avg, triangle holding.' | "
-        "'Team cautious — news bearish despite tick up. Wait for confirmation.'"
+        "'Team cautious — news bearish despite tick up. Wait for confirmation.'\n\n"
+        "IMPORTANT: You cannot use tools directly. Output SQL queries in your response if needed."
     ),
-    tools=[SQLQueryTool(), SQLWriteTool()],
     verbose=False,
 )
 
@@ -240,9 +242,9 @@ cto_agent = ResilientAgent(
         "For OTHER stocks: identify companies currently being destroyed by the same playbook.\n\n"
 
         "Your outputs are strategic context, not direct trade signals. You inform the Futurist, Boss, "
-        "and Trader Joe so they can make better decisions. You are the intelligence layer."
+        "and Trader Joe so they can make better decisions. You are the intelligence layer.\n\n"
+        "IMPORTANT: You cannot use tools directly. Output SQL queries in your response to fetch EDGAR data and structural signals."
     ),
-    tools=[SQLQueryTool(), NewsAPITool()],
     verbose=True,
     allow_delegation=False,
 )
@@ -258,9 +260,9 @@ memoria_agent = ResilientAgent(
     backstory=(
         "You have perfect recall of every analysis ever produced by the team. "
         "When the Futurist needs historical analogues, you surface the most relevant past episodes "
-        "with dates, price levels, and outcomes."
+        "with dates, price levels, and outcomes.\n\n"
+        "IMPORTANT: You cannot use tools directly. Output SQL queries in your response to fetch agent logs and prediction history."
     ),
-    tools=[SQLQueryTool()],
     verbose=True,
 )
 
@@ -281,9 +283,9 @@ briefing_agent = ResilientAgent(
         "3. Key levels (support, resistance, today's expected range) "
         "4. Trade plan (what signal we are waiting for) "
         "5. Risk (what would cancel today's plan) "
-        "Keep each bullet under 2 sentences. No jargon. Confidence scores as percentages."
+        "Keep each bullet under 2 sentences. No jargon. Confidence scores as percentages.\n\n"
+        "IMPORTANT: You cannot use tools directly. Output SQL queries in your response if needed."
     ),
-    tools=[SQLQueryTool()],
     verbose=False,
 )
 
@@ -301,9 +303,9 @@ synthesis_agent = ResilientAgent(
         "what Pattern found in the chart, what CTO found structurally, and what Social flagged — "
         "then distil it into a concise one-line brief. This brief becomes the shared context "
         "that Chatty references when commenting and Futurist references when predicting. "
-        "Without you, each agent works in isolation. With you, the team learns together."
+        "Without you, each agent works in isolation. With you, the team learns together.\n\n"
+        "IMPORTANT: You cannot use tools directly. Output SQL queries and INSERT statements in your response."
     ),
-    tools=[SQLQueryTool(), SQLWriteTool()],
     verbose=False,
 )
 
@@ -321,8 +323,8 @@ georisk_agent = ResilientAgent(
         "You monitor World Monitor (cables, pipelines, sanctions, trade routes, weather, outages) "
         "and flag events that could affect GME's retail operations or supplier logistics. "
         "You think long-term: how do today's geopolitical shifts impact consumer confidence "
-        "and retail foot traffic 3-6 months out?"
+        "and retail foot traffic 3-6 months out?\n\n"
+        "IMPORTANT: You cannot use tools directly. Output SQL INSERT statements in your response to log geopolitical risks."
     ),
-    tools=[SQLWriteTool()],
     verbose=False,
 )
