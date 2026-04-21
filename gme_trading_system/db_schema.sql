@@ -195,3 +195,16 @@ CREATE INDEX IF NOT EXISTS idx_structural_signals_ticker ON structural_signals(t
 CREATE INDEX IF NOT EXISTS idx_structural_signals_date ON structural_signals(filing_date);
 CREATE INDEX IF NOT EXISTS idx_social_posts_timestamp ON social_posts(timestamp);
 CREATE INDEX IF NOT EXISTS idx_options_snapshots_timestamp ON options_snapshots(timestamp);
+
+CREATE TABLE IF NOT EXISTS validation_log (
+    id                  INTEGER PRIMARY KEY AUTOINCREMENT,
+    timestamp           TEXT    NOT NULL,
+    agent_name          TEXT    NOT NULL,
+    task_type           TEXT,
+    original_output     TEXT,
+    validation_status   TEXT,
+    recovery_action     TEXT
+);
+
+CREATE INDEX IF NOT EXISTS idx_validation_timestamp ON validation_log(timestamp DESC);
+CREATE INDEX IF NOT EXISTS idx_validation_agent ON validation_log(agent_name);

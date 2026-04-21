@@ -17,6 +17,8 @@ import os
 import sqlite3
 import logging
 import time
+import subprocess
+import sys
 from datetime import datetime
 from zoneinfo import ZoneInfo
 
@@ -44,6 +46,31 @@ logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(me
 log = logging.getLogger(__name__)
 metrics = MetricsLogger()
 learner = AgentLearner()
+
+
+# ── Learning helpers ──────────────────────────────────────────────────────────
+
+def recall_lessons(intent: str) -> str:
+    """Call .agent/tools/recall.py to surface relevant lessons before agent cycles."""
+    try:
+        agent_dir = os.path.dirname(__file__)
+        recall_script = os.path.join(agent_dir, "..", ".agent", "tools", "recall.py")
+
+        if not os.path.exists(recall_script):
+            return ""  # Silent fallback if .agent not set up yet
+
+        result = subprocess.run(
+            [sys.executable, recall_script, intent],
+            capture_output=True, text=True, timeout=5, cwd=agent_dir
+        )
+
+        if result.returncode == 0:
+            return result.stdout
+        else:
+            return ""
+    except Exception as e:
+        log.warning(f"[recall] Failed to surface lessons: {e}")
+        return ""
 
 
 # ── DB helpers ─────────────────────────────────────────────────────────────────
@@ -158,6 +185,12 @@ def run_futurist_cycle():
 
     log.info("[Futurist] Starting full strategic cycle")
     write_log("Futurist", "Starting strategic cycle — gate check", "full_cycle", "running")
+
+    # Recall relevant lessons before strategic cycle
+    lessons = recall_lessons("GME trading strategy, market conditions, IV management, risk rules")
+    if lessons:
+        log.info(f"[Futurist] Recalled lessons:\n{lessons}")
+        write_log("Futurist", f"Recalled lessons context:\n{lessons[:500]}", "recall")
 
     gate = run_gate_check()
     log.info(gate.report())
