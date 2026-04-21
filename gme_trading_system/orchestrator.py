@@ -33,10 +33,11 @@ from dotenv import load_dotenv
 
 from metrics_logger import MetricsLogger
 from safety_gate import run_gate_check
-from market_hours import is_market_open, market_hours_required
+from market_hours import is_market_open, market_hours_required, is_active_window, active_window_required
 from learner import AgentLearner
 from telegram_bot import start_bot_thread, is_halted
 from supabase_sync import start_sync_thread
+from safe_kickoff import safe_kickoff, CrewTimeout
 
 load_dotenv()
 
@@ -97,6 +98,7 @@ def write_log(agent: str, content: str, task_type: str, status: str = "ok"):
 
 # ── Individual cycle functions ─────────────────────────────────────────────────
 
+@active_window_required
 def run_validation():
     from agents import valerie_agent
     from tasks import validate_data_task
@@ -104,13 +106,17 @@ def run_validation():
     try:
         crew = Crew(agents=[valerie_agent], tasks=[validate_data_task],
                     process=Process.sequential, verbose=False)
-        result = crew.kickoff()
+        result = safe_kickoff(crew, timeout_seconds=180, label="valerie")
         write_log("Valerie", str(result)[:500], "validation")
+    except CrewTimeout as e:
+        log.error(f"[Valerie] TIMEOUT: {e}")
+        write_log("Valerie", f"TIMEOUT: {e}", "validation", "timeout")
     except Exception as e:
         log.error(f"[Valerie] {e}")
         write_log("Valerie", str(e), "validation", "error")
 
 
+@active_window_required
 def run_commentary():
     from agents import chatty_agent
     from tasks import commentary_task
@@ -118,9 +124,12 @@ def run_commentary():
     try:
         crew = Crew(agents=[chatty_agent], tasks=[commentary_task],
                     process=Process.sequential, verbose=False)
-        result = crew.kickoff()
+        result = safe_kickoff(crew, timeout_seconds=180, label="chatty")
         log.info(f"[Chatty] {str(result)[:120]}")
         write_log("Chatty", str(result)[:500], "commentary")
+    except CrewTimeout as e:
+        log.error(f"[Chatty] TIMEOUT: {e}")
+        write_log("Chatty", f"TIMEOUT: {e}", "commentary", "timeout")
     except Exception as e:
         log.error(f"[Chatty] {e}")
         write_log("Chatty", str(e), "commentary", "error")
@@ -136,8 +145,11 @@ def run_news():
         try:
             crew = Crew(agents=[news_analyst_agent], tasks=[news_task],
                         process=Process.sequential, verbose=True)
-            result = crew.kickoff()
+            result = safe_kickoff(crew, timeout_seconds=300, label="newsie")
             write_log("Newsie", str(result)[:1000], "news")
+        except CrewTimeout as e:
+            log.error(f"[Newsie] TIMEOUT: {e}")
+            write_log("Newsie", f"TIMEOUT: {e}", "news", "timeout")
         except Exception as e:
             log.error(f"[Newsie] {e}")
             write_log("Newsie", str(e), "news", "error")
@@ -153,13 +165,17 @@ def run_pattern():
         try:
             crew = Crew(agents=[multiday_trend_agent], tasks=[multiday_trend_task],
                         process=Process.sequential, verbose=True)
-            result = crew.kickoff()
+            result = safe_kickoff(crew, timeout_seconds=300, label="pattern")
             write_log("Pattern", str(result)[:1000], "pattern")
+        except CrewTimeout as e:
+            log.error(f"[Pattern] TIMEOUT: {e}")
+            write_log("Pattern", f"TIMEOUT: {e}", "pattern", "timeout")
         except Exception as e:
             log.error(f"[Pattern] {e}")
             write_log("Pattern", str(e), "pattern", "error")
 
 
+@active_window_required
 def run_daily_trend():
     from agents import daily_trend_agent
     from tasks import daily_trend_task
@@ -169,8 +185,11 @@ def run_daily_trend():
         try:
             crew = Crew(agents=[daily_trend_agent], tasks=[daily_trend_task],
                         process=Process.sequential, verbose=True)
-            result = crew.kickoff()
+            result = safe_kickoff(crew, timeout_seconds=300, label="trendy")
             write_log("Trendy", str(result)[:1000], "daily_trend")
+        except CrewTimeout as e:
+            log.error(f"[Trendy] TIMEOUT: {e}")
+            write_log("Trendy", f"TIMEOUT: {e}", "daily_trend", "timeout")
         except Exception as e:
             log.error(f"[Trendy] {e}")
             write_log("Trendy", str(e), "daily_trend", "error")
@@ -222,9 +241,12 @@ def run_futurist_cycle():
                 process=Process.sequential,
                 verbose=True,
             )
-            result = crew.kickoff()
+            result = safe_kickoff(crew, timeout_seconds=600, label="futurist_full_cycle")
             write_log("Futurist", str(result)[:1000], "full_cycle")
             metrics.snapshot()
+        except CrewTimeout as e:
+            log.error(f"[Futurist] TIMEOUT: {e}")
+            write_log("Futurist", f"TIMEOUT: {e}", "full_cycle", "timeout")
         except Exception as e:
             log.error(f"[Futurist] {e}")
             write_log("Futurist", str(e), "full_cycle", "error")
@@ -356,6 +378,7 @@ def run_cto_structural_scan():
         write_log("CTO", str(e), "structural_scan", "error")
 
 
+@active_window_required
 def run_synthesis():
     """Every 5 min — cross-agent intelligence synthesis so all agents share a common picture."""
     from agents import synthesis_agent
@@ -363,14 +386,18 @@ def run_synthesis():
     try:
         crew = Crew(agents=[synthesis_agent], tasks=[synthesis_task],
                     process=Process.sequential, verbose=False)
-        result = crew.kickoff()
+        result = safe_kickoff(crew, timeout_seconds=180, label="synthesis")
         log.info(f"[Synthesis] {str(result)[:120]}")
         write_log("Synthesis", str(result)[:500], "synthesis")
+    except CrewTimeout as e:
+        log.error(f"[Synthesis] TIMEOUT: {e}")
+        write_log("Synthesis", f"TIMEOUT: {e}", "synthesis", "timeout")
     except Exception as e:
         log.error(f"[Synthesis] {e}")
         write_log("Synthesis", str(e), "synthesis", "error")
 
 
+@active_window_required
 def run_georisk():
     """Hourly GeoRisk scan — monitor global supply chain events."""
     from agents import georisk_agent
@@ -378,14 +405,18 @@ def run_georisk():
     try:
         crew = Crew(agents=[georisk_agent], tasks=[georisk_task],
                     process=Process.sequential, verbose=False)
-        result = crew.kickoff()
+        result = safe_kickoff(crew, timeout_seconds=180, label="georisk")
         log.info(f"[GeoRisk] {str(result)[:120]}")
         write_log("GeoRisk", str(result)[:500], "georisk")
+    except CrewTimeout as e:
+        log.error(f"[GeoRisk] TIMEOUT: {e}")
+        write_log("GeoRisk", f"TIMEOUT: {e}", "georisk", "timeout")
     except Exception as e:
         log.error(f"[GeoRisk] {e}")
         write_log("GeoRisk", str(e), "georisk", "error")
 
 
+@active_window_required
 def run_periodic_brief():
     """Every 4 hours — send human-readable intelligence digest to Telegram."""
     import sqlite3

@@ -66,6 +66,11 @@ def _last_weekday(year: int, month: int, weekday: int) -> date:
 MARKET_OPEN  = time(9, 30)
 MARKET_CLOSE = time(16, 0)
 
+# Active window: 2h before open through 2h after close.
+# Covers pre-market prep, market hours, and post-market wrap-up.
+ACTIVE_WINDOW_START = time(7, 30)
+ACTIVE_WINDOW_END   = time(18, 0)
+
 
 def is_market_open(dt: datetime | None = None) -> bool:
     """Return True if US equity markets are currently open."""
@@ -80,6 +85,23 @@ def is_market_open(dt: datetime | None = None) -> bool:
     return MARKET_OPEN <= t < MARKET_CLOSE
 
 
+def is_active_window(dt: datetime | None = None) -> bool:
+    """Return True if within the active trading window (2h before/after market hours).
+
+    Active window: 07:30–18:00 ET, Mon-Fri, excluding US holidays.
+    Use this to gate scheduled jobs so they don't run overnight or on weekends.
+    """
+    now_et = (dt or datetime.now(ET)).astimezone(ET)
+    today  = now_et.date()
+
+    if today.weekday() >= 5:           # Weekend
+        return False
+    if today in _holidays(today.year): # Holiday
+        return False
+    t = now_et.time().replace(tzinfo=None)
+    return ACTIVE_WINDOW_START <= t < ACTIVE_WINDOW_END
+
+
 def market_hours_required(func):
     """Decorator: skip function and log if outside market hours."""
     import logging
@@ -89,6 +111,24 @@ def market_hours_required(func):
         if not is_market_open():
             now_et = datetime.now(ET).strftime("%H:%M ET %a")
             log.info(f"[market_hours] {func.__name__} skipped — market closed ({now_et})")
+            return None
+        return func(*args, **kwargs)
+    return wrapper
+
+
+def active_window_required(func):
+    """Decorator: skip function if outside the active window (07:30–18:00 ET, Mon-Fri).
+
+    Looser than market_hours_required — allows pre-market analysis (07:30-09:30)
+    and post-market wrap-up (16:00-18:00). Blocks overnight, weekend, and holiday runs.
+    """
+    import logging
+    log = logging.getLogger(__name__)
+
+    def wrapper(*args, **kwargs):
+        if not is_active_window():
+            now_et = datetime.now(ET).strftime("%H:%M ET %a")
+            log.info(f"[active_window] {func.__name__} skipped — outside window ({now_et})")
             return None
         return func(*args, **kwargs)
     return wrapper
