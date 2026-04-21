@@ -107,6 +107,8 @@ def write_log_validated(agent: str, content: str, task_type: str, status: str = 
 # ── Individual cycle functions ─────────────────────────────────────────────────
 
 def run_validation():
+    if not is_market_open():
+        return  # Skip pre/post-market analysis to save tokens
     from agents import valerie_agent
     from tasks import validate_data_task
     write_log("Valerie", "Starting validation cycle", "validation", "running")
@@ -121,6 +123,8 @@ def run_validation():
 
 
 def run_commentary():
+    if not is_market_open():
+        return  # Skip pre/post-market to save tokens
     from agents import chatty_agent
     from tasks import commentary_task
     write_log("Chatty", "Composing commentary", "commentary", "running")
@@ -137,6 +141,8 @@ def run_commentary():
 
 @market_hours_required
 def run_news():
+    if not is_market_open():
+        return  # Skip pre/post-market to save tokens
     from agents import news_analyst_agent
     from tasks import news_task
     log.info("[Newsie] Running news sentiment cycle")
@@ -154,6 +160,8 @@ def run_news():
 
 @market_hours_required
 def run_pattern():
+    if not is_market_open():
+        return  # Skip pre/post-market to save tokens
     from agents import multiday_trend_agent
     from tasks import multiday_trend_task, daily_trend_task
     log.info("[Pattern] Running multi-day pattern analysis")
@@ -170,6 +178,8 @@ def run_pattern():
 
 
 def run_daily_trend():
+    if not is_market_open():
+        return  # Skip pre/post-market to save tokens
     from agents import daily_trend_agent
     from tasks import daily_trend_task
     log.info("[Trendy] Running daily trend analysis")
@@ -187,6 +197,8 @@ def run_daily_trend():
 
 @market_hours_required
 def run_futurist_cycle():
+    if not is_market_open():
+        return  # Skip pre/post-market to save tokens
     """Full strategic cycle: gate check → Futurist → Boss → Trader Joe if approved."""
     if is_halted():
         log.info("[Futurist] Trading halted by Telegram /halt — skipping cycle")
@@ -360,6 +372,8 @@ def run_cto_structural_scan():
 
 
 def run_synthesis():
+    if not is_market_open():
+        return  # Skip pre/post-market to save tokens
     """Every 5 min — cross-agent intelligence synthesis so all agents share a common picture."""
     from agents import synthesis_agent
     from tasks import synthesis_task
@@ -375,6 +389,8 @@ def run_synthesis():
 
 
 def run_georisk():
+    if not is_market_open():
+        return  # Skip pre/post-market to save tokens
     """Hourly GeoRisk scan — monitor global supply chain events."""
     from agents import georisk_agent
     from tasks import georisk_task
