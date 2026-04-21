@@ -211,28 +211,45 @@ def fetch(ticker: str) -> Optional[TroveInputs]:
 
 def run_screen(tickers: list[str], max_tickers: int = 30) -> list[dict]:
     """Fetch and score a list of tickers. Returns list of result dicts sorted by score desc."""
+    import time
     results = []
-    for ticker in tickers[:max_tickers]:
-        inp = fetch(ticker)
-        if inp is None:
-            continue
-        result = score(inp)
-        results.append({
-            "ticker":    ticker,
-            "score":     result["total"],
-            "rating":    result["rating"],
-            "pillar_A":  result["pillars"]["A"],
-            "pillar_B":  result["pillars"]["B"],
-            "pillar_C":  result["pillars"]["C"],
-            "immunity":  result["immunity_count"],
-            "ev_fcf":    round(inp.ev_fcf, 1),
-            "ev_ebitda": round(inp.ev_ebitda, 1),
-            "pb":        round(inp.pb, 2),
-            "altman_z":  inp.altman_z,
-            "de":        round(inp.debt_equity, 2),
-            "net_cash_pct": round(inp.net_cash_pct * 100, 1),
-            "op_margin": round(inp.operating_margin * 100, 1),
-            "roe":       round(inp.roe * 100, 1),
-            "net_margin":round(inp.net_margin * 100, 1),
-        })
+    for i, ticker in enumerate(tickers[:max_tickers]):
+        # Rate limit: small delay between requests to avoid yfinance throttling
+        if i > 0:
+            time.sleep(0.5)
+
+        # Retry logic for flaky connections
+        for attempt in range(2):
+            try:
+                inp = fetch(ticker)
+                if inp is None:
+                    break
+                result = score(inp)
+                results.append({
+                    "ticker":    ticker,
+                    "score":     result["total"],
+                    "rating":    result["rating"],
+                    "pillar_A":  result["pillars"]["A"],
+                    "pillar_B":  result["pillars"]["B"],
+                    "pillar_C":  result["pillars"]["C"],
+                    "immunity":  result["immunity_count"],
+                    "ev_fcf":    round(inp.ev_fcf, 1),
+                    "ev_ebitda": round(inp.ev_ebitda, 1),
+                    "pb":        round(inp.pb, 2),
+                    "altman_z":  inp.altman_z,
+                    "de":        round(inp.debt_equity, 2),
+                    "net_cash_pct": round(inp.net_cash_pct * 100, 1),
+                    "op_margin": round(inp.operating_margin * 100, 1),
+                    "roe":       round(inp.roe * 100, 1),
+                    "net_margin":round(inp.net_margin * 100, 1),
+                })
+                break  # success, move to next ticker
+            except Exception as e:
+                if attempt == 1:
+                    # Failed after retry
+                    pass
+                else:
+                    # Retry once more after short delay
+                    time.sleep(1)
+
     return sorted(results, key=lambda x: x["score"], reverse=True)
