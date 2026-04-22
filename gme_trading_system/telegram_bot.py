@@ -482,7 +482,7 @@ def handle_command(text: str):
             import os as os_module
 
             # Get repo root
-            repo_root = os_module.path.dirname(os_module.dirname(__file__))
+            repo_root = os_module.path.dirname(os_module.path.dirname(__file__))
 
             # Run pytest
             result = subprocess.run(
