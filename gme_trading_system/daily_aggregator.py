@@ -7,15 +7,17 @@ All writes are atomic — a crash cannot leave a partial candle.
 import sqlite3
 import os
 from datetime import datetime, timedelta
+from zoneinfo import ZoneInfo
 
 DB_PATH = os.path.join(os.path.dirname(__file__), "agent_memory.db")
 SYMBOL = "GME"
+ET = ZoneInfo("America/New_York")
 
 
 def aggregate_day(date_str: str | None = None):
     """Aggregate ticks for a given date (default: today) into daily_candles."""
     if date_str is None:
-        date_str = datetime.now().strftime("%Y-%m-%d")
+        date_str = datetime.now(ET).strftime("%Y-%m-%d")
 
     conn = sqlite3.connect(DB_PATH)
     try:
@@ -89,7 +91,7 @@ def aggregate_day(date_str: str | None = None):
 def backfill(days: int = 30):
     """Backfill the last N days from price_ticks."""
     for i in range(days):
-        date = (datetime.now() - timedelta(days=i)).strftime("%Y-%m-%d")
+        date = (datetime.now(ET) - timedelta(days=i)).strftime("%Y-%m-%d")
         aggregate_day(date)
 
 

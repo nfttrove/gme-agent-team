@@ -26,6 +26,7 @@ import sqlite3
 import threading
 import time
 from datetime import datetime
+from zoneinfo import ZoneInfo
 from pathlib import Path
 
 from flask import Flask, request, jsonify
@@ -39,6 +40,7 @@ from circuit_breaker import list_breakers
 
 load_dotenv()
 
+ET = ZoneInfo("America/New_York")
 DB_PATH   = os.path.join(os.path.dirname(__file__), "agent_memory.db")
 CSV_PATH  = os.path.join(os.path.dirname(__file__), "data", "gme_ticks.csv")
 GIT_REPO  = os.getenv("GIT_REPO_PATH", "")
@@ -109,7 +111,7 @@ def git_push():
         import git
         repo = git.Repo(GIT_REPO)
         repo.index.add([CSV_PATH])
-        repo.index.commit(f"data: {SYMBOL} tick {datetime.now().isoformat()}")
+        repo.index.commit(f"data: {SYMBOL} tick {datetime.now(ET).isoformat()}")
         repo.remote("origin").push()
     except Exception as e:
         print(f"[git] push failed: {e}")
@@ -138,7 +140,7 @@ def receive_tick():
         return jsonify({"error": "no JSON body"}), 400
 
     try:
-        ts  = data.get("timestamp", data.get("time", datetime.utcnow().isoformat()))
+        ts  = data.get("timestamp", data.get("time", datetime.now(ET).isoformat()))
         o   = float(data.get("open",  data.get("price", 0)))
         h   = float(data.get("high",  data.get("price", 0)))
         l   = float(data.get("low",   data.get("price", 0)))
@@ -175,7 +177,7 @@ def finnhub_webhook():
     conn = sqlite3.connect(DB_PATH)
     for item in items:
         try:
-            ts = datetime.utcfromtimestamp(item.get("datetime", 0)).isoformat() if item.get("datetime") else datetime.utcnow().isoformat()
+            ts = datetime.utcfromtimestamp(item.get("datetime", 0)).isoformat() if item.get("datetime") else datetime.now(ET).isoformat()
             conn.execute(
                 "INSERT OR IGNORE INTO news_analysis (timestamp, headline, source, sentiment_score, sentiment_label, relevance_score, summary) VALUES (?,?,?,?,?,?,?)",
                 (ts, item.get("headline", ""), item.get("source", "finnhub"),
@@ -269,7 +271,7 @@ def _webhook_watchdog(check_interval_s: int = 60):
                 conn = sqlite3.connect(DB_PATH)
                 conn.execute(
                     "INSERT INTO agent_logs (agent_name, timestamp, task_type, content, status) VALUES (?,?,?,?,?)",
-                    ("WebhookWatchdog", datetime.now().isoformat(), "alert", msg, "error"),
+                    ("WebhookWatchdog", datetime.now(ET).isoformat(), "alert", msg, "error"),
                 )
                 conn.commit()
                 conn.close()

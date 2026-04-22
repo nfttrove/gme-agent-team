@@ -21,6 +21,7 @@ import sqlite3
 import subprocess
 import sys
 from datetime import datetime
+from zoneinfo import ZoneInfo
 
 import discord
 from discord import app_commands
@@ -30,6 +31,7 @@ from dotenv import load_dotenv
 load_dotenv()
 
 log = logging.getLogger(__name__)
+ET = ZoneInfo("America/New_York")
 
 DISCORD_TOKEN = os.getenv("DISCORD_BOT_TOKEN", "")
 DB_PATH = os.path.join(os.path.dirname(__file__), "agent_memory.db")
@@ -232,7 +234,7 @@ async def status_cmd(interaction: discord.Interaction):
     embed.add_field(name="Ticks Today", value=str(tick_count), inline=True)
     embed.add_field(name="Notifications", value=freq, inline=True)
     embed.add_field(name="Last Agent", value=last_log, inline=False)
-    embed.timestamp = datetime.now()
+    embed.timestamp = datetime.now(ET)
     await interaction.followup.send(embed=embed)
 
 
@@ -412,7 +414,7 @@ async def trove_cmd(interaction: discord.Interaction, tickers: str = ""):
             title="📊 Trove Score Rankings",
             description=f"Scored {len(results)} ticker(s) — Deep-value framework",
             color=discord.Color.blue(),
-            timestamp=datetime.now(),
+            timestamp=datetime.now(ET),
         )
         title_embed.set_footer(text="A=Valuation · B=Capital · C=Quality")
 
