@@ -12,22 +12,11 @@ sys.path.insert(0, str(Path(__file__).parent.parent.parent))
 
 
 @pytest.fixture(scope="session")
-def event_loop():
-    """Create event loop for async tests."""
-    try:
-        loop = asyncio.get_running_loop()
-    except RuntimeError:
-        loop = asyncio.new_event_loop()
-    yield loop
-    loop.close()
-
-
-@pytest.fixture(scope="session")
 def dashboard_server():
     """Start dashboard API server."""
     cwd = Path(__file__).parent.parent.parent / "dashboard"
     proc = subprocess.Popen(
-        ["python", "api_server.py"],
+        [sys.executable, "api_server.py"],
         cwd=cwd,
         stdout=subprocess.PIPE,
         stderr=subprocess.PIPE,
@@ -43,10 +32,11 @@ async def browser():
     """Launch browser once per session."""
     from playwright.async_api import async_playwright
 
-    async with async_playwright() as p:
-        browser = await p.chromium.launch()
-        yield browser
-        await browser.close()
+    playwright = await async_playwright().start()
+    browser = await playwright.chromium.launch()
+    yield browser
+    await browser.close()
+    await playwright.stop()
 
 
 @pytest.fixture
