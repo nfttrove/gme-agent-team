@@ -8,6 +8,7 @@ import sys
 import sqlite3
 import logging
 from datetime import datetime, timedelta
+from zoneinfo import ZoneInfo
 from flask import Flask, jsonify, request, render_template_string
 from flask_cors import CORS
 
@@ -15,6 +16,8 @@ from flask_cors import CORS
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..', 'gme_trading_system'))
 
 from signal_manager import SignalManager
+
+ET = ZoneInfo("America/New_York")
 
 app = Flask(__name__)
 CORS(app)
@@ -69,7 +72,7 @@ def get_metrics():
     cursor = conn.cursor()
 
     # Get date cutoff
-    cutoff_date = (datetime.now() - timedelta(days=days)).isoformat()
+    cutoff_date = (datetime.now(ET) - timedelta(days=days)).isoformat()
 
     query = """
     SELECT
@@ -138,7 +141,7 @@ def log_feedback():
         mgr.log_feedback(
             alert_id=alert_id,
             action_taken=action,
-            execution_timestamp=datetime.now().isoformat(),
+            execution_timestamp=datetime.now(ET).isoformat(),
             entry_price=entry_price,
             exit_price=exit_price,
             pnl=pnl,

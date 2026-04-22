@@ -29,11 +29,14 @@ import sqlite3
 import threading
 import time
 from datetime import datetime, date
+from zoneinfo import ZoneInfo
 
 import requests
 from dotenv import load_dotenv
 
 load_dotenv()
+
+ET = ZoneInfo("America/New_York")
 
 log = logging.getLogger(__name__)
 
@@ -225,7 +228,7 @@ def handle_command(text: str):
             f"Ticks today: {tick_count or 0}\n"
             f"Notifications: {freq}\n"
             f"Last agent: {last_log or 'none yet'}\n"
-            f"Time: {datetime.now().strftime('%H:%M:%S')}"
+            f"Time: {datetime.now(ET).strftime('%H:%M:%S')}"
         )
 
     elif cmd == "/ticks":

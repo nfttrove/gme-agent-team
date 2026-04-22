@@ -21,11 +21,14 @@ Usage:
 import logging
 import os
 from datetime import datetime
+from zoneinfo import ZoneInfo
 
 import requests
 from dotenv import load_dotenv
 
 from circuit_breaker import get_breaker, CircuitOpenError
+
+ET = ZoneInfo("America/New_York")
 
 load_dotenv()
 
@@ -68,7 +71,7 @@ def _send(text: str, parse_mode: str = "HTML") -> bool:
 
 def notify(message: str) -> bool:
     """Generic plain-text notification."""
-    ts = datetime.now().strftime("%H:%M:%S")
+    ts = datetime.now(ET).strftime("%H:%M:%S")
     return _send(f"<b>[GME System]</b> {ts}\n{message}")
 
 
@@ -90,7 +93,7 @@ def notify_trade(action: str, price: float, confidence: float,
         msg += f"SL: ${stop_loss:.2f}  |  TP: ${take_profit:.2f}\n"
     if quantity:
         msg += f"Qty: {quantity} shares\n"
-    msg += f"<i>{datetime.now().strftime('%Y-%m-%d %H:%M:%S ET')}</i>"
+    msg += f"<i>{datetime.now(ET).strftime('%Y-%m-%d %H:%M:%S')}</i>"
     return _send(msg)
 
 
@@ -115,7 +118,7 @@ def notify_cto_alert(ticker: str, signal_name: str, confidence: float,
         msg += f"Timeline: ~{timeline_months} months to event\n"
     if headline:
         msg += f"<i>{headline[:200]}</i>\n"
-    msg += f"\n<i>{datetime.now().strftime('%Y-%m-%d %H:%M ET')}</i>"
+    msg += f"\n<i>{datetime.now(ET).strftime('%Y-%m-%d %H:%M')}</i>"
     return _send(msg)
 
 
@@ -129,7 +132,7 @@ def notify_immunity_red(check_name: str, detail: str) -> bool:
         f"{detail}\n\n"
         f"⚡ <b>ACTION REQUIRED: Review position immediately.</b>\n"
         f"If PE playbook weapon has been restored, the squeeze thesis changes.\n\n"
-        f"<i>{datetime.now().strftime('%Y-%m-%d %H:%M:%S ET')}</i>"
+        f"<i>{datetime.now(ET).strftime('%Y-%m-%d %H:%M:%S')}</i>"
     )
     return _send(msg)
 
@@ -164,7 +167,7 @@ def notify_social_signal(username: str, tweet_text: str, signal_type: str = "INF
         f"{emoji} <b>@{username} posted</b>\n\n"
         f'"{tweet_text[:400]}"\n\n'
         f"Signal: <b>{signal_type}</b>\n"
-        f"<i>{datetime.now().strftime('%Y-%m-%d %H:%M ET')}</i>"
+        f"<i>{datetime.now(ET).strftime('%Y-%m-%d %H:%M')}</i>"
     )
     return _send(msg)
 
@@ -177,7 +180,7 @@ def notify_watchdog_alert(age_seconds: int) -> bool:
         f"TradingView webhook silent for <b>{mins} minutes</b>.\n"
         f"Check: ngrok running? TradingView alert active? Internet connection?\n\n"
         f"1-second data NOT flowing. Alpaca backup may be filling gaps.\n"
-        f"<i>{datetime.now().strftime('%Y-%m-%d %H:%M ET')}</i>"
+        f"<i>{datetime.now(ET).strftime('%Y-%m-%d %H:%M')}</i>"
     )
     return _send(msg)
 
@@ -187,7 +190,7 @@ def notify_daily_summary(pnl: float, win_rate: float, trades: int,
     """End-of-day summary push."""
     pnl_emoji = "🟢" if pnl >= 0 else "🔴"
     msg = (
-        f"📊 <b>DAILY SUMMARY</b> — {datetime.now().strftime('%Y-%m-%d')}\n\n"
+        f"📊 <b>DAILY SUMMARY</b> — {datetime.now(ET).strftime('%Y-%m-%d')}\n\n"
         f"GME Close: <b>${gme_close:.2f}</b>\n\n"
         f"{pnl_emoji} P&L (paper): <b>${pnl:+.2f}</b>\n"
         f"Win Rate: {win_rate:.0%}  |  Trades: {trades}\n"
@@ -263,7 +266,7 @@ def notify_signal_alert(agent_name: str, signal_type: str, confidence: float,
     if reasoning:
         msg += f"<i>Reasoning: {reasoning[:200]}</i>\n\n"
 
-    msg += f"<i>{datetime.now().strftime('%Y-%m-%d %H:%M:%S ET')}</i>"
+    msg += f"<i>{datetime.now(ET).strftime('%Y-%m-%d %H:%M:%S')}</i>"
     if alert_id:
         msg += f"\n<code>Alert ID: {alert_id[:8]}</code>"
 
