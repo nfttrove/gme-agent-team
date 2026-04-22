@@ -19,6 +19,7 @@ import logging
 import time
 import subprocess
 import sys
+import requests
 from datetime import datetime
 from zoneinfo import ZoneInfo
 
@@ -37,7 +38,7 @@ from market_hours import is_market_open, market_hours_required, is_active_window
 from learner import AgentLearner
 from telegram_bot import start_bot_thread, is_halted
 from supabase_sync import start_sync_thread
-from safe_kickoff import safe_kickoff, CrewTimeout
+from safe_kickoff import safe_kickoff, safe_kickoff_with_fallback, CrewTimeout
 from db_maintenance import enable_wal_mode
 from signal_manager import SignalManager
 from notifier import notify_signal_alert
@@ -88,6 +89,30 @@ def init_db():
     enable_wal_mode(DB_PATH)
 
 
+def check_ollama_ready() -> bool:
+    """Verify Ollama is running and has required models.
+
+    Logs failure and returns False if Ollama is unreachable or missing Gemma.
+    """
+    ollama_host = os.getenv("OLLAMA_HOST", "http://localhost:11434")
+    try:
+        response = requests.get(f"{ollama_host}/api/tags", timeout=2)
+        models = [m["name"] for m in response.json().get("models", [])]
+
+        if "gemma2:9b" not in models:
+            log.error(f"[check_ollama_ready] gemma2:9b not found. Available: {models}")
+            return False
+
+        log.info(f"[check_ollama_ready] Ollama ready with {len(models)} models")
+        return True
+    except requests.exceptions.ConnectionError:
+        log.error(f"[check_ollama_ready] Ollama unreachable at {ollama_host}")
+        return False
+    except Exception as e:
+        log.error(f"[check_ollama_ready] Error checking Ollama: {e}")
+        return False
+
+
 def write_log(agent: str, content: str, task_type: str, status: str = "ok"):
     try:
         conn = sqlite3.connect(DB_PATH)
@@ -111,7 +136,7 @@ def run_validation():
     try:
         crew = Crew(agents=[valerie_agent], tasks=[validate_data_task],
                     process=Process.sequential, verbose=False)
-        result = safe_kickoff(crew, timeout_seconds=180, label="valerie")
+        result = safe_kickoff_with_fallback(crew, agent_name="Valerie", timeout_seconds=180, label="valerie")
         write_log("Valerie", str(result)[:500], "validation")
     except CrewTimeout as e:
         log.error(f"[Valerie] TIMEOUT: {e}")
@@ -129,7 +154,7 @@ def run_commentary():
     try:
         crew = Crew(agents=[chatty_agent], tasks=[commentary_task],
                     process=Process.sequential, verbose=False)
-        result = safe_kickoff(crew, timeout_seconds=180, label="chatty")
+        result = safe_kickoff_with_fallback(crew, agent_name="Chatty", timeout_seconds=180, label="chatty")
         log.info(f"[Chatty] {str(result)[:120]}")
         write_log("Chatty", str(result)[:500], "commentary")
     except CrewTimeout as e:
@@ -150,7 +175,7 @@ def run_news():
         try:
             crew = Crew(agents=[news_analyst_agent], tasks=[news_task],
                         process=Process.sequential, verbose=True)
-            result = safe_kickoff(crew, timeout_seconds=300, label="newsie")
+            result = safe_kickoff_with_fallback(crew, agent_name="Newsie", timeout_seconds=300, label="newsie")
             write_log("Newsie", str(result)[:1000], "news")
         except CrewTimeout as e:
             log.error(f"[Newsie] TIMEOUT: {e}")
@@ -170,7 +195,7 @@ def run_pattern():
         try:
             crew = Crew(agents=[multiday_trend_agent], tasks=[multiday_trend_task],
                         process=Process.sequential, verbose=True)
-            result = safe_kickoff(crew, timeout_seconds=300, label="pattern")
+            result = safe_kickoff_with_fallback(crew, agent_name="Pattern", timeout_seconds=300, label="pattern")
             write_log("Pattern", str(result)[:1000], "pattern")
         except CrewTimeout as e:
             log.error(f"[Pattern] TIMEOUT: {e}")
@@ -190,7 +215,7 @@ def run_daily_trend():
         try:
             crew = Crew(agents=[daily_trend_agent], tasks=[daily_trend_task],
                         process=Process.sequential, verbose=True)
-            result = safe_kickoff(crew, timeout_seconds=300, label="trendy")
+            result = safe_kickoff_with_fallback(crew, agent_name="Trendy", timeout_seconds=300, label="trendy")
             write_log("Trendy", str(result)[:1000], "daily_trend")
         except CrewTimeout as e:
             log.error(f"[Trendy] TIMEOUT: {e}")
@@ -229,7 +254,7 @@ def run_futurist_prediction_signal():
                 process=Process.sequential,
                 verbose=True,
             )
-            result = safe_kickoff(crew, timeout_seconds=300, label="futurist_prediction")
+            result = safe_kickoff_with_fallback(crew, agent_name="Futurist", timeout_seconds=300, label="futurist_prediction")
 
             # Parse output to FuturistPrediction Pydantic model
             # DeepSeek-r1 output includes <thought> block + final JSON
@@ -346,7 +371,7 @@ def run_trendy_signal():
                 process=Process.sequential,
                 verbose=True,
             )
-            result = safe_kickoff(crew, timeout_seconds=300, label="trendy_signal")
+            result = safe_kickoff_with_fallback(crew, agent_name="Trendy", timeout_seconds=300, label="trendy_signal")
 
             # Parse output to TrendySignal
             signal_data = _extract_json(str(result))
@@ -423,7 +448,7 @@ def run_synthesis_signal():
                 process=Process.sequential,
                 verbose=True,
             )
-            result = safe_kickoff(crew, timeout_seconds=300, label="synthesis_signal")
+            result = safe_kickoff_with_fallback(crew, agent_name="Synthesis", timeout_seconds=300, label="synthesis_signal")
 
             signal_data = _extract_json(str(result))
             if not signal_data:
@@ -493,7 +518,7 @@ def run_pattern_signal():
                 process=Process.sequential,
                 verbose=True,
             )
-            result = safe_kickoff(crew, timeout_seconds=300, label="pattern_signal")
+            result = safe_kickoff_with_fallback(crew, agent_name="Pattern", timeout_seconds=300, label="pattern_signal")
 
             signal_data = _extract_json(str(result))
             if not signal_data:
@@ -563,7 +588,7 @@ def run_newsie_signal():
                 process=Process.sequential,
                 verbose=True,
             )
-            result = safe_kickoff(crew, timeout_seconds=300, label="newsie_signal")
+            result = safe_kickoff_with_fallback(crew, agent_name="Newsie", timeout_seconds=300, label="newsie_signal")
 
             signal_data = _extract_json(str(result))
             if not signal_data:
@@ -661,7 +686,7 @@ def run_futurist_cycle():
                 process=Process.sequential,
                 verbose=True,
             )
-            result = safe_kickoff(crew, timeout_seconds=600, label="futurist_full_cycle")
+            result = safe_kickoff_with_fallback(crew, agent_name="Futurist", timeout_seconds=600, label="futurist_full_cycle")
             write_log("Futurist", str(result)[:1000], "full_cycle")
             metrics.snapshot()
         except CrewTimeout as e:
@@ -806,7 +831,7 @@ def run_synthesis():
     try:
         crew = Crew(agents=[synthesis_agent], tasks=[synthesis_task],
                     process=Process.sequential, verbose=False)
-        result = safe_kickoff(crew, timeout_seconds=180, label="synthesis")
+        result = safe_kickoff_with_fallback(crew, agent_name="Synthesis", timeout_seconds=180, label="synthesis")
         log.info(f"[Synthesis] {str(result)[:120]}")
         write_log("Synthesis", str(result)[:500], "synthesis")
     except CrewTimeout as e:
@@ -825,7 +850,7 @@ def run_georisk():
     try:
         crew = Crew(agents=[georisk_agent], tasks=[georisk_task],
                     process=Process.sequential, verbose=False)
-        result = safe_kickoff(crew, timeout_seconds=180, label="georisk")
+        result = safe_kickoff_with_fallback(crew, agent_name="GeoRisk", timeout_seconds=180, label="georisk")
         log.info(f"[GeoRisk] {str(result)[:120]}")
         write_log("GeoRisk", str(result)[:500], "georisk")
     except CrewTimeout as e:
@@ -937,6 +962,12 @@ def run_daily_huddle():
 class TradingSystemOrchestrator:
     def __init__(self):
         init_db()
+
+        # Verify Ollama is ready before scheduling agents
+        if not check_ollama_ready():
+            log.critical("[TradingSystemOrchestrator] Ollama unavailable; cannot start system")
+            sys.exit(1)
+
         self.scheduler = BackgroundScheduler(timezone="America/New_York")
         with open(os.path.join(os.path.dirname(__file__), "risk_rules.yaml")) as f:
             self.risk_rules = yaml.safe_load(f)

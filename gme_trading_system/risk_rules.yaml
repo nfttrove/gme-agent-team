@@ -90,3 +90,24 @@ agent_veto_rules:
 
   # CTO structural brief must be GREEN for GME
   cto_immunity_required: true
+
+# ── LLM configuration ──────────────────────────────────────────────────────
+llm_config:
+  # Primary local LLM for simple agents
+  primary_model: gemma2:9b
+
+  # Complex reasoning LLMs (Futurist, CTO, Boss)
+  complex_model: deepseek-r1:8b
+
+  # Fallback LLMs for rate limits (429 errors)
+  fallback_models:
+    - gemini-2.5-flash
+    - gemini-2.5-pro
+
+  # Retry configuration
+  max_fallback_attempts: 2
+  rate_limit_backoff_seconds: 5
+
+  # Ollama settings
+  ollama_host: http://localhost:11434
+  ollama_timeout_seconds: 2

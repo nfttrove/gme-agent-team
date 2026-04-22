@@ -128,7 +128,11 @@ class CircuitBreaker:
 
 
 # Global registry of circuit breakers
-_breakers: dict[str, CircuitBreaker] = {}
+_breakers: dict[str, CircuitBreaker] = {
+    "gemini_flash": CircuitBreaker("gemini_flash", failure_threshold=5, recovery_timeout=60),
+    "gemini_pro": CircuitBreaker("gemini_pro", failure_threshold=5, recovery_timeout=60),
+    "gemini": CircuitBreaker("gemini", failure_threshold=5, recovery_timeout=60),
+}
 _breakers_lock = Lock()
 
 

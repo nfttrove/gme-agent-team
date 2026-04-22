@@ -16,11 +16,20 @@ Routing strategy:
 """
 import os
 import logging
+import time
 from crewai import LLM
 from dotenv import load_dotenv
 
 load_dotenv()
 log = logging.getLogger(__name__)
+
+
+# ── Fallback configuration ─────────────────────────────────────────────────────
+
+class FallbackConfig:
+    MAX_RETRIES = 2
+    RETRY_DELAY_SEC = 5
+    RATE_LIMIT_THRESHOLD = 429  # HTTP status or API error code
 
 # ── Local models (Ollama) ──────────────────────────────────────────────────────
 
