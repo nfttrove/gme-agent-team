@@ -151,47 +151,72 @@ def run_validation():
 
 
 @active_window_required
-@active_window_required
 def run_commentary():
-    from agents import chatty_agent
-    from tasks import commentary_task
+    """Chatty — one-shot pithy commentary via direct Ollama call.
+
+    Bypasses CrewAI because Gemma + CrewAI's prompt templating was returning
+    empty/garbled responses, and CrewAI then fell back to echoing the agent's
+    backstory as str(result) — which is what was getting logged for months
+    instead of actual commentary. Direct Ollama also avoids the 180s crew
+    timeout since there's no orchestration layer.
+    """
     write_log("Chatty", "Composing commentary", "commentary", "running")
     try:
-        # Pre-fetch data since Chatty (Gemma) can't execute tools
         conn = sqlite3.connect(DB_PATH)
         synthesis = conn.execute(
-            "SELECT content FROM agent_logs WHERE agent_name='Synthesis' ORDER BY timestamp DESC LIMIT 1"
+            "SELECT content FROM agent_logs WHERE agent_name='Synthesis' "
+            "AND status='ok' ORDER BY timestamp DESC LIMIT 1"
         ).fetchone()
         latest_tick = conn.execute(
-            "SELECT close, volume, timestamp FROM price_ticks WHERE symbol='GME' ORDER BY timestamp DESC LIMIT 1"
+            "SELECT close, volume, timestamp FROM price_ticks "
+            "WHERE symbol='GME' ORDER BY timestamp DESC LIMIT 1"
         ).fetchone()
         avg_vol_row = conn.execute(
-            "SELECT AVG(volume) FROM price_ticks WHERE symbol='GME' AND timestamp > datetime('now','-10 minutes')"
+            "SELECT AVG(volume) FROM price_ticks WHERE symbol='GME' "
+            "AND timestamp > datetime('now','-10 minutes')"
         ).fetchone()
-        conn.close()
 
-        # Extract values
-        synthesis_text = synthesis[0] if synthesis else "No synthesis yet"
-        price, vol, ts = latest_tick if latest_tick else (0, 0, "N/A")
+        synthesis_text = synthesis[0][:200] if synthesis else "No consensus yet"
+        price, vol, _ts = latest_tick if latest_tick else (0, 0, "")
         avg_vol = avg_vol_row[0] if avg_vol_row and avg_vol_row[0] else 0
+        vol_ratio = (vol / avg_vol) if avg_vol else 0
 
-        # Inject data into task (no more SQL instructions)
-        commentary_task.description = (
-            f"Generate ONE insight (max 120 chars) using this data:\n"
-            f"- Latest synthesis: {synthesis_text[:200]}\n"
-            f"- Latest price: ${price}, volume: {vol:,.0f}, time: {ts}\n"
-            f"- 10-minute average volume: {avg_vol:,.0f}\n\n"
-            f"Be witty, concise, data-driven. Return just the comment text."
+        prompt = (
+            "You are GME's live-stream commentator. Produce ONE punchy insight (max 120 chars) "
+            "grounded in the data below. No preamble, no quotes, no markdown — just the comment.\n\n"
+            f"Price: ${price}\n"
+            f"Volume: {int(vol):,} ({vol_ratio:.1f}x 10-min avg)\n"
+            f"Team consensus: {synthesis_text}\n"
         )
 
-        crew = Crew(agents=[chatty_agent], tasks=[commentary_task],
-                    process=Process.sequential, verbose=False)
-        result = safe_kickoff_with_fallback(crew, agent_name="Chatty", timeout_seconds=180, label="chatty")
-        log.info(f"[Chatty] {str(result)[:120]}")
-        write_log("Chatty", str(result)[:500], "commentary")
-    except CrewTimeout as e:
-        log.error(f"[Chatty] TIMEOUT: {e}")
-        write_log("Chatty", f"TIMEOUT: {e}", "commentary", "timeout")
+        ollama_host = os.getenv("OLLAMA_HOST", "http://localhost:11434")
+        r = requests.post(
+            f"{ollama_host}/api/generate",
+            json={"model": "gemma2:9b", "prompt": prompt, "stream": False,
+                  "options": {"num_predict": 80, "temperature": 0.7}},
+            timeout=30,
+        )
+        r.raise_for_status()
+        comment = r.json().get("response", "").strip().strip('"').strip("'")
+        # Collapse to first line — Gemma sometimes adds a second "explanation" line
+        comment = comment.split("\n")[0].strip()[:240]
+
+        if not comment:
+            write_log("Chatty", "empty LLM response", "commentary", "error")
+            return
+
+        conn.execute(
+            "INSERT INTO stream_comments (timestamp, comment, displayed) VALUES (?, ?, 0)",
+            (datetime.now(ET).isoformat(), comment),
+        )
+        conn.commit()
+        conn.close()
+
+        log.info(f"[Chatty] {comment}")
+        write_log("Chatty", comment, "commentary")
+    except requests.Timeout:
+        log.error("[Chatty] Ollama timeout")
+        write_log("Chatty", "Ollama timeout after 30s", "commentary", "timeout")
     except Exception as e:
         log.error(f"[Chatty] {e}")
         write_log("Chatty", str(e), "commentary", "error")
