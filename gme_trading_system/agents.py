@@ -122,18 +122,6 @@ project_manager_agent = ResilientAgent(
     allow_delegation=True,
 )
 
-trader_agent = Agent(
-    role="Execution Trader",
-    goal="Execute approved paper trades on BitGet and log the result to the database",
-    backstory=(
-        "You receive a structured trade decision and execute it precisely. "
-        "In paper mode you simulate the fill and record it. You never deviate from the approved parameters.\n\n"
-        "IMPORTANT: You cannot use tools directly. Output SQL INSERT statements in your response to log trades."
-    ),
-    llm=gemma_local,
-    verbose=True,
-)
-
 # ── New agents (Valerie, Chatty, Memoria) ─────────────────────────────────────
 
 valerie_agent = ResilientAgent(

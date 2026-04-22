@@ -117,8 +117,8 @@ class SafetyGate:
                               indicators=ind,
                               blocker=f"Daily trade limit reached ({trades_today}/{daily_limit})")
 
-        # Note: live IBKR daily-loss check happens at execution time (broker.execute_trade_decision),
-        # not here — IBKR connectivity issues should not block analysis agents.
+        # Daily loss limit is checked here before signals are emitted.
+        # Team can still ignore signals if they choose — ultimate gatekeeper is human judgment.
 
         # Determine market bias
         bias_rules = self.strategy["bias_detection"]

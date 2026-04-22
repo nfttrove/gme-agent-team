@@ -617,7 +617,7 @@ def run_newsie_signal():
 
 
 def run_futurist_cycle():
-    """Full strategic cycle: gate check → Futurist → Boss → Trader Joe if approved."""
+    """Full strategic cycle: gate check → Futurist → Boss → emit signal to team."""
     if is_halted():
         log.info("[Futurist] Trading halted by Telegram /halt — skipping cycle")
         return
@@ -646,18 +646,18 @@ def run_futurist_cycle():
         try:
             from agents import (
                 daily_trend_agent, multiday_trend_agent, news_analyst_agent,
-                futurist_agent, project_manager_agent, trader_agent,
+                futurist_agent, project_manager_agent,
             )
             from tasks import (
                 daily_trend_task, multiday_trend_task, news_task,
-                futurist_task, manager_task, trader_task,
+                futurist_task, manager_task,
             )
 
             crew = Crew(
                 agents=[daily_trend_agent, multiday_trend_agent, news_analyst_agent,
-                        futurist_agent, project_manager_agent, trader_agent],
+                        futurist_agent, project_manager_agent],
                 tasks=[daily_trend_task, multiday_trend_task, news_task,
-                       futurist_task, manager_task, trader_task],
+                       futurist_task, manager_task],
                 process=Process.sequential,
                 verbose=True,
             )
@@ -1009,7 +1009,7 @@ class TradingSystemOrchestrator:
 ║  Newsie   (news sentiment)     every 30 min                      ║
 ║  Pattern  (multi-day)          every 2 hours                     ║
 ║  Trendy   (daily trend)        every 4 hours + 8:00 PM ET EOD    ║
-║  Futurist + Boss + Trader Joe  every 2 hours (gate-checked)      ║
+║  Futurist (strategic signal)   every 2 hours (gate-checked)      ║
 ║  Boss     (daily huddle)       9:00 AM ET — mission briefing     ║
 ║  CTO      (structural brief)   9:05 AM ET — PE playbook + shorts ║
 ║  Aggregator                    4:35 PM ET                        ║

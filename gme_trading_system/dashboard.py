@@ -142,22 +142,9 @@ st.sidebar.caption("ACCOUNT")
 try:
     import yaml
     rules = yaml.safe_load(open(os.path.join(os.path.dirname(__file__), "risk_rules.yaml")))
-    paper_mode = rules.get("paper_trading", True)
-    mode_label = "PAPER" if paper_mode else "⚡ LIVE"
-    st.sidebar.caption(f"Mode: **{mode_label}**")
-
-    from broker import get_broker
-    acct = get_broker().account_summary()
-    if "error" not in acct:
-        st.sidebar.metric("Equity (USD)", f"${acct.get('equity_usd', 0):.2f}",
-                          delta=f"${acct.get('pnl_today_usd', 0):+.2f} today")
-        if acct.get("equity_gbp"):
-            st.sidebar.metric("Equity (GBP)", f"£{acct.get('equity_gbp', 0):.2f}")
-        st.sidebar.metric("Buying Power", f"${acct.get('buying_power_usd', 0):.2f}")
-    else:
-        st.sidebar.warning("Alpaca not connected")
+    # Mode info removed — no longer doing autonomous execution
 except Exception:
-    st.sidebar.caption("Set ALPACA_API_KEY to see balance")
+    pass
 
 # ── Live commentary banner ────────────────────────────────────────────────────
 comment_row = query("SELECT comment FROM stream_comments ORDER BY timestamp DESC LIMIT 1")

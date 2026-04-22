@@ -6,7 +6,6 @@ from agents import (
     news_analyst_agent,
     futurist_agent,
     project_manager_agent,
-    trader_agent,
     valerie_agent,
     chatty_agent,
     memoria_agent,
@@ -86,59 +85,14 @@ manager_task = Task(
     description=(
         "Review all previous agent outputs. Cross-check for contradictions. "
         "Apply the risk rules: min_confidence=0.70, require_trend_alignment=true, min_agents_agree=2. "
-        "Produce a final trade decision. If approving, specify: action (BUY/SELL), "
-        "quantity (max $500), entry_price, stop_loss (3%), take_profit (6%). "
-        "Output JSON: {decision: APPROVE|REJECT, action, quantity_usd, entry_price, stop_loss, take_profit, reasoning}"
+        "Emit a signal for team review. Specify: action (BUY/SELL), "
+        "quantity (max $500), entry_price, stop_loss (3%), take_profit (6%), confidence score. "
+        "Output JSON: {action, quantity_usd, entry_price, stop_loss, take_profit, confidence, reasoning}. "
+        "Signal will be logged to signal_alerts table and sent to team via Telegram for manual execution decision."
     ),
-    expected_output='{"decision": "APPROVE", "action": "BUY", "quantity_usd": 200, "entry_price": 22.10, "stop_loss": 21.44, "take_profit": 23.43, "reasoning": "..."}',
+    expected_output='{"action": "BUY", "quantity_usd": 200, "entry_price": 22.10, "stop_loss": 21.44, "take_profit": 23.43, "confidence": 0.78, "reasoning": "..."}',
     agent=project_manager_agent,
     context=[daily_trend_task, multiday_trend_task, news_task, futurist_task],
-)
-
-trader_task = Task(
-    description=(
-        "Read the manager's trade decision JSON from the previous task.\n\n"
-
-        "IF decision is REJECT:\n"
-        "  Log to trade_decisions with status='rejected'. Return 'REJECTED: [reasoning]'\n\n"
-
-        "IF decision is APPROVE:\n"
-        "  1. Call the broker execution system:\n"
-        "     ```python\n"
-        "     import yaml, os\n"
-        "     rules = yaml.safe_load(open(os.path.join(os.path.dirname(__file__), 'risk_rules.yaml')))\n"
-        "     paper_mode = rules.get('paper_trading', True)\n"
-        "     from broker import get_broker\n"
-        "     from metrics_logger import MetricsLogger\n"
-        "     ml = MetricsLogger()\n"
-        "     trade_id, order_id = ml.record_trade(\n"
-        "         action=decision['action'],\n"
-        "         quantity=decision['quantity_usd'] / decision['entry_price'],\n"
-        "         entry_price=decision['entry_price'],\n"
-        "         stop_loss=decision['stop_loss'],\n"
-        "         take_profit=decision['take_profit'],\n"
-        "         confidence=decision.get('confidence', 0.75),\n"
-        "         status='pending'\n"
-        "     )\n"
-        "     result = get_broker().execute_trade_decision(decision, order_id)\n"
-        "     ```\n"
-        "  2. Send a Telegram notification:\n"
-        "     ```python\n"
-        "     from notifier import notify_trade\n"
-        "     notify_trade(decision['action'], decision['entry_price'],\n"
-        "                  decision.get('confidence', 0.75),\n"
-        "                  decision['stop_loss'], decision['take_profit'],\n"
-        "                  status='APPROVED (PAPER)' if paper_mode else 'APPROVED (LIVE)')\n"
-        "     ```\n"
-        "  3. Return confirmation string:\n"
-        "     '{'PAPER' if paper_mode else 'LIVE'} TRADE: [action] [qty] GME @ [price] | SL: [sl] | TP: [tp] | order_id: [id]'\n\n"
-
-        "IMPORTANT: Never skip the broker call. Never fabricate a fill price. "
-        "The broker handles paper vs live mode automatically based on risk_rules.yaml."
-    ),
-    expected_output="PAPER TRADE: BUY 1.2 GME @ 22.10 | SL: 21.44 | TP: 23.43 | order_id: abc-123",
-    agent=trader_agent,
-    context=[manager_task],
 )
 
 # ── New tasks ──────────────────────────────────────────────────────────────────

@@ -1,16 +1,13 @@
 # ═══════════════════════════════════════════════════════════════
 # GME Trading System — Risk Rules
 # Account: £100 target (deposit pending — update limits when cleared)
-# Broker:  Interactive Brokers (IBKR) — account U8493296
+# Mode: Manual execution (team receives signals, decides when to execute)
 # ═══════════════════════════════════════════════════════════════
-
-paper_trading: false
 
 account:
   starting_capital_gbp: 100        # target balance — deposit pending (1-3 days to clear)
   starting_capital_usd: 135        # approximate at 1.35 GBP/USD
   currency: GBP
-  broker: ibkr
   account_type: margin
 
 # ── Position limits ────────────────────────────────────────────
@@ -93,19 +90,3 @@ agent_veto_rules:
 
   # CTO structural brief must be GREEN for GME
   cto_immunity_required: true
-
-# ── Broker execution ────────────────────────────────────────────
-execution:
-  # Use bracket orders: entry + stop + take-profit submitted in one call
-  # This protects the position even if the orchestrator crashes
-  order_type: bracket
-
-  # Limit orders within 0.5% of current price (avoids bad fills on volatile GME)
-  # If limit doesn't fill within 30s, cancel and re-evaluate
-  entry_order_type: limit
-  limit_slippage_pct: 0.005
-  unfilled_cancel_seconds: 30
-
-  # Fractional shares enabled (Alpaca supports this)
-  # Allows precise $30 position sizing regardless of GME share price
-  fractional_shares: true

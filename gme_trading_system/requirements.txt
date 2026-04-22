@@ -18,7 +18,6 @@ sentence-transformers
 chromadb
 requests
 yfinance
-ib_insync
 websocket-client
 supabase
 discord.py

@@ -228,27 +228,6 @@ def handle_command(text: str):
             f"Time: {datetime.now().strftime('%H:%M:%S')}"
         )
 
-    elif cmd == "/balance":
-        try:
-            import sys, os
-            sys.path.insert(0, os.path.dirname(__file__))
-            from broker import get_broker
-            broker = get_broker()
-            acct = broker.account_summary()
-            if "error" in acct:
-                _send(f"Balance error: {acct['error']}")
-            else:
-                _send(
-                    f"<b>IBKR Balance ({acct['mode']})</b>\n"
-                    f"Equity: ${acct['equity_usd']} (£{acct['equity_gbp']})\n"
-                    f"Cash: ${acct['cash_usd']}\n"
-                    f"Buying power: ${acct['buying_power_usd']}\n"
-                    f"Unrealised P&L: ${acct['unrealized_pnl']}\n"
-                    f"Realised today: ${acct['realized_pnl_today']}"
-                )
-        except Exception as e:
-            _send(f"Balance fetch failed: {e}")
-
     elif cmd == "/ticks":
         today = _db_scalar("SELECT COUNT(*) FROM price_ticks WHERE date(timestamp)=date('now')")
         total = _db_scalar("SELECT COUNT(*) FROM price_ticks")

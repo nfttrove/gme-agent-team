@@ -237,26 +237,6 @@ async def status_cmd(interaction: discord.Interaction):
 
 
 @bot.tree.command(name="balance", description="Live IBKR account balance")
-async def balance_cmd(interaction: discord.Interaction):
-    await interaction.response.defer()
-    try:
-        from broker import get_broker
-        broker = get_broker()
-        acct = broker.account_summary()
-        if "error" in acct:
-            await interaction.followup.send(f"❌ Balance error: {acct['error']}")
-        else:
-            embed = discord.Embed(title=f"💰 IBKR Balance ({acct['mode']})", color=discord.Color.gold())
-            embed.add_field(name="Equity", value=f"${acct['equity_usd']} (£{acct['equity_gbp']})", inline=False)
-            embed.add_field(name="Cash", value=f"${acct['cash_usd']}", inline=True)
-            embed.add_field(name="Buying Power", value=f"${acct['buying_power_usd']}", inline=True)
-            embed.add_field(name="Unrealised P&L", value=f"${acct['unrealized_pnl']}", inline=True)
-            embed.add_field(name="Realised Today", value=f"${acct['realized_pnl_today']}", inline=True)
-            await interaction.followup.send(embed=embed)
-    except Exception as e:
-        await interaction.followup.send(f"❌ Balance fetch failed: {str(e)[:200]}")
-
-
 @bot.tree.command(name="ticks", description="Price data received today")
 async def ticks_cmd(interaction: discord.Interaction):
     today = _db_scalar("SELECT COUNT(*) FROM price_ticks WHERE date(timestamp)=date('now')") or 0

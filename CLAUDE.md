@@ -1,7 +1,7 @@
 # GME Agent Team - Project Context for Claude Code
 
 ## Project Overview
-10-agent CrewAI multi-agent trading system for GME real-time analysis. Cost-optimized: primary LLM is **local Gemma 2:9b** (Ollama at localhost:11434), fallback to Gemini Flash/Pro for complex reasoning. No Claude API calls in production code.
+9-agent CrewAI multi-agent system for GME real-time analysis + signal confidence scoring + team feedback loop. **Operating model:** Agents emit confident signals → team receives Telegram alerts → team logs execution decisions → system computes win rate metrics. Cost-optimized: primary LLM is **local Gemma 2:9b** (Ollama at localhost:11434), DeepSeek-r1:8b for complex reasoning agents, Gemini Flash/Pro fallback. No Claude API calls in production code. No autonomous execution via brokers.
 
 ## Tech Stack
 - **Backend:** Python 3.12, CrewAI 0.28+, SQLite (agent_memory.db), Supabase (mirror)
@@ -12,9 +12,9 @@
 ## Key Directories
 ```
 /gme_trading_system/        # Main system
-├── orchestrator.py         # APScheduler entry point, 10 agents + cron jobs
-├── agents.py               # 11 CrewAI agents (all use ResilientAgent fallback pattern)
-├── tasks.py                # 11 CrewAI tasks (no external tool calls — agents output SQL/text)
+├── orchestrator.py         # APScheduler entry point, 9 agents + cron jobs
+├── agents.py               # 9 CrewAI agents (all use ResilientAgent fallback pattern)
+├── tasks.py                # 9 CrewAI tasks (no external tool calls — agents output SQL/text)
 ├── llm_config.py           # LLM definitions (Gemma local, Gemini fallbacks)
 ├── circuit_breaker.py      # 3-state CLOSED/OPEN/HALF_OPEN for 6 external services
 ├── market_hours.py         # is_market_open(), is_active_window() (07:30-18:00 ET Mon-Fri)
@@ -59,12 +59,11 @@ agent_memory.db             # Root-level SQLite (used by main.py, dashboard)
 | Newsie | agents.py | Every 30 min | Active | Gemma→Flash | News sentiment (Finnhub, Supabase edge, NewsAPI) |
 | Pattern | agents.py | Every 2 hours | Active | Gemma→Flash | Multi-day trend analysis + clustering |
 | Trendy | agents.py | Every 4 hours + 8 PM ET | Active | Gemma→Flash | Daily trend, end-of-day summary |
-| Futurist | agents.py | Every 2 hours | Active | Gemma→Pro | 1h/4h/EOD price prediction (fallback to Pro for reasoning) |
+| Futurist | agents.py | Every 2 hours | Active | DeepSeek-r1→Flash | 1h/4h/EOD price prediction (complex reasoning) |
 | GeoRisk | agents.py | Every 1 hour | Active | Gemma→Flash | Geopolitical risk scoring |
 | Synthesis | agents.py | Every 5 min | Active | Gemma→Flash | Cross-agent consensus brief (context for all others) |
 | Boss | agents.py | Daily 9:00 AM ET | Market | Gemma→Flash | Daily mission briefing + yesterday's review |
-| CTO | agents.py | Daily 9:05 AM ET + Sun 8 AM | Market | Gemma→Pro | PE playbook monitoring, short-side research |
-| Trader | broker.py + orchestrator.py | N/A (manual gate check) | Market | Gemma→Flash | Trade execution gate (waits on gate, LLM formats decision) |
+| CTO | agents.py | Daily 9:05 AM ET + Sun 8 AM | Market | DeepSeek-r1→Flash | PE playbook monitoring, short-side research |
 
 ## Key Constraints
 1. **No tool calls in agents** — Gemma doesn't support CrewAI tool calling. Agents output SQL/text; `sql_executor.py` parses & executes.
@@ -73,7 +72,8 @@ agent_memory.db             # Root-level SQLite (used by main.py, dashboard)
 4. **Crew timeouts** — safe_kickoff() wraps crew.kickoff() with ThreadPoolExecutor; crews abort after 180–600s depending on agent.
 5. **Circuit breakers** — 6 external services (Telegram, Supabase, Finnhub, SEC, NewsAPI, Twitter) wrapped; open after 5 failures, retry after 60s.
 6. **Database** — SQLite with WAL mode (concurrent reads), nightly backup at 3 AM ET, 14-day retention.
-7. **Market hours** — NYSE 09:30-16:00 ET; active window 07:30-18:00 ET (2h pre/post buffer). Decorator skips trades outside market hours.
+7. **Market hours** — NYSE 09:30-16:00 ET; active window 07:30-18:00 ET (2h pre/post buffer). Decorator skips signal generation outside market hours.
+8. **Signal confidence scoring** — All signals logged with 0.0-1.0 confidence. Team logs execution decisions (executed/ignored/missed) for feedback loop.
 
 ## Common Tasks
 
