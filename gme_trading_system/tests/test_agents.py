@@ -18,11 +18,11 @@ class TestAgentInstantiation:
         ]:
             assert hasattr(agents, name), f"Missing agent: {name}"
 
-    def test_resilient_agents_have_fallback(self):
+    def test_resilient_agents_use_gemma_only(self):
         from agents import ResilientAgent, daily_trend_agent, futurist_agent
         assert isinstance(daily_trend_agent, ResilientAgent)
-        assert daily_trend_agent.fallback_llm is not None
         assert isinstance(futurist_agent, ResilientAgent)
+        assert "gemma" in daily_trend_agent.llm.model.lower()
 
     def test_trader_uses_local_model(self):
         from agents import trader_agent
@@ -56,34 +56,3 @@ class TestTaskDefinitions:
         assert manager_task in trader_task.context
 
 
-class TestResilientAgentFallback:
-    def test_fallback_triggers_on_quota_error(self, monkeypatch):
-        from agents import ResilientAgent
-        from llm_config import gemini_flash, gemma_local
-
-        agent = ResilientAgent(
-            primary_llm=gemini_flash,
-            fallback_llm=gemma_local,
-            role="Test",
-            goal="Test",
-            backstory="Test",
-        )
-        assert agent.llm == gemini_flash
-
-        call_count = {"n": 0}
-
-        def mock_execute(task, context=None, tools=None):
-            call_count["n"] += 1
-            if call_count["n"] == 1:
-                raise Exception("quota exceeded 429")
-            return "fallback result"
-
-        monkeypatch.setattr(
-            "crewai.Agent.execute_task",
-            mock_execute,
-        )
-
-        from tasks import daily_trend_task
-        result = agent.execute_task(daily_trend_task)
-        assert agent.llm == gemma_local
-        assert result == "fallback result"
