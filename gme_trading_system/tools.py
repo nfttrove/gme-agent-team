@@ -137,11 +137,17 @@ class PriceDataTool(BaseTool):
         conn.row_factory = sqlite3.Row
         cur = conn.cursor()
         try:
+            # compute_all expects oldest-first (indicators.py docstring); yfinance
+            # fallback also returns ascending. Prior DESC order meant candles[-1]
+            # was the OLDEST row, so SafetyGate saw a ~2-week-stale price and
+            # every indicator (RSI, EMA, VWAP) was inverted.
             cur.execute(
-                "SELECT * FROM daily_candles WHERE symbol='GME' ORDER BY date DESC LIMIT ?",
+                "SELECT * FROM daily_candles WHERE symbol='GME' "
+                "ORDER BY date DESC LIMIT ?",
                 (lookback_days,)
             )
             rows = [dict(r) for r in cur.fetchall()]
+            rows.reverse()  # oldest-first for compute_all
         finally:
             conn.close()
 
