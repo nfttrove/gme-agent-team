@@ -224,19 +224,76 @@ def run_commentary():
 
 @market_hours_required
 def run_news():
-    from agents import news_analyst_agent
-    from tasks import news_task
+    """Newsie — fetch real headlines, score them deterministically, then ask
+    Gemma for a one-line narrative.
+
+    Bypasses CrewAI for the same reason as Chatty: Gemma can't call tools, so
+    the task prompt's "Fetch the latest 10 GME news headlines using the News
+    API tool" instruction caused Gemma to hallucinate placeholder headlines
+    ("Headline 1 - Sentiment Analysis Needed") for months.
+    """
     log.info("[Newsie] Running news sentiment cycle")
     write_log("Newsie", "Scanning news sentiment", "news", "running")
     with metrics.cycle("news"):
         try:
-            crew = Crew(agents=[news_analyst_agent], tasks=[news_task],
-                        process=Process.sequential, verbose=True)
-            result = safe_kickoff_with_fallback(crew, agent_name="Newsie", timeout_seconds=300, label="newsie")
-            write_log("Newsie", str(result)[:1000], "news")
-        except CrewTimeout as e:
-            log.error(f"[Newsie] TIMEOUT: {e}")
-            write_log("Newsie", f"TIMEOUT: {e}", "news", "timeout")
+            from tools import NewsAPITool
+            articles = NewsAPITool()._run("GME")
+            articles = [a for a in articles if a.get("headline") and "error" not in a]
+            if not articles:
+                write_log("Newsie", "no articles returned from news sources", "news", "error")
+                return
+
+            score_map = {"bullish": 1.0, "bearish": -1.0, "neutral": 0.0}
+            scored = [(a, score_map.get((a.get("sentiment") or "neutral").lower(), 0.0)) for a in articles]
+            composite = round(sum(s for _, s in scored) / len(scored), 3)
+            label = "bullish" if composite > 0.15 else "bearish" if composite < -0.15 else "neutral"
+
+            # Write each headline row to news_analysis
+            conn = sqlite3.connect(DB_PATH)
+            now_iso = datetime.now(ET).isoformat()
+            for a, s in scored:
+                conn.execute(
+                    "INSERT INTO news_analysis (timestamp, headline, source, "
+                    "sentiment_score, sentiment_label, summary) VALUES (?, ?, ?, ?, ?, ?)",
+                    (now_iso, a.get("headline", "")[:300], a.get("source", "")[:80],
+                     s, (a.get("sentiment") or "neutral").lower(), (a.get("summary") or "")[:500])
+                )
+            conn.commit()
+
+            # Ask Gemma for a pithy narrative over the real data
+            top_lines = "\n".join(
+                f"- [{(a.get('sentiment') or 'neutral')[:4]}] {a.get('source','?')}: {a.get('headline','')[:120]}"
+                for a, _ in scored[:8]
+            )
+            prompt = (
+                "You are GME's news desk analyst. In ONE sentence (max 200 chars), "
+                "summarise today's news narrative for the trading team. No preamble, no quotes.\n\n"
+                f"Composite sentiment: {composite:+.2f} ({label}) across {len(scored)} headlines.\n"
+                f"Top headlines:\n{top_lines}\n"
+            )
+            ollama_host = os.getenv("OLLAMA_HOST", "http://localhost:11434")
+            narrative = ""
+            try:
+                r = requests.post(
+                    f"{ollama_host}/api/generate",
+                    json={"model": "gemma2:9b", "prompt": prompt, "stream": False,
+                          "options": {"num_predict": 120, "temperature": 0.5}},
+                    timeout=30,
+                )
+                r.raise_for_status()
+                narrative = r.json().get("response", "").strip().strip('"').strip("'")
+                narrative = narrative.split("\n")[0].strip()[:400]
+            except Exception as e:
+                log.warning(f"[Newsie] narrative LLM failed: {e}")
+
+            summary = (
+                f"composite={composite:+.2f} ({label}) · {len(scored)} articles · "
+                f"{narrative or 'narrative unavailable'}"
+            )
+            conn.close()
+
+            log.info(f"[Newsie] {summary}")
+            write_log("Newsie", summary, "news")
         except Exception as e:
             log.error(f"[Newsie] {e}")
             write_log("Newsie", str(e), "news", "error")
