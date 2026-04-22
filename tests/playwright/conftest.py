@@ -71,3 +71,18 @@ def signal_manager():
 
     db_path = Path(__file__).parent.parent.parent / "gme_trading_system" / "agent_memory.db"
     return SignalManager(str(db_path))
+
+
+@pytest.fixture(autouse=True)
+def cleanup_test_signals(signal_manager):
+    """Clean up test signals after each test."""
+    yield
+    # Cleanup: delete signals created by test agents
+    import sqlite3
+    conn = sqlite3.connect(signal_manager.db_path)
+    try:
+        conn.execute("DELETE FROM signal_feedback WHERE alert_id IN (SELECT id FROM signal_alerts WHERE agent_name LIKE 'Test%')")
+        conn.execute("DELETE FROM signal_alerts WHERE agent_name LIKE 'Test%'")
+        conn.commit()
+    finally:
+        conn.close()

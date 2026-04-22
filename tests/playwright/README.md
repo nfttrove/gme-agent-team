@@ -65,6 +65,29 @@ pytest tests/playwright/test_signal_dashboard.py::test_dashboard_loads -v
 - ✅ Empty state handling
 - ✅ Signal count accuracy
 
+### Edge Cases (8 tests)
+- ✅ Empty signals state (no data in table)
+- ✅ Invalid alert ID error handling
+- ✅ Missing form fields validation
+- ✅ Zero confidence signals (0%)
+- ✅ High confidence signals (100%)
+- ✅ Negative P&L (losing trades)
+- ✅ Large price values (999.99)
+- ✅ Special characters in notes (XSS prevention)
+
+### API Robustness (9 tests)
+- ✅ Signals API returns valid structure
+- ✅ Metrics API returns valid structure
+- ✅ Feedback API validates required fields
+- ✅ Concurrent request handling (5x parallel)
+- ✅ API response times (<2s for metrics)
+- ✅ Health check endpoint
+- ✅ Feedback API accepts valid payload
+- ✅ CORS header handling
+- ✅ Invalid JSON error handling
+
+**Total: 35 tests**
+
 ## Test Data
 
 Tests use temporary signals created on-the-fly:
@@ -90,3 +113,6 @@ PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD=1 pytest tests/playwright/ --tb=short
 - Tests wait for server startup (2s timeout)
 - Browser created once per session (reused across tests)
 - Timeouts: 5s for network, 1.5s for render
+- **Test data cleanup**: Automatic! Each test creates signals with `TestAgent` prefix, auto-cleaned after run
+- Test isolation: No shared state between tests (each gets fresh browser context)
+- Safe to run multiple times: Database cleanup fixture prevents accumulation
