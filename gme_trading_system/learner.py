@@ -19,7 +19,10 @@ import logging
 import os
 import sqlite3
 from datetime import date, datetime, timedelta
+from zoneinfo import ZoneInfo
 from pathlib import Path
+
+ET = ZoneInfo("America/New_York")
 
 from notifier import notify_daily_summary
 
@@ -399,7 +402,7 @@ class AgentLearner:
         conn = sqlite3.connect(DB_PATH)
         conn.execute(
             "INSERT INTO strategy_history (timestamp, parameter, old_value, new_value, reason) VALUES (?,?,?,?,?)",
-            (datetime.now().isoformat(), param, old_val, new_val, reason),
+            (datetime.now(ET).isoformat(), param, old_val, new_val, reason),
         )
         conn.commit()
         conn.close()
@@ -455,7 +458,7 @@ class AgentLearner:
             conn = sqlite3.connect(DB_PATH)
             conn.execute(
                 "INSERT INTO learning_sessions (timestamp, session_type, summary, changes_made, status) VALUES (?,?,?,?,?)",
-                (datetime.now().isoformat(), session_type, summary, changes, status),
+                (datetime.now(ET).isoformat(), session_type, summary, changes, status),
             )
             conn.commit()
             conn.close()

@@ -25,12 +25,15 @@ import logging
 import os
 import sqlite3
 from datetime import date, datetime, timedelta
+from zoneinfo import ZoneInfo
 
 import pandas as pd
 import yfinance as yf
 from dotenv import load_dotenv
 
 load_dotenv()
+
+ET = ZoneInfo("America/New_York")
 
 log = logging.getLogger(__name__)
 
@@ -239,7 +242,7 @@ class OptionsFeed:
                 call_oi_total, put_oi_total, put_call_ratio, net_oi_bias)
                VALUES (?,?,?,?,?,?,?,?,?)""",
             (
-                datetime.now().isoformat(),
+                datetime.now(ET).isoformat(),
                 mp["expiration"], mp["max_pain_strike"], mp["current_price"],
                 mp["delta_to_max_pain"], mp["call_oi_total"], mp["put_oi_total"],
                 mp["put_call_ratio"], mp["net_oi_bias"],
