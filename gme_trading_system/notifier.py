@@ -212,6 +212,64 @@ def notify_periodic_brief(price: float, pct_change: float, consensus: str,
     return _send(msg)
 
 
+def notify_signal_alert(agent_name: str, signal_type: str, confidence: float,
+                        entry_price: float = None, stop_loss: float = None,
+                        take_profit: float = None, reasoning: str = "",
+                        alert_id: str = "") -> bool:
+    """
+    Send a signal alert with confidence score, risk/reward, and actionable params.
+
+    This is the new primary alert function for the feedback loop system.
+    Confidence 0.0-1.0 is converted to 0-100% display.
+
+    Usage:
+        notify_signal_alert(
+            agent_name="Futurist",
+            signal_type="price_prediction",
+            confidence=0.78,
+            entry_price=23.45,
+            stop_loss=22.80,
+            take_profit=25.50,
+            reasoning="RSI oversold + volume spike on dip",
+            alert_id="abc123"
+        )
+    """
+    # Determine severity based on confidence
+    if confidence >= 0.80:
+        severity = "🔴 HIGH"
+        emoji = "⚡"
+    elif confidence >= 0.65:
+        severity = "🟡 MEDIUM"
+        emoji = "⚠️"
+    else:
+        severity = "🟢 LOW"
+        emoji = "📌"
+
+    msg = f"{emoji} <b>SIGNAL ALERT</b> — {agent_name}\n\n"
+    msg += f"<b>{signal_type.upper().replace('_', ' ')}</b>\n"
+    msg += f"Confidence: <b>{confidence:.0%}</b> {severity}\n\n"
+
+    # Risk/reward setup
+    if entry_price and stop_loss and take_profit:
+        risk = ((entry_price - stop_loss) / entry_price) * 100
+        reward = ((take_profit - entry_price) / entry_price) * 100
+        ratio = reward / risk if risk > 0 else 0
+        msg += f"📊 <b>Setup</b>\n"
+        msg += f"  Entry: ${entry_price:.2f}\n"
+        msg += f"  Stop: ${stop_loss:.2f} ({risk:.1f}%)\n"
+        msg += f"  Target: ${take_profit:.2f} ({reward:+.1f}%)\n"
+        msg += f"  R/R Ratio: 1:{ratio:.2f}\n\n"
+
+    if reasoning:
+        msg += f"<i>Reasoning: {reasoning[:200]}</i>\n\n"
+
+    msg += f"<i>{datetime.now().strftime('%Y-%m-%d %H:%M:%S ET')}</i>"
+    if alert_id:
+        msg += f"\n<code>Alert ID: {alert_id[:8]}</code>"
+
+    return _send(msg)
+
+
 # ── Test ───────────────────────────────────────────────────────────────────────
 
 def test_connection() -> bool:

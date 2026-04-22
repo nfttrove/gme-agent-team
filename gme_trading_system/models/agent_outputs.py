@@ -19,10 +19,13 @@ TrendDirection = Literal["UP", "DOWN", "SIDEWAYS", "up", "down", "sideways"]
 class FuturistPrediction(BaseModel):
     """A price prediction from the Futurist agent."""
     predicted_price: float = Field(..., gt=0, description="Predicted price in USD")
-    confidence: float = Field(..., ge=0.0, le=1.0)
+    confidence: float = Field(..., ge=0.0, le=1.0, description="0.0-1.0 confidence in prediction")
     horizon: str = Field(..., description="e.g. '1h', '1d', '1w'")
     bias: Bias = "HOLD"
     reasoning: str = ""
+    signal_type: str = "price_prediction"
+    stop_loss: Optional[float] = Field(None, description="Suggested stop loss price")
+    take_profit: Optional[float] = Field(None, description="Suggested take profit price")
 
     @field_validator("horizon")
     @classmethod
@@ -40,8 +43,10 @@ class TraderDecision(BaseModel):
     quantity: float = Field(..., ge=0)
     stop_loss: float = Field(..., ge=0)
     take_profit: float = Field(..., ge=0)
-    confidence: float = Field(..., ge=0.0, le=1.0)
+    confidence: float = Field(..., ge=0.0, le=1.0, description="0.0-1.0 confidence in trade")
     reasoning: str = ""
+    signal_type: str = "trade_signal"
+    severity: str = Field("MEDIUM", description="HIGH, MEDIUM, or LOW urgency")
 
     @field_validator("stop_loss")
     @classmethod
@@ -69,6 +74,8 @@ class SynthesisBrief(BaseModel):
     structural_status: StructuralStatus = "YELLOW"
     consensus: Consensus = "NEUTRAL"
     consensus_pct: float = Field(0.5, ge=0.0, le=1.0)
+    signal_type: str = "synthesis_consensus"
+    confidence: float = Field(0.5, ge=0.0, le=1.0, description="Overall confidence in synthesis")
 
 
 class NewsSignal(BaseModel):
