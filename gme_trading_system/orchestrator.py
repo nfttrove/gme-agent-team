@@ -881,6 +881,19 @@ def run_intraday_aggregation():
         log.error(f"[Aggregator-intraday] {e}")
 
 
+@active_window_required
+def run_voice_forwarder():
+    """Forward new per-agent narrative outputs to Telegram in each agent's voice."""
+    try:
+        import agent_voice
+        sent = agent_voice.forward_pending()
+        total = sum(sent.values())
+        if total:
+            log.info(f"[Voice] forwarded {sent}")
+    except Exception as e:
+        log.error(f"[Voice] {e}")
+
+
 def run_learning_debrief():
     """4:30 PM ET — score predictions vs actuals and compute agent metrics."""
     log.info("[Learner] === Post-market debrief ===")
@@ -1260,6 +1273,7 @@ class TradingSystemOrchestrator:
         self.scheduler.add_job(run_daily_trend,       CronTrigger(hour=20, minute=0),  id="trendy_eod")
         self.scheduler.add_job(run_daily_aggregation, CronTrigger(hour=16, minute=35), id="aggregator")
         self.scheduler.add_job(run_intraday_aggregation, IntervalTrigger(minutes=5), id="aggregator_intraday")
+        self.scheduler.add_job(run_voice_forwarder, IntervalTrigger(minutes=10), id="voice_forwarder")
         self.scheduler.add_job(run_standup_report,    CronTrigger(hour=16, minute=0),  id="standup_close")
 
         # Learning sessions — agents review their own performance and adapt
