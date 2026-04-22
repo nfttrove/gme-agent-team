@@ -1,27 +1,51 @@
 from crewai import Agent
-from llm_config import gemma_local
+from llm_config import gemma_local, get_llm_for_agent
+import logging
 from mission import OPERATIVE_DIRECTIVE
 from pe_playbook import ANTI_PATTERNS, GME_STRUCTURAL_THESIS, GME_IMMUNITY_CHECKS, PLAYBOOK_SIGNALS
 
+log = logging.getLogger(__name__)
+
 
 class ResilientAgent(Agent):
-    """Gemma-only agent (local LLM, no external API calls, no fallbacks).
+    """Multi-LLM agent with intelligent routing and fallbacks.
 
-    Disables tool use since Gemma 2:9b doesn't support structured outputs/tools.
+    Routes to best LLM based on agent role:
+      - Complex reasoning (Futurist, CTO) → DeepSeek-r1:8b
+      - Simple agents (others) → Gemma 2:9b
+      - Fallback chain: Gemini Flash → Gemini Pro if primary fails
+
+    Disables tool use since local LLMs don't support structured outputs.
     All data is injected into task descriptions instead.
     """
 
     model_config = {"arbitrary_types_allowed": True}
 
-    def __init__(self, primary_llm=None, fallback_llm=None, fallback2_llm=None, **kwargs):
-        # Always use gemma_local, ignore fallback parameters (for backwards compatibility)
-        # Disable tool use (tools=None, allow_code_execution=False)
+    def __init__(self, agent_name: str = None, **kwargs):
+        """
+        Initialize agent with LLM routing.
+
+        Args:
+            agent_name (str): Agent role/name for routing (e.g., "Futurist", "Valerie")
+            **kwargs: Standard Agent parameters (role, goal, backstory, etc.)
+        """
+        # Select LLM based on agent reasoning needs
+        if agent_name:
+            selected_llm = get_llm_for_agent(agent_name)
+            log.info(f"[ResilientAgent] {agent_name} routed to {selected_llm.model}")
+        else:
+            selected_llm = gemma_local  # Default fallback
+            log.warning("[ResilientAgent] No agent_name provided; defaulting to Gemma 2:9b")
+
+        # Disable tool use (local LLMs don't support tools)
         kwargs.setdefault("tools", [])
         kwargs.setdefault("allow_code_execution", False)
-        super().__init__(llm=gemma_local, **kwargs)
+
+        super().__init__(llm=selected_llm, **kwargs)
 
 
 daily_trend_agent = ResilientAgent(
+    agent_name="Trendy",
     role="Daily Trend Analyst",
     goal="Identify trend lines, support, and resistance from daily candle data for GME",
     backstory=(
@@ -67,6 +91,7 @@ news_analyst_agent = ResilientAgent(
 )
 
 futurist_agent = ResilientAgent(
+    agent_name="Futurist",  # Routes to DeepSeek-r1:8b for complex reasoning
     role="Market Futurist",
     goal="Predict GME price for the next 1h, 4h, and 24h with a confidence score for each horizon",
     backstory=(
