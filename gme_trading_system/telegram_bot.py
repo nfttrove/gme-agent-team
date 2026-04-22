@@ -460,12 +460,11 @@ def handle_command(text: str):
 
     elif cmd == "/help":
         _send(
-            "<b>📚 GME Trading Bot — Command Guide</b>\n\n"
+            "<b>📚 GME Analysis Bot — Command Guide</b>\n\n"
             "<b>System Commands:</b>\n"
             "/status — system health, tick count, last agent activity\n"
             "/agents — last run time for each agent\n"
-            "/ticks — price data received today\n"
-            "/balance — live IBKR account balance\n\n"
+            "/ticks — price data received today\n\n"
             "<b>Research & Intel:</b>\n"
             "/brief — today's strategy brief from synthesis agent\n"
             "/update — force sync local data to Supabase now\n"
@@ -475,14 +474,13 @@ def handle_command(text: str):
             "/lessons [topic] — show lessons agents learned\n\n"
             "<b>Settings:</b>\n"
             "/frequency [low|medium|high] — notification level\n"
-            "/halt — pause trading (risk override)\n"
-            "/resume — re-enable trading\n\n"
+            "/halt — pause all system activity (risk override)\n"
+            "/resume — resume system activity\n\n"
             "<b>🧪 Testing:</b>\n"
             "/test — run all 35 Playwright tests (dashboard, feedback, metrics)\n\n"
             "<b>💬 Interactive Chat:</b>\n"
             "Just send any question (no slash) to ask:\n"
             "• Current GME price & analysis\n"
-            "• Trading strategies & signals\n"
             "• Market & geopolitical context\n"
             "• Questions about curated research docs\n\n"
             "/compare <question> — Get responses from both Gemma & DeepSeek (compare approaches)\n\n"
@@ -534,15 +532,14 @@ Keep responses brief (1 paragraph max). Think: Bloomberg meets a knowledgeable f
             "<b>Available commands:</b>\n"
             "/help — full command guide and chat capabilities\n"
             "/status — system health\n"
-            "/balance — IBKR account balance\n"
             "/ticks — price data received\n"
             "/agents — last agent activity\n"
-            "/brief — today's strategy in plain English\n"
+            "/brief — today's strategy brief\n"
             "/update — sync data to Supabase now\n"
             "/trove [TICKERS] — deep-value score screen\n"
             "/test — run 35 Playwright tests\n"
-            "/halt — pause trading\n"
-            "/resume — re-enable trading\n"
+            "/halt — pause system activity\n"
+            "/resume — resume system activity\n"
             "/frequency — notification settings\n\n"
             "Send /help for detailed guide."
         )
@@ -663,16 +660,24 @@ Highlight any conflicts or different angles. Keep it brief for Telegram (1-2 sho
     return None
 
 
-def _ask_llm(question: str, context: str) -> str:
-    """Ask a question with fallback chain: Notebook LM → Gemma → DeepSeek → Gemini (paid).
+def _ollama_available() -> bool:
+    """Quick health check — returns True if Ollama is reachable."""
+    try:
+        r = requests.get("http://localhost:11434/", timeout=3)
+        return r.status_code == 200
+    except Exception:
+        return False
 
-    Uses local Ollama models first, falls back to paid APIs only if both local models fail.
+
+def _ask_llm(question: str, context: str) -> str:
+    """Ask a question with fallback chain: Notebook LM → Gemma → Gemini Flash.
+
+    Skips Ollama entirely if it's unreachable to avoid long timeouts.
     """
 
-    system_prompt = """You are the GME trading team's factual intelligence assistant.
-You have access to real-time trading data. Answer questions about GME, markets, and geopolitics.
-Be factual and honest — tell the truth even if it contradicts bullish sentiment.
-Keep responses brief for Telegram (1-2 short paragraphs max).
+    system_prompt = """You are the GME analysis team's factual intelligence assistant.
+You have access to real-time market data. Answer questions about GME, markets, and geopolitics.
+Be factual and honest. Keep responses brief for Telegram (1-2 short paragraphs max).
 Think: Bloomberg terminal meets a knowledgeable friend who reads a lot."""
 
     user_message = f"{context}\n\nQuestion: {question}"
@@ -683,22 +688,25 @@ Think: Bloomberg terminal meets a knowledgeable friend who reads a lot."""
         log.info("[tgbot] Response from Notebook LM")
         return notebook_response
 
-    # Try local Ollama models: Gemma → DeepSeek
-    for model_name in ["gemma2:9b", "deepseek-r1:8b"]:
+    # Try Gemma via Ollama (skip entirely if Ollama is down)
+    if _ollama_available():
         try:
             r = requests.post("http://localhost:11434/api/generate", json={
-                "model": model_name,
+                "model": "gemma2:9b",
                 "prompt": f"{system_prompt}\n\n{user_message}",
                 "stream": False,
-            }, timeout=30)
+            }, timeout=60)
             if r.status_code == 200:
                 response = r.json().get("response", "").strip()
-                log.info(f"[tgbot] Response from {model_name}")
-                return response
+                if response:
+                    log.info("[tgbot] Response from gemma2:9b")
+                    return response
         except Exception as e:
-            log.debug(f"[tgbot] {model_name} failed: {e}")
+            log.warning(f"[tgbot] gemma2:9b failed: {e}")
+    else:
+        log.info("[tgbot] Ollama unreachable — skipping to Gemini")
 
-    # Try Gemini Flash (paid fallback, only if local models fail)
+    # Gemini Flash fallback
     if os.getenv("GOOGLE_API_KEY"):
         try:
             import google.generativeai as genai
@@ -708,7 +716,7 @@ Think: Bloomberg terminal meets a knowledgeable friend who reads a lot."""
             log.info("[tgbot] Response from Gemini Flash")
             return response.text.strip()
         except Exception as e:
-            log.debug(f"[tgbot] Gemini failed: {e}")
+            log.warning(f"[tgbot] Gemini failed: {e}")
 
     return "Sorry, no LLMs available right now. Try again later."
 
@@ -732,13 +740,12 @@ def _register_commands():
     commands = [
         {"command": "help", "description": "Full command guide and chat capabilities"},
         {"command": "status", "description": "System health, agents, tick count"},
-        {"command": "balance", "description": "Live IBKR account balance"},
         {"command": "ticks", "description": "Price ticks received today"},
         {"command": "agents", "description": "Last run time for each agent"},
-        {"command": "brief", "description": "Today's strategy in plain English"},
+        {"command": "brief", "description": "Today's strategy brief from synthesis agent"},
         {"command": "update", "description": "Force sync local data to Supabase now"},
-        {"command": "halt", "description": "Pause all new trades (risk override)"},
-        {"command": "resume", "description": "Re-enable trading"},
+        {"command": "halt", "description": "Pause all system activity (risk override)"},
+        {"command": "resume", "description": "Resume system activity"},
         {"command": "frequency", "description": "Show/set notification frequency"},
         {"command": "trove", "description": "Deep-value screen: /trove [TICKER ...] — scores up to 20 tickers"},
         {"command": "learn", "description": "Teach agents a rule: /learn \"<lesson>\" --why \"<reason>\""},
