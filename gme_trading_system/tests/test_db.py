@@ -42,11 +42,12 @@ class TestSchema:
         assert expected.issubset(tables)
 
     def test_insert_trade_decision(self, db):
+        import uuid
         conn = sqlite3.connect(db)
         conn.execute(
-            "INSERT INTO trade_decisions (timestamp, action, quantity, entry_price, stop_loss, take_profit, paper_trade, status) "
-            "VALUES (?, 'BUY', 10, 20.5, 19.89, 21.73, 1, 'filled')",
-            (datetime.now().isoformat(),),
+            "INSERT INTO trade_decisions (order_id, timestamp, action, quantity, entry_price, stop_loss, take_profit, paper_trade, status) "
+            "VALUES (?, ?, 'BUY', 10, 20.5, 19.89, 21.73, 1, 'filled')",
+            (str(uuid.uuid4()), datetime.now().isoformat()),
         )
         count = conn.execute("SELECT COUNT(*) FROM trade_decisions").fetchone()[0]
         conn.close()
