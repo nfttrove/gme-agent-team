@@ -234,15 +234,29 @@ def handle_command(text: str):
         )
 
     elif cmd == "/ticks":
-        today = _db_scalar("SELECT COUNT(*) FROM price_ticks WHERE date(timestamp)=date('now')")
-        total = _db_scalar("SELECT COUNT(*) FROM price_ticks")
-        latest_price = _db_scalar("SELECT close FROM price_ticks ORDER BY timestamp DESC LIMIT 1")
-        _send(
-            f"<b>GME Tick Data</b>\n"
-            f"Ticks today: {today or 0}\n"
-            f"Total in DB: {total or 0}\n"
-            f"Latest price: ${latest_price or 'n/a'}"
-        )
+        try:
+            conn = sqlite3.connect(DB_PATH)
+            row = conn.execute(
+                "SELECT close, timestamp FROM price_ticks ORDER BY timestamp DESC LIMIT 1"
+            ).fetchone()
+            last_24h = conn.execute(
+                "SELECT COUNT(*) FROM price_ticks WHERE datetime(timestamp) > datetime('now', '-1 day')"
+            ).fetchone()[0]
+            total = conn.execute("SELECT COUNT(*) FROM price_ticks").fetchone()[0]
+            conn.close()
+            if row:
+                last_ts = row[1][:16].replace("T", " ")
+                _send(
+                    f"<b>GME Tick Data</b>\n"
+                    f"Latest price: <b>${row[0]:.2f}</b>\n"
+                    f"Last tick: {last_ts} UTC\n"
+                    f"Ticks (24h): {last_24h}\n"
+                    f"Total in DB: {total}"
+                )
+            else:
+                _send("No price ticks in database yet.")
+        except Exception as e:
+            _send(f"Ticks error: {e}")
 
     elif cmd == "/agents":
         try:
@@ -271,71 +285,62 @@ def handle_command(text: str):
         try:
             conn = sqlite3.connect(DB_PATH)
 
-            # Get signals from last 24 hours by agent
-            signals = conn.execute("""
-                SELECT agent_name, COUNT(*) as total, AVG(confidence) as avg_conf
-                FROM signal_alerts
+            # Agent activity last 24h
+            activity = conn.execute("""
+                SELECT agent_name,
+                       COUNT(*) as runs,
+                       SUM(CASE WHEN status='ok' THEN 1 ELSE 0 END) as ok_count
+                FROM agent_logs
                 WHERE datetime(timestamp) > datetime('now', '-1 day')
                 GROUP BY agent_name
-                ORDER BY total DESC
+                ORDER BY runs DESC
             """).fetchall()
 
-            if not signals:
-                _send("📊 No signals in last 24 hours yet.")
-                conn.close()
-                return
+            # Latest price
+            price_row = conn.execute(
+                "SELECT close, timestamp FROM price_ticks ORDER BY timestamp DESC LIMIT 1"
+            ).fetchone()
 
-            # Get feedback stats
-            feedback_stats = {}
-            for agent_name, _, _ in signals:
-                feedback = conn.execute("""
-                    SELECT
-                        COUNT(*) as total_feedback,
-                        SUM(CASE WHEN action_taken = 'executed' THEN 1 ELSE 0 END) as executed,
-                        SUM(CASE WHEN action_taken = 'executed' AND pnl_pct > 0 THEN 1 ELSE 0 END) as wins,
-                        AVG(CASE WHEN action_taken = 'executed' THEN pnl_pct END) as avg_pnl_pct
-                    FROM signal_feedback sf
-                    JOIN signal_alerts sa ON sf.alert_id = sa.id
-                    WHERE sa.agent_name = ? AND datetime(sf.execution_timestamp) > datetime('now', '-1 day')
-                """, (agent_name,)).fetchone()
-                if feedback:
-                    feedback_stats[agent_name] = feedback
+            # Latest prediction
+            pred = conn.execute(
+                "SELECT horizon, predicted_price, confidence FROM predictions ORDER BY timestamp DESC LIMIT 1"
+            ).fetchone()
 
-            # Calculate team totals
-            total_signals = sum(s[1] for s in signals)
-            total_executed = sum(f[1] or 0 for f in feedback_stats.values())
-            total_wins = sum(f[2] or 0 for f in feedback_stats.values())
-            team_roi = (total_wins / total_executed * 100) if total_executed > 0 else 0
-
-            lines = ["<b>🤖 AGENT DAILY STANDUP</b>\n"]
-
-            for agent_name, total, avg_conf in signals:
-                fb = feedback_stats.get(agent_name, (0, 0, 0, None))
-                executed = fb[1] or 0
-                wins = fb[2] or 0
-                win_rate = (wins / executed * 100) if executed > 0 else 0
-                conf_pct = int(avg_conf * 100) if avg_conf else 0
-
-                status = "✨" if win_rate == 100 and executed > 0 else "✅" if win_rate >= 67 else "⚠️ " if executed > 0 else "🔹"
-                lines.append(f"{status} <b>{agent_name}</b>: {total} signals, {conf_pct}% confidence")
-                if executed > 0:
-                    lines.append(f"   → {executed} executed, {wins} wins ({win_rate:.0f}% win rate)")
-
-            lines.append(f"\n<b>📈 Team ROI: {total_wins}/{total_executed} wins ({team_roi:.0f}% win rate)</b>")
-
-            # Highlight best/worst
-            if feedback_stats:
-                best = max([(a, f[2]/f[1]*100 if f[1] else 0) for a, f in feedback_stats.items() if f[1]],
-                          key=lambda x: x[1], default=("N/A", 0))
-                worst = min([(a, f[2]/f[1]*100 if f[1] else 0) for a, f in feedback_stats.items() if f[1]],
-                           key=lambda x: x[1], default=("N/A", 0))
-
-                if best[0] != "N/A":
-                    lines.append(f"🌟 Best: <b>{best[0]}</b> ({best[1]:.0f}%)")
-                if worst[0] != "N/A" and worst[1] < 100:
-                    lines.append(f"📍 Needs tuning: <b>{worst[0]}</b> ({worst[1]:.0f}%)")
+            # Recent trade decisions (last 7 days)
+            trades = conn.execute("""
+                SELECT action, COUNT(*) as n, AVG(confidence) as avg_conf
+                FROM trade_decisions
+                WHERE datetime(timestamp) > datetime('now', '-7 days')
+                GROUP BY action
+            """).fetchall()
 
             conn.close()
+
+            lines = ["<b>🤖 AGENT STANDUP (last 24h)</b>\n"]
+
+            if price_row:
+                age = price_row[1][:16].replace("T", " ")
+                lines.append(f"<b>GME:</b> ${price_row[0]:.2f} (as of {age})\n")
+
+            if pred:
+                conf_pct = int(pred[2] * 100) if pred[2] else 0
+                lines.append(f"<b>Futurist:</b> {pred[0]} → ${pred[1]:.2f} ({conf_pct}% confidence)\n")
+
+            if activity:
+                lines.append("<b>Agent Runs:</b>")
+                for name, runs, ok in activity:
+                    ok = ok or 0
+                    icon = "✅" if ok == runs else "⚠️"
+                    lines.append(f"  {icon} <b>{name}</b>: {runs} runs ({ok} ok)")
+            else:
+                lines.append("No agent activity in last 24h.")
+
+            if trades:
+                lines.append("\n<b>Trade Gate (7d):</b>")
+                for action, n, avg_conf in trades:
+                    conf_pct = int(avg_conf * 100) if avg_conf else 0
+                    lines.append(f"  {action.upper()}: {n}x @ {conf_pct}% avg confidence")
+
             _send("\n".join(lines))
         except Exception as e:
             _send(f"Standup error: {e}")
