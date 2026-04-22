@@ -86,3 +86,27 @@ class NewsSignal(BaseModel):
     sentiment_label: Optional[Literal["positive", "negative", "neutral"]] = None
     relevance_score: float = Field(0.0, ge=0.0, le=1.0)
     summary: Optional[str] = None
+    signal_type: str = "sentiment_signal"
+    confidence: float = Field(0.5, ge=0.0, le=1.0, description="Confidence in signal")
+
+
+class TrendySignal(BaseModel):
+    """Daily trend signal from Trendy agent."""
+    trend_direction: Literal["UP", "DOWN", "SIDEWAYS"]
+    confidence: float = Field(..., ge=0.0, le=1.0, description="Confidence in trend")
+    support_level: float = Field(..., gt=0, description="Support price level")
+    resistance_level: float = Field(..., gt=0, description="Resistance price level")
+    reasoning: str = ""
+    signal_type: str = "trend_signal"
+    severity: str = Field("MEDIUM", description="HIGH, MEDIUM, or LOW urgency")
+
+
+class PatternSignal(BaseModel):
+    """Chart pattern signal from Pattern agent."""
+    pattern_type: str = Field(..., description="e.g. 'ascending_triangle', 'breakout', 'flag'")
+    confidence: float = Field(..., ge=0.0, le=1.0)
+    breakout_level: float = Field(..., gt=0, description="Price level where pattern breaks")
+    breakout_direction: Literal["UP", "DOWN"]
+    reasoning: str = ""
+    signal_type: str = "pattern_signal"
+    severity: str = Field("MEDIUM", description="HIGH, MEDIUM, or LOW urgency")

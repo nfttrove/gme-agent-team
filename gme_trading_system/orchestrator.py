@@ -289,14 +289,17 @@ def run_futurist_prediction_signal():
             write_log("Futurist", str(e), "prediction_signal", "error")
 
 
-def _extract_futurist_prediction(raw_output: str) -> dict:
-    """Extract FuturistPrediction JSON from agent output.
+def _extract_json(raw_output: str) -> dict:
+    """Extract JSON from agent output (unified for all agents).
 
     Handles:
     - Plain JSON (Gemma output)
     - JSON after <thought> block (DeepSeek-r1 output)
     - Markdown code blocks ```json ... ```
     """
+    import re
+    import json
+
     # Try 1: Extract JSON from <thought>...</thought> block (DeepSeek-r1)
     thought_match = re.search(r'<thought>.*?</thought>\s*(.*)', raw_output, re.DOTALL)
     if thought_match:
@@ -315,11 +318,302 @@ def _extract_futurist_prediction(raw_output: str) -> dict:
         return None
 
     try:
-        data = json.loads(json_str)
-        return data
+        return json.loads(json_str)
     except json.JSONDecodeError:
-        log.warning("[Futurist] JSON parsing failed on extracted string")
         return None
+
+
+def _extract_futurist_prediction(raw_output: str) -> dict:
+    """Extract FuturistPrediction JSON from agent output (legacy, uses _extract_json)."""
+    return _extract_json(raw_output)
+
+
+@active_window_required
+def run_trendy_signal():
+    """Trendy agent trend signal with confidence logging."""
+    from agents import daily_trend_agent
+    from tasks import daily_trend_task
+    from models.agent_outputs import TrendySignal
+
+    log.info("[Trendy] Starting trend signal cycle")
+    write_log("Trendy", "Running trend signal cycle", "trend_signal", "running")
+
+    with metrics.cycle("trendy_signal"):
+        try:
+            crew = Crew(
+                agents=[daily_trend_agent],
+                tasks=[daily_trend_task],
+                process=Process.sequential,
+                verbose=True,
+            )
+            result = safe_kickoff(crew, timeout_seconds=300, label="trendy_signal")
+
+            # Parse output to TrendySignal
+            signal_data = _extract_json(str(result))
+            if not signal_data:
+                log.warning("[Trendy] Could not parse signal")
+                write_log("Trendy", f"Failed to parse signal:\n{str(result)[:500]}", "trend_signal", "parse_error")
+                return
+
+            try:
+                signal = TrendySignal(**signal_data)
+            except Exception as e:
+                log.error(f"[Trendy] Validation failed: {e}")
+                write_log("Trendy", f"Validation error: {e}", "trend_signal", "validation_error")
+                return
+
+            write_log("Trendy", str(result)[:1000], "trend_signal", "ok")
+
+            # Log signal
+            manager = SignalManager(DB_PATH)
+            entry_price = signal.support_level if signal.trend_direction == "UP" else signal.resistance_level
+            alert_id = manager.log_alert(
+                agent_name="Trendy",
+                signal_type=signal.signal_type,
+                confidence=signal.confidence,
+                severity=signal.severity,
+                entry_price=entry_price,
+                stop_loss=signal.resistance_level if signal.trend_direction == "UP" else signal.support_level,
+                take_profit=signal.resistance_level if signal.trend_direction == "UP" else signal.support_level * 0.97,
+                reasoning=signal.reasoning,
+            )
+            log.info(f"[Trendy] Signal logged: {alert_id[:8]} | confidence={signal.confidence:.0%}")
+
+            # Send alert
+            try:
+                notify_signal_alert(
+                    agent_name="Trendy",
+                    signal_type=signal.signal_type,
+                    confidence=signal.confidence,
+                    entry_price=entry_price,
+                    stop_loss=signal.resistance_level if signal.trend_direction == "UP" else signal.support_level,
+                    take_profit=signal.resistance_level if signal.trend_direction == "UP" else signal.support_level * 1.02,
+                    reasoning=f"{signal.trend_direction} trend | Support: ${signal.support_level:.2f}, Resistance: ${signal.resistance_level:.2f}",
+                    alert_id=alert_id,
+                )
+                log.info("[Trendy] Telegram alert sent")
+            except Exception as e:
+                log.warning(f"[Trendy] Telegram alert failed (non-critical): {e}")
+
+            metrics.snapshot()
+
+        except CrewTimeout as e:
+            log.error(f"[Trendy] TIMEOUT: {e}")
+            write_log("Trendy", f"TIMEOUT: {e}", "trend_signal", "timeout")
+        except Exception as e:
+            log.error(f"[Trendy] {e}")
+            write_log("Trendy", str(e), "trend_signal", "error")
+
+
+@active_window_required
+def run_synthesis_signal():
+    """Synthesis agent consensus brief with signal confidence logging."""
+    from agents import synthesis_agent
+    from tasks import synthesis_task
+    from models.agent_outputs import SynthesisBrief
+
+    log.info("[Synthesis] Starting consensus signal cycle")
+    write_log("Synthesis", "Running consensus signal cycle", "consensus_signal", "running")
+
+    with metrics.cycle("synthesis_signal"):
+        try:
+            crew = Crew(
+                agents=[synthesis_agent],
+                tasks=[synthesis_task],
+                process=Process.sequential,
+                verbose=True,
+            )
+            result = safe_kickoff(crew, timeout_seconds=300, label="synthesis_signal")
+
+            signal_data = _extract_json(str(result))
+            if not signal_data:
+                log.warning("[Synthesis] Could not parse signal")
+                return
+
+            try:
+                signal = SynthesisBrief(**signal_data)
+            except Exception as e:
+                log.error(f"[Synthesis] Validation failed: {e}")
+                return
+
+            write_log("Synthesis", str(result)[:1000], "consensus_signal", "ok")
+
+            # Log signal
+            manager = SignalManager(DB_PATH)
+            alert_id = manager.log_alert(
+                agent_name="Synthesis",
+                signal_type=signal.signal_type,
+                confidence=signal.confidence,
+                severity="HIGH" if signal.confidence >= 0.80 else "MEDIUM" if signal.confidence >= 0.65 else "LOW",
+                entry_price=signal.price,
+                stop_loss=signal.price * 0.97,
+                take_profit=signal.price * 1.03,
+                reasoning=f"{signal.consensus} | Strength: {signal.trend_strength:.0%}",
+            )
+
+            try:
+                notify_signal_alert(
+                    agent_name="Synthesis",
+                    signal_type=signal.signal_type,
+                    confidence=signal.confidence,
+                    entry_price=signal.price,
+                    stop_loss=signal.price * 0.97,
+                    take_profit=signal.price * 1.03,
+                    reasoning=f"Consensus: {signal.consensus} | Sentiment: {signal.news_sentiment:+.1f} | Trend: {signal.trend_direction}",
+                    alert_id=alert_id,
+                )
+            except Exception as e:
+                log.warning(f"[Synthesis] Alert failed: {e}")
+
+            metrics.snapshot()
+
+        except CrewTimeout as e:
+            log.error(f"[Synthesis] TIMEOUT: {e}")
+            write_log("Synthesis", f"TIMEOUT: {e}", "consensus_signal", "timeout")
+        except Exception as e:
+            log.error(f"[Synthesis] {e}")
+            write_log("Synthesis", str(e), "consensus_signal", "error")
+
+
+@active_window_required
+def run_pattern_signal():
+    """Pattern agent chart pattern signal with confidence logging."""
+    from agents import multiday_trend_agent
+    from tasks import multiday_trend_task
+    from models.agent_outputs import PatternSignal
+
+    log.info("[Pattern] Starting pattern signal cycle")
+    write_log("Pattern", "Running pattern signal cycle", "pattern_signal", "running")
+
+    with metrics.cycle("pattern_signal"):
+        try:
+            crew = Crew(
+                agents=[multiday_trend_agent],
+                tasks=[multiday_trend_task],
+                process=Process.sequential,
+                verbose=True,
+            )
+            result = safe_kickoff(crew, timeout_seconds=300, label="pattern_signal")
+
+            signal_data = _extract_json(str(result))
+            if not signal_data:
+                log.warning("[Pattern] Could not parse signal")
+                return
+
+            try:
+                signal = PatternSignal(**signal_data)
+            except Exception as e:
+                log.error(f"[Pattern] Validation failed: {e}")
+                return
+
+            write_log("Pattern", str(result)[:1000], "pattern_signal", "ok")
+
+            # Log signal
+            manager = SignalManager(DB_PATH)
+            alert_id = manager.log_alert(
+                agent_name="Pattern",
+                signal_type=signal.signal_type,
+                confidence=signal.confidence,
+                severity=signal.severity,
+                entry_price=signal.breakout_level * 0.99,
+                stop_loss=signal.breakout_level * 0.96 if signal.breakout_direction == "UP" else signal.breakout_level * 1.04,
+                take_profit=signal.breakout_level * 1.04 if signal.breakout_direction == "UP" else signal.breakout_level * 0.96,
+                reasoning=signal.reasoning,
+            )
+
+            try:
+                notify_signal_alert(
+                    agent_name="Pattern",
+                    signal_type=signal.signal_type,
+                    confidence=signal.confidence,
+                    entry_price=signal.breakout_level,
+                    stop_loss=signal.breakout_level * 0.96,
+                    take_profit=signal.breakout_level * 1.04,
+                    reasoning=f"{signal.pattern_type} | {signal.breakout_direction} breakout at ${signal.breakout_level:.2f}",
+                    alert_id=alert_id,
+                )
+            except Exception as e:
+                log.warning(f"[Pattern] Alert failed: {e}")
+
+            metrics.snapshot()
+
+        except CrewTimeout as e:
+            log.error(f"[Pattern] TIMEOUT: {e}")
+            write_log("Pattern", f"TIMEOUT: {e}", "pattern_signal", "timeout")
+        except Exception as e:
+            log.error(f"[Pattern] {e}")
+            write_log("Pattern", str(e), "pattern_signal", "error")
+
+
+@active_window_required
+def run_newsie_signal():
+    """Newsie agent sentiment signal with confidence logging."""
+    from agents import news_analyst_agent
+    from tasks import news_task
+    from models.agent_outputs import NewsSignal
+
+    log.info("[Newsie] Starting sentiment signal cycle")
+    write_log("Newsie", "Running sentiment signal cycle", "sentiment_signal", "running")
+
+    with metrics.cycle("newsie_signal"):
+        try:
+            crew = Crew(
+                agents=[news_analyst_agent],
+                tasks=[news_task],
+                process=Process.sequential,
+                verbose=True,
+            )
+            result = safe_kickoff(crew, timeout_seconds=300, label="newsie_signal")
+
+            signal_data = _extract_json(str(result))
+            if not signal_data:
+                log.warning("[Newsie] Could not parse signal")
+                return
+
+            try:
+                signal = NewsSignal(**signal_data)
+            except Exception as e:
+                log.error(f"[Newsie] Validation failed: {e}")
+                return
+
+            write_log("Newsie", str(result)[:1000], "sentiment_signal", "ok")
+
+            # Log signal
+            manager = SignalManager(DB_PATH)
+            confidence = abs(signal.sentiment_score)  # Higher |sentiment| = more confident
+            alert_id = manager.log_alert(
+                agent_name="Newsie",
+                signal_type=signal.signal_type,
+                confidence=confidence,
+                severity="HIGH" if confidence >= 0.80 else "MEDIUM" if confidence >= 0.65 else "LOW",
+                entry_price=None,  # Sentiment doesn't have price target
+                stop_loss=None,
+                take_profit=None,
+                reasoning=signal.headline,
+            )
+
+            try:
+                notify_signal_alert(
+                    agent_name="Newsie",
+                    signal_type=signal.signal_type,
+                    confidence=confidence,
+                    entry_price=None,
+                    stop_loss=None,
+                    take_profit=None,
+                    reasoning=f"Sentiment: {signal.sentiment_label} ({signal.sentiment_score:+.1f}) | {signal.headline[:100]}",
+                    alert_id=alert_id,
+                )
+            except Exception as e:
+                log.warning(f"[Newsie] Alert failed: {e}")
+
+            metrics.snapshot()
+
+        except CrewTimeout as e:
+            log.error(f"[Newsie] TIMEOUT: {e}")
+            write_log("Newsie", f"TIMEOUT: {e}", "sentiment_signal", "timeout")
+        except Exception as e:
+            log.error(f"[Newsie] {e}")
+            write_log("Newsie", str(e), "sentiment_signal", "error")
 
 
 def run_futurist_cycle():
@@ -659,7 +953,14 @@ class TradingSystemOrchestrator:
         self.scheduler.add_job(run_news,         IntervalTrigger(minutes=30), id="newsie")
         self.scheduler.add_job(run_pattern,      IntervalTrigger(hours=2),    id="pattern")   # was 6h
         self.scheduler.add_job(run_daily_trend,  IntervalTrigger(hours=4),    id="trendy_interval")  # intraday
-        self.scheduler.add_job(run_futurist_prediction_signal, IntervalTrigger(hours=2), id="futurist_signal")  # NEW: signal confidence loop
+
+        # Signal confidence loop agents (NEW)
+        self.scheduler.add_job(run_synthesis_signal, IntervalTrigger(minutes=5),  id="synthesis_signal")
+        self.scheduler.add_job(run_trendy_signal,    IntervalTrigger(hours=4),    id="trendy_signal")
+        self.scheduler.add_job(run_pattern_signal,   IntervalTrigger(hours=2),    id="pattern_signal")
+        self.scheduler.add_job(run_newsie_signal,    IntervalTrigger(minutes=30), id="newsie_signal")
+        self.scheduler.add_job(run_futurist_prediction_signal, IntervalTrigger(hours=2), id="futurist_signal")
+
         self.scheduler.add_job(run_futurist_cycle, IntervalTrigger(hours=2),  id="futurist")
         self.scheduler.add_job(run_georisk,      IntervalTrigger(hours=1),    id="georisk")   # hourly geopolitical scan
 
