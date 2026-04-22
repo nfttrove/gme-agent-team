@@ -737,6 +737,17 @@ def run_daily_aggregation():
         log.error(f"[Aggregator] {e}")
 
 
+@active_window_required
+def run_intraday_aggregation():
+    """Re-aggregate today's ticks into daily_candles so mid-day readers
+    (Trendy, Pattern, Futurist) see current-day data instead of yesterday's."""
+    try:
+        import daily_aggregator
+        daily_aggregator.aggregate_day()
+    except Exception as e:
+        log.error(f"[Aggregator-intraday] {e}")
+
+
 def run_learning_debrief():
     """4:30 PM ET — score predictions vs actuals and compute agent metrics."""
     log.info("[Learner] === Post-market debrief ===")
@@ -1115,6 +1126,7 @@ class TradingSystemOrchestrator:
         self.scheduler.add_job(run_standup_report,    CronTrigger(hour=11, minute=0),  id="standup_midday")
         self.scheduler.add_job(run_daily_trend,       CronTrigger(hour=20, minute=0),  id="trendy_eod")
         self.scheduler.add_job(run_daily_aggregation, CronTrigger(hour=16, minute=35), id="aggregator")
+        self.scheduler.add_job(run_intraday_aggregation, IntervalTrigger(minutes=5), id="aggregator_intraday")
         self.scheduler.add_job(run_standup_report,    CronTrigger(hour=16, minute=0),  id="standup_close")
 
         # Learning sessions — agents review their own performance and adapt

@@ -48,40 +48,55 @@ def aggregate_day(date_str: str | None = None):
 
         vwap = tp_vol_sum / vol_sum if vol_sum else 0.0
 
-        # First tick open
+        # First tick open (skip NULL opens — some tick sources only populate close)
         c.execute(
-            "SELECT open FROM price_ticks WHERE symbol=? AND timestamp LIKE ? ORDER BY timestamp ASC LIMIT 1",
+            "SELECT open FROM price_ticks WHERE symbol=? AND timestamp LIKE ? "
+            "AND open IS NOT NULL ORDER BY timestamp ASC LIMIT 1",
             (SYMBOL, f"{date_str}%"),
         )
         first = c.fetchone()
-        open_ = float(first[0]) if first else 0.0
 
-        # Last tick close
+        # Last tick close (skip NULLs)
         c.execute(
-            "SELECT close FROM price_ticks WHERE symbol=? AND timestamp LIKE ? ORDER BY timestamp DESC LIMIT 1",
+            "SELECT close FROM price_ticks WHERE symbol=? AND timestamp LIKE ? "
+            "AND close IS NOT NULL ORDER BY timestamp DESC LIMIT 1",
             (SYMBOL, f"{date_str}%"),
         )
         last = c.fetchone()
-        close = float(last[0]) if last else 0.0
+
+        # If open is still missing, fall back to the first available close
+        if first is None:
+            c.execute(
+                "SELECT close FROM price_ticks WHERE symbol=? AND timestamp LIKE ? "
+                "AND close IS NOT NULL ORDER BY timestamp ASC LIMIT 1",
+                (SYMBOL, f"{date_str}%"),
+            )
+            first = c.fetchone()
+
+        open_ = float(first[0]) if first and first[0] is not None else 0.0
+        close = float(last[0]) if last and last[0] is not None else 0.0
 
         # Atomic replace: both DELETE and INSERT in one transaction
-        conn.execute("BEGIN")
-        conn.execute("DELETE FROM daily_candles WHERE symbol=? AND date=?", (SYMBOL, date_str))
-        conn.execute(
-            """
-            INSERT INTO daily_candles (symbol, date, open, high, low, close, volume, vwap)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-            """,
-            (SYMBOL, date_str, open_, day_high, day_low, close, vol_sum, round(vwap, 4)),
-        )
-        conn.execute("COMMIT")
+        try:
+            conn.execute("BEGIN")
+            conn.execute("DELETE FROM daily_candles WHERE symbol=? AND date=?", (SYMBOL, date_str))
+            conn.execute(
+                """
+                INSERT INTO daily_candles (symbol, date, open, high, low, close, volume, vwap)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (SYMBOL, date_str, open_, day_high, day_low, close, vol_sum, round(vwap, 4)),
+            )
+            conn.execute("COMMIT")
+        except Exception:
+            conn.execute("ROLLBACK")
+            raise
         print(
             f"[aggregator] {date_str} — "
             f"O:{open_:.2f} H:{day_high:.2f} L:{day_low:.2f} C:{close:.2f} "
             f"V:{int(vol_sum)} VWAP:{vwap:.4f} ({tick_count} ticks)"
         )
     except Exception as e:
-        conn.execute("ROLLBACK")
         print(f"[aggregator] ERROR for {date_str}: {e}")
         raise
     finally:
