@@ -20,7 +20,10 @@ import logging
 import uuid
 from contextlib import contextmanager
 from datetime import datetime
+from zoneinfo import ZoneInfo
 from pathlib import Path
+
+ET = ZoneInfo("America/New_York")
 
 DB_PATH = os.path.join(os.path.dirname(__file__), "agent_memory.db")
 METRICS_FILE = os.path.join(os.path.dirname(__file__), "metrics.jsonl")
@@ -67,7 +70,7 @@ class MetricsLogger:
                 "name": name,
                 "duration_s": duration,
                 "status": status,
-                "ts": datetime.now().isoformat(),
+                "ts": datetime.now(ET).isoformat(),
             })
             self._write_log(name, f"duration={duration}s status={status}", status)
 
@@ -78,7 +81,7 @@ class MetricsLogger:
         conn = sqlite3.connect(DB_PATH)
         conn.execute(
             "INSERT INTO predictions (timestamp, horizon, predicted_price, confidence, reasoning) VALUES (?,?,?,?,?)",
-            (datetime.now().isoformat(), horizon, predicted, confidence, reasoning),
+            (datetime.now(ET).isoformat(), horizon, predicted, confidence, reasoning),
         )
         conn.commit()
         conn.close()
@@ -129,7 +132,7 @@ class MetricsLogger:
                (order_id, timestamp, action, symbol, quantity, entry_price, stop_loss, take_profit,
                 confidence, status, paper_trade, notes)
                VALUES (?,?,?,?,?,?,?,?,?,?,1,?)""",
-            (oid, datetime.now().isoformat(), action, "GME", quantity, entry_price,
+            (oid, datetime.now(ET).isoformat(), action, "GME", quantity, entry_price,
              stop_loss, take_profit, confidence, status, notes),
         )
         trade_id = cur.lastrowid
@@ -164,7 +167,7 @@ class MetricsLogger:
             "agent": agent_role,
             "from": from_model,
             "to": to_model,
-            "ts": datetime.now().isoformat(),
+            "ts": datetime.now(ET).isoformat(),
         })
         log.warning(f"[metrics] Fallback: {agent_role} switched {from_model} → {to_model}")
 
@@ -200,7 +203,7 @@ class MetricsLogger:
             conn = sqlite3.connect(DB_PATH)
             conn.execute(
                 "INSERT INTO agent_logs (agent_name, timestamp, task_type, content, status) VALUES (?,?,?,?,?)",
-                (agent, datetime.now().isoformat(), "metrics", content, status),
+                (agent, datetime.now(ET).isoformat(), "metrics", content, status),
             )
             conn.commit()
             conn.close()

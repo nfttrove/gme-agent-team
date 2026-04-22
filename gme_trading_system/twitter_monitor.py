@@ -32,6 +32,7 @@ import os
 import sqlite3
 import time
 from datetime import datetime
+from zoneinfo import ZoneInfo
 
 import requests
 from dotenv import load_dotenv
@@ -41,7 +42,7 @@ from circuit_breaker import get_breaker, CircuitOpenError
 load_dotenv()
 
 log = logging.getLogger(__name__)
-
+ET = ZoneInfo("America/New_York")
 X_BEARER_TOKEN  = os.getenv("X_BEARER_TOKEN", "")
 SUPABASE_URL    = os.getenv("SUPABASE_URL", "")
 SUPABASE_KEY    = os.getenv("SUPABASE_KEY", "")
@@ -303,7 +304,7 @@ class TwitterMonitor:
         for tweet in tweets:
             tweet_id = str(tweet.get("id", ""))
             text = tweet.get("text", "")
-            created_at = tweet.get("created_at", datetime.now().isoformat())
+            created_at = tweet.get("created_at", datetime.now(ET).isoformat())
 
             # Skip if already processed
             if self._already_stored(tweet_id):
@@ -374,7 +375,7 @@ class TwitterMonitor:
             conn.execute(
                 "INSERT OR IGNORE INTO social_posts "
                 "(timestamp, username, tweet_id, content, signal_type) VALUES (?,?,?,?,?)",
-                (datetime.now().isoformat(), username, str(tweet_id), text, signal_type),
+                (datetime.now(ET).isoformat(), username, str(tweet_id), text, signal_type),
             )
             conn.commit()
             conn.close()

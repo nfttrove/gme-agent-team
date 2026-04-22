@@ -28,6 +28,7 @@ import sqlite3
 import time
 from dataclasses import dataclass
 from datetime import date, datetime, timedelta
+from zoneinfo import ZoneInfo
 
 import requests
 from dotenv import load_dotenv
@@ -37,7 +38,7 @@ from circuit_breaker import get_breaker, CircuitOpenError
 load_dotenv()
 
 log = logging.getLogger(__name__)
-
+ET = ZoneInfo("America/New_York")
 DB_PATH = os.path.join(os.path.dirname(__file__), "agent_memory.db")
 
 # SEC requires a user-agent header identifying your app and contact email
@@ -313,7 +314,7 @@ class SECScanner:
         recent_8k = self.get_recent_filings(cik, ["8-K"], days_back=30)
 
         report = {
-            "timestamp": datetime.now().isoformat(),
+            "timestamp": datetime.now(ET).isoformat(),
             "ticker": "GME",
             "checks": {},
             "overall_status": "GREEN",
@@ -364,7 +365,7 @@ class SECScanner:
                         headline, url, confidence, action, timeline_months)
                        VALUES (?,?,?,?,?,?,?,?,?,?)""",
                     (
-                        datetime.now().isoformat(),
+                        datetime.now(ET).isoformat(),
                         sig.ticker, sig.signal_name, sig.filing_type,
                         sig.filing_date, sig.headline, sig.url,
                         sig.confidence, sig.action, sig.timeline_months,
@@ -494,7 +495,7 @@ class SECScanner:
         scion_13f = self.fetch_scion_latest_13f()
 
         report = {
-            "timestamp": datetime.now().isoformat(),
+            "timestamp": datetime.now(ET).isoformat(),
             "rc_ventures": {
                 "known_positions": KEY_INVESTOR_REGISTRY["RC_VENTURES"]["known_positions"],
                 "recent_filings": rc_filings,
@@ -519,7 +520,7 @@ class SECScanner:
             conn = sqlite3.connect(DB_PATH)
             conn.execute(
                 "INSERT INTO agent_logs (agent_name, timestamp, task_type, content, status) VALUES (?,?,?,?,?)",
-                ("CTO", datetime.now().isoformat(), "investor_intel", summary, "ok"),
+                ("CTO", datetime.now(ET).isoformat(), "investor_intel", summary, "ok"),
             )
             conn.commit()
             conn.close()
