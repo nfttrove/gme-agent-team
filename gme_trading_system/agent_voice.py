@@ -38,9 +38,10 @@ class Voice:
 # Agents currently producing real output (CrewAI-bypass rewrites). Add more
 # here as they are fixed. Order matters — forwarded in this order each run.
 VOICES: list[Voice] = [
-    Voice("Futurist", "prediction_signal", "🔮", "Futurist", max_per_run=2),
-    Voice("Newsie",   "news",              "📰", "Newsie",   max_per_run=1),
-    Voice("Chatty",   "commentary",        "💬", "Chatty",   max_per_run=2),
+    Voice("Synthesis", "synthesis",         "🧠", "Synthesis", max_per_run=1),
+    Voice("Futurist",  "prediction_signal", "🔮", "Futurist",  max_per_run=2),
+    Voice("Newsie",    "news",              "📰", "Newsie",    max_per_run=1),
+    Voice("Chatty",    "commentary",        "💬", "Chatty",    max_per_run=2),
 ]
 
 

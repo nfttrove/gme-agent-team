@@ -1014,18 +1014,83 @@ def run_cto_structural_scan():
 
 @active_window_required
 def run_synthesis():
-    """Every 5 min — cross-agent intelligence synthesis so all agents share a common picture."""
-    from agents import synthesis_agent
-    from tasks import synthesis_task
+    """Every 5 min — cross-agent intelligence synthesis so all agents share a common picture.
+
+    Bypasses CrewAI (Gemma tool-calling issue — see feedback memory). The old
+    `synthesis_task` was created at import time with placeholder strings
+    ('unknown', 'No agent logs available') that never got populated, so
+    Synthesis was literally logging its own prompt as output for months.
+
+    Now: fetch the actual recent agent logs + live price + indicators, hand
+    them to Gemma directly, ask for a one-line structured consensus brief.
+    """
+    write_log("Synthesis", "Composing consensus brief", "synthesis", "running")
     try:
-        crew = Crew(agents=[synthesis_agent], tasks=[synthesis_task],
-                    process=Process.sequential, verbose=False)
-        result = safe_kickoff_with_fallback(crew, agent_name="Synthesis", timeout_seconds=180, label="synthesis")
-        log.info(f"[Synthesis] {str(result)[:120]}")
-        write_log("Synthesis", str(result)[:500], "synthesis")
-    except CrewTimeout as e:
-        log.error(f"[Synthesis] TIMEOUT: {e}")
-        write_log("Synthesis", f"TIMEOUT: {e}", "synthesis", "timeout")
+        conn = sqlite3.connect(DB_PATH)
+        conn.row_factory = sqlite3.Row
+
+        price_row = conn.execute(
+            "SELECT close, volume, timestamp FROM price_ticks WHERE symbol='GME' "
+            "ORDER BY timestamp DESC LIMIT 1"
+        ).fetchone()
+        if not price_row:
+            write_log("Synthesis", "no price data available", "synthesis", "error")
+            conn.close()
+            return
+        price = float(price_row["close"])
+
+        # Pull most-recent ok log per agent so we get *the current view*, not
+        # a scroll of stale repeats.
+        agents_of_interest = ("Valerie", "Newsie", "Pattern", "Trendy", "Futurist",
+                              "CTO", "GeoRisk", "SafetyGate")
+        per_agent: dict[str, str] = {}
+        for name in agents_of_interest:
+            row = conn.execute(
+                "SELECT content FROM agent_logs WHERE agent_name=? AND status='ok' "
+                "AND timestamp > datetime('now','-4 hours') "
+                "ORDER BY timestamp DESC LIMIT 1",
+                (name,),
+            ).fetchone()
+            if row and row[0]:
+                per_agent[name] = row[0][:250].replace("\n", " ").strip()
+        conn.close()
+
+        if not per_agent:
+            write_log("Synthesis", "no recent agent logs in last 4h", "synthesis", "error")
+            return
+
+        logs_block = "\n".join(f"  {name}: {content}" for name, content in per_agent.items())
+        prompt = (
+            "You are the team's Synthesis agent. Produce ONE line summarising the current consensus, "
+            "in this EXACT format (keep labels, replace bracketed values):\n"
+            "PRICE: $XX.XX | DATA: [clean/degraded] | NEWS: [bullish/bearish/neutral, score] | "
+            "TREND: [up/down/sideways] | PREDICTION: [bias, confidence%] | "
+            "STRUCTURAL: [GREEN/YELLOW/RED] | CONSENSUS: [BULLISH/BEARISH/NEUTRAL] [XX]%\n\n"
+            "Rules: use ONLY the data below, do not invent. If an agent is missing, write 'n/a'. "
+            "Consensus = majority of the non-n/a directional signals. No preamble, no markdown, no quotes.\n\n"
+            f"LIVE DATA:\n  Price: ${price:.2f}\n  Recent per-agent outputs (last 4h):\n{logs_block}\n"
+        )
+
+        ollama_host = os.getenv("OLLAMA_HOST", "http://localhost:11434")
+        r = requests.post(
+            f"{ollama_host}/api/generate",
+            json={"model": "gemma2:9b", "prompt": prompt, "stream": False,
+                  "options": {"num_predict": 160, "temperature": 0.2}},
+            timeout=45,
+        )
+        r.raise_for_status()
+        brief = r.json().get("response", "").strip().strip('"').strip("'")
+        brief = brief.split("\n")[0].strip()[:500]
+
+        if not brief or "PRICE" not in brief.upper():
+            write_log("Synthesis", f"malformed brief: {brief[:200]}", "synthesis", "error")
+            return
+
+        log.info(f"[Synthesis] {brief}")
+        write_log("Synthesis", brief, "synthesis")
+    except requests.Timeout:
+        log.error("[Synthesis] Ollama timeout")
+        write_log("Synthesis", "Ollama timeout after 45s", "synthesis", "timeout")
     except Exception as e:
         log.error(f"[Synthesis] {e}")
         write_log("Synthesis", str(e), "synthesis", "error")
