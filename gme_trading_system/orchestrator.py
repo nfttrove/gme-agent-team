@@ -39,6 +39,9 @@ from telegram_bot import start_bot_thread, is_halted
 from supabase_sync import start_sync_thread
 from safe_kickoff import safe_kickoff, CrewTimeout
 from db_maintenance import enable_wal_mode
+from signal_manager import SignalManager
+from notifier import notify_signal_alert
+from models.agent_outputs import FuturistPrediction
 
 load_dotenv()
 
@@ -198,6 +201,127 @@ def run_daily_trend():
 
 
 @market_hours_required
+@active_window_required
+def run_futurist_prediction_signal():
+    """Futurist agent prediction with signal confidence logging.
+
+    Runs Futurist solo (not full crew) to:
+    1. Generate price prediction with confidence score
+    2. Log signal to signal_alerts table
+    3. Send Telegram alert with entry/stop/target for team execution
+    4. Enable feedback loop (team logs decision → win rate tracking)
+    """
+    from agents import futurist_agent
+    from tasks import futurist_task
+    import json
+    import re
+    import uuid
+
+    log.info("[Futurist] Starting prediction signal cycle (DeepSeek-r1:8b)")
+    write_log("Futurist", "Running price prediction signal cycle", "prediction_signal", "running")
+
+    with metrics.cycle("futurist_prediction"):
+        try:
+            # Run Futurist solo (not full crew)
+            crew = Crew(
+                agents=[futurist_agent],
+                tasks=[futurist_task],
+                process=Process.sequential,
+                verbose=True,
+            )
+            result = safe_kickoff(crew, timeout_seconds=300, label="futurist_prediction")
+
+            # Parse output to FuturistPrediction Pydantic model
+            # DeepSeek-r1 output includes <thought> block + final JSON
+            prediction_data = _extract_futurist_prediction(str(result))
+            if not prediction_data:
+                log.warning("[Futurist] Could not parse prediction from output")
+                write_log("Futurist", f"Failed to parse prediction:\n{str(result)[:500]}", "prediction_signal", "parse_error")
+                return
+
+            try:
+                prediction = FuturistPrediction(**prediction_data)
+            except Exception as e:
+                log.error(f"[Futurist] Pydantic validation failed: {e}")
+                write_log("Futurist", f"Validation error: {e}", "prediction_signal", "validation_error")
+                return
+
+            # Log raw output for reference
+            write_log("Futurist", str(result)[:1000], "prediction_signal", "ok")
+
+            # Log signal with confidence
+            manager = SignalManager(DB_PATH)
+            alert_id = manager.log_alert(
+                agent_name="Futurist",
+                signal_type=prediction.signal_type,
+                confidence=prediction.confidence,
+                severity="HIGH" if prediction.confidence >= 0.80 else ("MEDIUM" if prediction.confidence >= 0.65 else "LOW"),
+                entry_price=prediction.predicted_price * 0.99,  # 1% slippage allowance
+                stop_loss=prediction.stop_loss,
+                take_profit=prediction.take_profit,
+                reasoning=prediction.reasoning[:500] if prediction.reasoning else "",
+            )
+            log.info(f"[Futurist] Signal logged: {alert_id[:8]} | confidence={prediction.confidence:.0%}")
+
+            # Send Telegram alert
+            try:
+                notify_signal_alert(
+                    agent_name="Futurist",
+                    signal_type=prediction.signal_type,
+                    confidence=prediction.confidence,
+                    entry_price=prediction.predicted_price * 0.99,
+                    stop_loss=prediction.stop_loss,
+                    take_profit=prediction.take_profit,
+                    reasoning=prediction.reasoning,
+                    alert_id=alert_id,
+                )
+                log.info("[Futurist] Telegram alert sent")
+            except Exception as e:
+                log.warning(f"[Futurist] Telegram alert failed (non-critical): {e}")
+
+            metrics.snapshot()
+
+        except CrewTimeout as e:
+            log.error(f"[Futurist] TIMEOUT: {e}")
+            write_log("Futurist", f"TIMEOUT: {e}", "prediction_signal", "timeout")
+        except Exception as e:
+            log.error(f"[Futurist] {e}")
+            write_log("Futurist", str(e), "prediction_signal", "error")
+
+
+def _extract_futurist_prediction(raw_output: str) -> dict:
+    """Extract FuturistPrediction JSON from agent output.
+
+    Handles:
+    - Plain JSON (Gemma output)
+    - JSON after <thought> block (DeepSeek-r1 output)
+    - Markdown code blocks ```json ... ```
+    """
+    # Try 1: Extract JSON from <thought>...</thought> block (DeepSeek-r1)
+    thought_match = re.search(r'<thought>.*?</thought>\s*(.*)', raw_output, re.DOTALL)
+    if thought_match:
+        raw_output = thought_match.group(1)
+
+    # Try 2: Extract from markdown code block
+    code_match = re.search(r'```(?:json)?\s*(\{.*?\})\s*```', raw_output, re.DOTALL)
+    if code_match:
+        json_str = code_match.group(1)
+    else:
+        # Try 3: Extract first JSON object
+        json_match = re.search(r'\{.*\}', raw_output, re.DOTALL)
+        json_str = json_match.group(0) if json_match else None
+
+    if not json_str:
+        return None
+
+    try:
+        data = json.loads(json_str)
+        return data
+    except json.JSONDecodeError:
+        log.warning("[Futurist] JSON parsing failed on extracted string")
+        return None
+
+
 def run_futurist_cycle():
     """Full strategic cycle: gate check → Futurist → Boss → Trader Joe if approved."""
     if is_halted():
@@ -535,6 +659,7 @@ class TradingSystemOrchestrator:
         self.scheduler.add_job(run_news,         IntervalTrigger(minutes=30), id="newsie")
         self.scheduler.add_job(run_pattern,      IntervalTrigger(hours=2),    id="pattern")   # was 6h
         self.scheduler.add_job(run_daily_trend,  IntervalTrigger(hours=4),    id="trendy_interval")  # intraday
+        self.scheduler.add_job(run_futurist_prediction_signal, IntervalTrigger(hours=2), id="futurist_signal")  # NEW: signal confidence loop
         self.scheduler.add_job(run_futurist_cycle, IntervalTrigger(hours=2),  id="futurist")
         self.scheduler.add_job(run_georisk,      IntervalTrigger(hours=1),    id="georisk")   # hourly geopolitical scan
 
