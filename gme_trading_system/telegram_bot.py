@@ -421,8 +421,49 @@ def handle_command(text: str):
             "• Trading strategies & signals\n"
             "• Market & geopolitical context\n"
             "• Questions about curated research docs\n\n"
+            "/compare <question> — Get responses from both Gemma & DeepSeek (compare approaches)\n\n"
             "<i>Responses use curated GameStop research, real-time data, and AI analysis.</i>"
         )
+
+    elif cmd == "/compare" and args:
+        _send("🤔 Comparing Gemma & DeepSeek... (takes ~1 minute)")
+        question = " ".join(args)
+        try:
+            context = _build_context()
+            system_prompt = """You are the GME trading team's factual intelligence assistant.
+You have access to real-time trading data. Answer questions about GME, markets, and geopolitics.
+Be factual and honest — tell the truth even if it contradicts bullish sentiment.
+Keep responses brief (1 paragraph max). Think: Bloomberg meets a knowledgeable friend."""
+
+            user_message = f"{context}\n\nQuestion: {question}"
+            responses = {}
+
+            # Get both models' responses
+            for model_name in ["gemma2:9b", "deepseek-r1:8b"]:
+                try:
+                    r = requests.post("http://localhost:11434/api/generate", json={
+                        "model": model_name,
+                        "prompt": f"{system_prompt}\n\n{user_message}",
+                        "stream": False,
+                    }, timeout=60)
+                    if r.status_code == 200:
+                        responses[model_name] = r.json().get("response", "").strip()
+                except Exception as e:
+                    responses[model_name] = f"Error: {e}"
+
+            # Format both responses
+            if responses.get("gemma2:9b") or responses.get("deepseek-r1:8b"):
+                msg = "<b>🤖 Model Comparison</b>\n\n"
+                msg += f"<b>Q:</b> {question}\n\n"
+                if responses.get("gemma2:9b"):
+                    msg += f"<b>Gemma (Fast):</b>\n{responses['gemma2:9b']}\n\n"
+                if responses.get("deepseek-r1:8b"):
+                    msg += f"<b>DeepSeek (Complex):</b>\n{responses['deepseek-r1:8b']}"
+                _send(msg)
+            else:
+                _send("❌ Both models failed. Check Ollama connection.")
+        except Exception as e:
+            _send(f"Compare failed: {e}")
 
     else:
         _send(
@@ -558,7 +599,10 @@ Highlight any conflicts or different angles. Keep it brief for Telegram (1-2 sho
 
 
 def _ask_llm(question: str, context: str) -> str:
-    """Ask a question to LLM with fallback chain: Notebook LM → Gemma → DeepSeek → Gemini (paid)."""
+    """Ask a question with fallback chain: Notebook LM → Gemma → DeepSeek → Gemini (paid).
+
+    Uses local Ollama models first, falls back to paid APIs only if both local models fail.
+    """
 
     system_prompt = """You are the GME trading team's factual intelligence assistant.
 You have access to real-time trading data. Answer questions about GME, markets, and geopolitics.
@@ -574,27 +618,32 @@ Think: Bloomberg terminal meets a knowledgeable friend who reads a lot."""
         log.info("[tgbot] Response from Notebook LM")
         return notebook_response
 
-    # Try Gemma 2 9b via Ollama (free, local)
-    try:
-        r = requests.post("http://localhost:11434/api/generate", json={
-            "model": "gemma2:9b",
-            "prompt": f"{system_prompt}\n\n{user_message}",
-            "stream": False,
-        }, timeout=30)
-        if r.status_code == 200:
-            return r.json().get("response", "").strip()
-    except Exception as e:
-        log.debug(f"[tgbot] Gemma failed: {e}")
+    # Try local Ollama models: Gemma → DeepSeek
+    for model_name in ["gemma2:9b", "deepseek-r1:8b"]:
+        try:
+            r = requests.post("http://localhost:11434/api/generate", json={
+                "model": model_name,
+                "prompt": f"{system_prompt}\n\n{user_message}",
+                "stream": False,
+            }, timeout=30)
+            if r.status_code == 200:
+                response = r.json().get("response", "").strip()
+                log.info(f"[tgbot] Response from {model_name}")
+                return response
+        except Exception as e:
+            log.debug(f"[tgbot] {model_name} failed: {e}")
 
-    # Try Gemini Flash (paid fallback, only if free options fail)
-    try:
-        import google.generativeai as genai
-        genai.configure(api_key=os.getenv("GOOGLE_API_KEY"))
-        model = genai.GenerativeModel("gemini-2.5-flash")
-        response = model.generate_content(f"{system_prompt}\n\n{user_message}")
-        return response.text.strip()
-    except Exception as e:
-        log.debug(f"[tgbot] Gemini failed: {e}")
+    # Try Gemini Flash (paid fallback, only if local models fail)
+    if os.getenv("GOOGLE_API_KEY"):
+        try:
+            import google.generativeai as genai
+            genai.configure(api_key=os.getenv("GOOGLE_API_KEY"))
+            model = genai.GenerativeModel("gemini-2.5-flash")
+            response = model.generate_content(f"{system_prompt}\n\n{user_message}")
+            log.info("[tgbot] Response from Gemini Flash")
+            return response.text.strip()
+        except Exception as e:
+            log.debug(f"[tgbot] Gemini failed: {e}")
 
     return "Sorry, no LLMs available right now. Try again later."
 
