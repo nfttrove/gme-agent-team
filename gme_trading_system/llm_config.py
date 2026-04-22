@@ -98,12 +98,21 @@ def get_llm_fallback_chain(agent_name: str) -> list:
     """
     Return ordered list of LLMs to try if primary fails.
 
-    Chain stops at first successful response.
+    Prioritizes local Ollama models. Includes Gemini only if API key available.
     """
     primary = get_llm_for_agent(agent_name)
+    fallbacks = []
 
-    # Fallback order: Flash (fast) → Pro (expensive, for complex tasks)
-    fallbacks = [gemini_flash, gemini_pro]
+    # If primary is Gemma, fallback to DeepSeek (better reasoning)
+    # If primary is DeepSeek, fallback to Gemma (faster)
+    if primary.model == "ollama/gemma2:9b":
+        fallbacks.append(deepseek_r1_local)
+    else:
+        fallbacks.append(gemma_local)
+
+    # Only add Gemini if API key is configured
+    if os.getenv("GOOGLE_API_KEY"):
+        fallbacks.extend([gemini_flash, gemini_pro])
 
     return [primary] + fallbacks
 

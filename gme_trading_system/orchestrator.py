@@ -92,6 +92,9 @@ def init_db():
 def check_ollama_ready() -> bool:
     """Verify Ollama is running and has required models.
 
+    Requires: gemma2:9b (minimum)
+    Recommended: deepseek-r1:8b (for complex reasoning agents)
+
     Logs failure and returns False if Ollama is unreachable or missing Gemma.
     """
     ollama_host = os.getenv("OLLAMA_HOST", "http://localhost:11434")
@@ -100,10 +103,11 @@ def check_ollama_ready() -> bool:
         models = [m["name"] for m in response.json().get("models", [])]
 
         if "gemma2:9b" not in models:
-            log.error(f"[check_ollama_ready] gemma2:9b not found. Available: {models}")
+            log.error(f"[check_ollama_ready] REQUIRED: gemma2:9b not found. Available: {models}")
             return False
 
-        log.info(f"[check_ollama_ready] Ollama ready with {len(models)} models")
+        has_deepseek = "deepseek-r1:8b" in models
+        log.info(f"[check_ollama_ready] Ollama ready ({len(models)} models) - DeepSeek: {'YES' if has_deepseek else 'NO (fallback to Gemma for complex agents)'}")
         return True
     except requests.exceptions.ConnectionError:
         log.error(f"[check_ollama_ready] Ollama unreachable at {ollama_host}")
