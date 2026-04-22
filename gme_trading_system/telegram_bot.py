@@ -807,19 +807,17 @@ def _register_commands():
     if not ENABLED:
         return
     commands = [
-        {"command": "help", "description": "Full command guide and chat capabilities"},
-        {"command": "status", "description": "System health, agents, tick count"},
-        {"command": "balance", "description": "Live IBKR account balance"},
-        {"command": "ticks", "description": "Price ticks received today"},
-        {"command": "agents", "description": "Last run time for each agent"},
-        {"command": "brief", "description": "Today's strategy in plain English"},
-        {"command": "update", "description": "Force sync local data to Supabase now"},
-        {"command": "halt", "description": "Pause all new trades (risk override)"},
-        {"command": "resume", "description": "Re-enable trading"},
-        {"command": "frequency", "description": "Show/set notification frequency"},
-        {"command": "trove", "description": "Deep-value screen: /trove [TICKER ...] — scores up to 20 tickers"},
-        {"command": "learn", "description": "Teach agents a rule: /learn \"<lesson>\" --why \"<reason>\""},
-        {"command": "lessons", "description": "Recall learned lessons by topic"},
+        {"command": "status", "description": "System health check"},
+        {"command": "standup", "description": "Agent daily performance (signals, win rates, ROI)"},
+        {"command": "agents", "description": "Last agent run times"},
+        {"command": "ticks", "description": "Price data received"},
+        {"command": "brief", "description": "Strategy briefing"},
+        {"command": "trove", "description": "Deep-value screen: /trove [TICKERS]"},
+        {"command": "update", "description": "Sync to Supabase"},
+        {"command": "test", "description": "Run Playwright tests"},
+        {"command": "frequency", "description": "Notification settings"},
+        {"command": "learn", "description": "Teach agents rules"},
+        {"command": "lessons", "description": "View learned rules"},
     ]
     try:
         requests.post(f"{BASE_URL}/setMyCommands", json={"commands": commands}, timeout=10)
