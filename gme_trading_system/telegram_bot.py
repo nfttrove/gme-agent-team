@@ -4,6 +4,7 @@ Two-way Telegram Bot — command interface for the GME trading system.
 Commands:
   /help        — full command guide and chat capabilities
   /status      — system health, agents, tick count
+  /standup     — agent daily standup (signals, win rates, ROI)
   /balance     — live IBKR account balance
   /ticks       — price ticks received today
   /agents      — last run time for each agent
@@ -266,6 +267,80 @@ def handle_command(text: str):
         except Exception as e:
             _send(f"Agent log error: {e}")
 
+    elif cmd == "/standup":
+        try:
+            conn = sqlite3.connect(DB_PATH)
+
+            # Get signals from last 24 hours by agent
+            signals = conn.execute("""
+                SELECT agent_name, COUNT(*) as total, AVG(confidence) as avg_conf
+                FROM signal_alerts
+                WHERE datetime(timestamp) > datetime('now', '-1 day')
+                GROUP BY agent_name
+                ORDER BY total DESC
+            """).fetchall()
+
+            if not signals:
+                _send("📊 No signals in last 24 hours yet.")
+                conn.close()
+                return
+
+            # Get feedback stats
+            feedback_stats = {}
+            for agent_name, _, _ in signals:
+                feedback = conn.execute("""
+                    SELECT
+                        COUNT(*) as total_feedback,
+                        SUM(CASE WHEN action_taken = 'executed' THEN 1 ELSE 0 END) as executed,
+                        SUM(CASE WHEN action_taken = 'executed' AND pnl_pct > 0 THEN 1 ELSE 0 END) as wins,
+                        AVG(CASE WHEN action_taken = 'executed' THEN pnl_pct END) as avg_pnl_pct
+                    FROM signal_feedback sf
+                    JOIN signal_alerts sa ON sf.alert_id = sa.id
+                    WHERE sa.agent_name = ? AND datetime(sf.execution_timestamp) > datetime('now', '-1 day')
+                """, (agent_name,)).fetchone()
+                if feedback:
+                    feedback_stats[agent_name] = feedback
+
+            # Calculate team totals
+            total_signals = sum(s[1] for s in signals)
+            total_executed = sum(f[1] or 0 for f in feedback_stats.values())
+            total_wins = sum(f[2] or 0 for f in feedback_stats.values())
+            team_roi = (total_wins / total_executed * 100) if total_executed > 0 else 0
+
+            lines = ["<b>🤖 AGENT DAILY STANDUP</b>\n"]
+
+            for agent_name, total, avg_conf in signals:
+                fb = feedback_stats.get(agent_name, (0, 0, 0, None))
+                executed = fb[1] or 0
+                wins = fb[2] or 0
+                win_rate = (wins / executed * 100) if executed > 0 else 0
+                conf_pct = int(avg_conf * 100) if avg_conf else 0
+
+                status = "✨" if win_rate == 100 and executed > 0 else "✅" if win_rate >= 67 else "⚠️ " if executed > 0 else "🔹"
+                lines.append(f"{status} <b>{agent_name}</b>: {total} signals, {conf_pct}% confidence")
+                if executed > 0:
+                    lines.append(f"   → {executed} executed, {wins} wins ({win_rate:.0f}% win rate)")
+
+            lines.append(f"\n<b>📈 Team ROI: {total_wins}/{total_executed} wins ({team_roi:.0f}% win rate)</b>")
+
+            # Highlight best/worst
+            if feedback_stats:
+                best = max([(a, f[2]/f[1]*100 if f[1] else 0) for a, f in feedback_stats.items() if f[1]],
+                          key=lambda x: x[1], default=("N/A", 0))
+                worst = min([(a, f[2]/f[1]*100 if f[1] else 0) for a, f in feedback_stats.items() if f[1]],
+                           key=lambda x: x[1], default=("N/A", 0))
+
+                if best[0] != "N/A":
+                    lines.append(f"🌟 Best: <b>{best[0]}</b> ({best[1]:.0f}%)")
+                if worst[0] != "N/A" and worst[1] < 100:
+                    lines.append(f"📍 Needs tuning: <b>{worst[0]}</b> ({worst[1]:.0f}%)")
+
+            conn.close()
+            _send("\n".join(lines))
+        except Exception as e:
+            _send(f"Standup error: {e}")
+            log.error(f"[tgbot] /standup failed: {e}")
+
     elif cmd == "/halt":
         _halt_flag.set()
         open(_HALT_FILE, "w").close()
@@ -463,6 +538,7 @@ def handle_command(text: str):
             "<b>📚 GME Trading Bot — Command Guide</b>\n\n"
             "<b>System Commands:</b>\n"
             "/status — system health, tick count, last agent activity\n"
+            "/standup — agent daily standup (signals, win rates, team ROI)\n"
             "/agents — last run time for each agent\n"
             "/ticks — price data received today\n"
             "/balance — live IBKR account balance\n\n"
@@ -534,6 +610,7 @@ Keep responses brief (1 paragraph max). Think: Bloomberg meets a knowledgeable f
             "<b>Available commands:</b>\n"
             "/help — full command guide and chat capabilities\n"
             "/status — system health\n"
+            "/standup — agent daily standup (ROI, win rates)\n"
             "/balance — IBKR account balance\n"
             "/ticks — price data received\n"
             "/agents — last agent activity\n"
