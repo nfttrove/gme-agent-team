@@ -215,6 +215,18 @@ def notify_periodic_brief(price: float, pct_change: float, consensus: str,
     return _send(msg)
 
 
+def _stale_data_reasons() -> list[str]:
+    """Return human-readable reasons the signal layer is reading stale data.
+    Empty list means data is fresh. Fails open (returns []) on any error so a
+    broken checker can never silently suppress legit signals."""
+    try:
+        import data_freshness
+        return [f"{name}: {detail}" for name, ok, detail in data_freshness.check() if not ok]
+    except Exception as e:
+        log.warning(f"[notify] freshness check errored, failing open: {e}")
+        return []
+
+
 def notify_signal_alert(agent_name: str, signal_type: str, confidence: float,
                         entry_price: float = None, stop_loss: float = None,
                         take_profit: float = None, reasoning: str = "",
@@ -224,6 +236,9 @@ def notify_signal_alert(agent_name: str, signal_type: str, confidence: float,
 
     This is the new primary alert function for the feedback loop system.
     Confidence 0.0-1.0 is converted to 0-100% display.
+
+    Signals are suppressed (replaced with a warning) when data_freshness checks
+    fail — agents reading stale tables produce confident-but-wrong narratives.
 
     Usage:
         notify_signal_alert(
@@ -237,6 +252,23 @@ def notify_signal_alert(agent_name: str, signal_type: str, confidence: float,
             alert_id="abc123"
         )
     """
+    stale = _stale_data_reasons()
+    if stale:
+        log.warning(f"[notify] Suppressing {agent_name} signal — stale data: {stale}")
+        warn = (
+            f"⚠️ <b>SIGNAL SUPPRESSED — STALE DATA</b>\n\n"
+            f"{agent_name} wanted to emit <b>{signal_type}</b> "
+            f"(confidence {confidence:.0%}) but the data layer is not fresh:\n\n"
+        )
+        for reason in stale[:5]:
+            warn += f"• {reason}\n"
+        warn += (
+            f"\nSignal withheld to avoid a confident-but-wrong alert. "
+            f"Check <code>/freshness</code>. "
+            f"\n<i>{datetime.now(ET).strftime('%Y-%m-%d %H:%M:%S')}</i>"
+        )
+        return _send(warn)
+
     # Determine severity based on confidence
     if confidence >= 0.80:
         severity = "🔴 HIGH"
