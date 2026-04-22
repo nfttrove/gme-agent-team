@@ -342,87 +342,138 @@ def run_daily_trend():
 @market_hours_required
 @active_window_required
 def run_futurist_prediction_signal():
-    """Futurist agent prediction with signal confidence logging.
+    """Futurist — direct LLM call with pre-fetched indicators + news + synthesis.
 
-    Runs Futurist solo (not full crew) to:
-    1. Generate price prediction with confidence score
-    2. Log signal to signal_alerts table
-    3. Send Telegram alert with entry/stop/target for team execution
-    4. Enable feedback loop (team logs decision → win rate tracking)
+    Bypasses CrewAI for the same reason as Chatty/Newsie: Gemma/DeepSeek can't
+    call tools, so CrewAI hands them stale/placeholder context and they either
+    hallucinate or time out (prior `predictions` table: 0 rows; last
+    prediction_signal log: timeout on 2026-04-22).
+
+    Flow: fetch live indicators → ask Gemma for structured JSON prediction →
+    validate with FuturistPrediction → insert into `predictions` → log signal
+    via SignalManager → Telegram alert (freshness-gated in notifier).
     """
-    from agents import futurist_agent
-    from tasks import futurist_task
     import json
-    import re
-    import uuid
 
-    log.info("[Futurist] Starting prediction signal cycle (DeepSeek-r1:8b)")
+    log.info("[Futurist] Starting prediction signal cycle")
     write_log("Futurist", "Running price prediction signal cycle", "prediction_signal", "running")
 
     with metrics.cycle("futurist_prediction"):
         try:
-            # Run Futurist solo (not full crew)
-            crew = Crew(
-                agents=[futurist_agent],
-                tasks=[futurist_task],
-                process=Process.sequential,
-                verbose=True,
-            )
-            result = safe_kickoff_with_fallback(crew, agent_name="Futurist", timeout_seconds=300, label="futurist_prediction")
+            from tools import IndicatorTool
+            ind = IndicatorTool()._run(lookback_days=30)
+            if not ind or "price" not in ind or not ind.get("price"):
+                write_log("Futurist", "no indicator data available", "prediction_signal", "error")
+                return
+            price = float(ind["price"])
 
-            # Parse output to FuturistPrediction Pydantic model
-            # DeepSeek-r1 output includes <thought> block + final JSON
-            prediction_data = _extract_futurist_prediction(str(result))
+            conn = sqlite3.connect(DB_PATH)
+            synthesis_row = conn.execute(
+                "SELECT content FROM agent_logs WHERE agent_name='Synthesis' "
+                "AND status='ok' ORDER BY timestamp DESC LIMIT 1"
+            ).fetchone()
+            news_row = conn.execute(
+                "SELECT content FROM agent_logs WHERE agent_name='Newsie' "
+                "AND status='ok' ORDER BY timestamp DESC LIMIT 1"
+            ).fetchone()
+            conn.close()
+
+            synthesis_text = (synthesis_row[0][:250] if synthesis_row else "No synthesis yet")
+            news_text = (news_row[0][:250] if news_row else "No news summary yet")
+
+            prompt = (
+                "You are the Futurist — GME price predictor for a 1-hour horizon.\n"
+                "Respond with ONE JSON object only (no markdown, no preamble, no explanation outside the JSON).\n\n"
+                f"LIVE DATA (use these — do not invent):\n"
+                f"  price={price:.2f}  vwap={ind.get('vwap',0):.2f}  "
+                f"ema8={ind.get('ema8',0):.2f}  ema21={ind.get('ema21',0):.2f}  "
+                f"rsi14={ind.get('rsi14',0):.1f}  rsi3={ind.get('rsi3',0):.1f}  "
+                f"atr14={ind.get('atr14',0):.3f}  pct_from_vwap={ind.get('pct_from_vwap',0):+.2f}%\n"
+                f"  above_vwap={ind.get('above_vwap')}  above_ema21={ind.get('above_ema21')}\n"
+                f"  Latest synthesis: {synthesis_text}\n"
+                f"  Latest news:      {news_text}\n\n"
+                "Schema (all fields required):\n"
+                '{"predicted_price": <float>, "confidence": <0.0-1.0>, '
+                '"horizon": "1h", "bias": "BULLISH"|"BEARISH"|"NEUTRAL"|"HOLD", '
+                '"reasoning": "<one sentence, max 200 chars>", '
+                '"stop_loss": <float>, "take_profit": <float>}\n\n'
+                "Rules: stop_loss MUST be below predicted_price for bullish, above for bearish. "
+                "Use ATR(14) to size stops (≈1.5×ATR from entry). Confidence ≤ 0.60 if signals conflict."
+            )
+
+            ollama_host = os.getenv("OLLAMA_HOST", "http://localhost:11434")
+            r = requests.post(
+                f"{ollama_host}/api/generate",
+                json={"model": "gemma2:9b", "prompt": prompt, "stream": False,
+                      "options": {"num_predict": 300, "temperature": 0.3}},
+                timeout=60,
+            )
+            r.raise_for_status()
+            raw = r.json().get("response", "")
+            prediction_data = _extract_json(raw)
             if not prediction_data:
                 log.warning("[Futurist] Could not parse prediction from output")
-                write_log("Futurist", f"Failed to parse prediction:\n{str(result)[:500]}", "prediction_signal", "parse_error")
+                write_log("Futurist", f"Failed to parse prediction:\n{raw[:500]}", "prediction_signal", "parse_error")
                 return
 
             try:
                 prediction = FuturistPrediction(**prediction_data)
             except Exception as e:
                 log.error(f"[Futurist] Pydantic validation failed: {e}")
-                write_log("Futurist", f"Validation error: {e}", "prediction_signal", "validation_error")
+                write_log("Futurist", f"Validation error: {e} | raw={raw[:400]}", "prediction_signal", "validation_error")
                 return
 
-            # Log raw output for reference
-            write_log("Futurist", str(result)[:1000], "prediction_signal", "ok")
-
-            # Log signal with confidence
-            manager = SignalManager(DB_PATH)
-            alert_id = manager.log_alert(
-                agent_name="Futurist",
-                signal_type=prediction.signal_type,
-                confidence=prediction.confidence,
-                severity="HIGH" if prediction.confidence >= 0.80 else ("MEDIUM" if prediction.confidence >= 0.65 else "LOW"),
-                entry_price=prediction.predicted_price * 0.99,  # 1% slippage allowance
-                stop_loss=prediction.stop_loss,
-                take_profit=prediction.take_profit,
-                reasoning=prediction.reasoning[:500] if prediction.reasoning else "",
+            # Persist prediction for accuracy tracking
+            now_iso = datetime.now(ET).isoformat()
+            conn = sqlite3.connect(DB_PATH)
+            conn.execute(
+                "INSERT INTO predictions (timestamp, horizon, predicted_price, confidence, reasoning) "
+                "VALUES (?, ?, ?, ?, ?)",
+                (now_iso, prediction.horizon, prediction.predicted_price,
+                 prediction.confidence, prediction.reasoning[:500]),
             )
-            log.info(f"[Futurist] Signal logged: {alert_id[:8]} | confidence={prediction.confidence:.0%}")
+            conn.commit()
+            conn.close()
 
-            # Send Telegram alert
-            try:
-                notify_signal_alert(
+            summary = (
+                f"{prediction.bias} {prediction.horizon} → ${prediction.predicted_price:.2f} "
+                f"(conf={prediction.confidence:.0%}) · {prediction.reasoning[:200]}"
+            )
+            write_log("Futurist", summary, "prediction_signal", "ok")
+            log.info(f"[Futurist] {summary}")
+
+            # Log signal and notify (only if confidence is actionable)
+            if prediction.confidence >= 0.60 and prediction.stop_loss and prediction.take_profit:
+                manager = SignalManager(DB_PATH)
+                alert_id = manager.log_alert(
                     agent_name="Futurist",
                     signal_type=prediction.signal_type,
                     confidence=prediction.confidence,
+                    severity="HIGH" if prediction.confidence >= 0.80 else ("MEDIUM" if prediction.confidence >= 0.65 else "LOW"),
                     entry_price=prediction.predicted_price * 0.99,
                     stop_loss=prediction.stop_loss,
                     take_profit=prediction.take_profit,
-                    reasoning=prediction.reasoning,
-                    alert_id=alert_id,
+                    reasoning=prediction.reasoning[:500],
                 )
-                log.info("[Futurist] Telegram alert sent")
-            except Exception as e:
-                log.warning(f"[Futurist] Telegram alert failed (non-critical): {e}")
+                try:
+                    notify_signal_alert(
+                        agent_name="Futurist",
+                        signal_type=prediction.signal_type,
+                        confidence=prediction.confidence,
+                        entry_price=prediction.predicted_price * 0.99,
+                        stop_loss=prediction.stop_loss,
+                        take_profit=prediction.take_profit,
+                        reasoning=prediction.reasoning,
+                        alert_id=alert_id,
+                    )
+                except Exception as e:
+                    log.warning(f"[Futurist] Telegram alert failed (non-critical): {e}")
 
             metrics.snapshot()
 
-        except CrewTimeout as e:
-            log.error(f"[Futurist] TIMEOUT: {e}")
-            write_log("Futurist", f"TIMEOUT: {e}", "prediction_signal", "timeout")
+        except requests.Timeout:
+            log.error("[Futurist] Ollama timeout")
+            write_log("Futurist", "Ollama timeout after 60s", "prediction_signal", "timeout")
         except Exception as e:
             log.error(f"[Futurist] {e}")
             write_log("Futurist", str(e), "prediction_signal", "error")
