@@ -989,6 +989,88 @@ def run_daily_huddle():
         write_log("Boss", str(e), "daily_huddle", "error")
 
 
+def run_standup_report():
+    """11 AM & 4 PM ET — Send agent performance standup to Telegram."""
+    log.info("[Standup] === AGENT PERFORMANCE REPORT ===")
+    try:
+        conn = sqlite3.connect(DB_PATH)
+
+        # Get signals from last 24 hours by agent
+        signals = conn.execute("""
+            SELECT agent_name, COUNT(*) as total, AVG(confidence) as avg_conf
+            FROM signal_alerts
+            WHERE datetime(timestamp) > datetime('now', '-1 day')
+            GROUP BY agent_name
+            ORDER BY total DESC
+        """).fetchall()
+
+        if not signals:
+            log.info("[Standup] No signals in last 24 hours")
+            conn.close()
+            return
+
+        # Get feedback stats for each agent
+        feedback_stats = {}
+        for agent_name, _, _ in signals:
+            feedback = conn.execute("""
+                SELECT
+                    COUNT(*) as total_feedback,
+                    SUM(CASE WHEN action_taken = 'executed' THEN 1 ELSE 0 END) as executed,
+                    SUM(CASE WHEN action_taken = 'executed' AND pnl_pct > 0 THEN 1 ELSE 0 END) as wins,
+                    AVG(CASE WHEN action_taken = 'executed' THEN pnl_pct END) as avg_pnl_pct
+                FROM signal_feedback sf
+                JOIN signal_alerts sa ON sf.alert_id = sa.id
+                WHERE sa.agent_name = ? AND datetime(sf.execution_timestamp) > datetime('now', '-1 day')
+            """, (agent_name,)).fetchone()
+            if feedback:
+                feedback_stats[agent_name] = feedback
+
+        # Calculate team totals
+        total_signals = sum(s[1] for s in signals)
+        total_executed = sum(f[1] or 0 for f in feedback_stats.values())
+        total_wins = sum(f[2] or 0 for f in feedback_stats.values())
+        team_roi = (total_wins / total_executed * 100) if total_executed > 0 else 0
+
+        lines = ["<b>🤖 AGENT DAILY STANDUP</b>\n"]
+
+        for agent_name, total, avg_conf in signals:
+            fb = feedback_stats.get(agent_name, (0, 0, 0, None))
+            executed = fb[1] or 0
+            wins = fb[2] or 0
+            win_rate = (wins / executed * 100) if executed > 0 else 0
+            conf_pct = int(avg_conf * 100) if avg_conf else 0
+
+            status = "✨" if win_rate == 100 and executed > 0 else "✅" if win_rate >= 67 else "⚠️ " if executed > 0 else "🔹"
+            lines.append(f"{status} <b>{agent_name}</b>: {total} signals, {conf_pct}% confidence")
+            if executed > 0:
+                lines.append(f"   → {executed} executed, {wins} wins ({win_rate:.0f}% win rate)")
+
+        lines.append(f"\n<b>📈 Team ROI: {total_wins}/{total_executed} wins ({team_roi:.0f}% win rate)</b>")
+
+        # Highlight best/worst
+        if feedback_stats:
+            best = max([(a, f[2]/f[1]*100 if f[1] else 0) for a, f in feedback_stats.items() if f[1]],
+                      key=lambda x: x[1], default=("N/A", 0))
+            worst = min([(a, f[2]/f[1]*100 if f[1] else 0) for a, f in feedback_stats.items() if f[1]],
+                       key=lambda x: x[1], default=("N/A", 0))
+
+            if best[0] != "N/A":
+                lines.append(f"🌟 Best: <b>{best[0]}</b> ({best[1]:.0f}%)")
+            if worst[0] != "N/A" and worst[1] < 100:
+                lines.append(f"📍 Needs tuning: <b>{worst[0]}</b> ({worst[1]:.0f}%)")
+
+        conn.close()
+
+        msg = "\n".join(lines)
+        from notifier import notify
+        notify(msg)
+        log.info("[Standup] Report sent to Telegram")
+        write_log("Standup", msg[:2000], "standup_report")
+    except Exception as e:
+        log.error(f"[Standup] {e}")
+        write_log("Standup", str(e), "standup_report", "error")
+
+
 # ── Orchestrator class ─────────────────────────────────────────────────────────
 
 class TradingSystemOrchestrator:
@@ -1030,8 +1112,10 @@ class TradingSystemOrchestrator:
         # Daily jobs (market-hours aware)
         self.scheduler.add_job(run_daily_huddle,      CronTrigger(hour=9,  minute=0),  id="huddle")
         self.scheduler.add_job(run_daily_briefing,    CronTrigger(hour=9,  minute=32), id="briefing")
+        self.scheduler.add_job(run_standup_report,    CronTrigger(hour=11, minute=0),  id="standup_midday")
         self.scheduler.add_job(run_daily_trend,       CronTrigger(hour=20, minute=0),  id="trendy_eod")
         self.scheduler.add_job(run_daily_aggregation, CronTrigger(hour=16, minute=35), id="aggregator")
+        self.scheduler.add_job(run_standup_report,    CronTrigger(hour=16, minute=0),  id="standup_close")
 
         # Learning sessions — agents review their own performance and adapt
         self.scheduler.add_job(run_learning_debrief, CronTrigger(hour=16, minute=30), id="debrief")
@@ -1075,6 +1159,7 @@ class TradingSystemOrchestrator:
 ║  Futurist (strategic signal)   every 2 hours (gate-checked)      ║
 ║  Boss     (daily huddle)       9:00 AM ET — mission briefing     ║
 ║  CTO      (structural brief)   9:05 AM ET — PE playbook + shorts ║
+║  📊 STANDUP (agent perf)       11:00 AM & 4:00 PM ET — ROI check ║
 ║  Aggregator                    4:35 PM ET                        ║
 ║  Learner  (daily debrief)      4:30 PM ET — score + adapt        ║
 ║  Learner  (weekly review)      Fridays 5:00 PM ET                ║
