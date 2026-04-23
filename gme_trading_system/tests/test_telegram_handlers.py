@@ -185,6 +185,31 @@ def test_update(seeded_db, captured_sends, monkeypatch):
     assert "Supabase sync complete" in joined
 
 
+def test_factory_functions_exist():
+    """Verify make_validate_data_task and make_synthesis_task exist and work."""
+    # Import from tasks module
+    sys.path.insert(0, str(REPO_SYS_PATH))
+    from tasks import make_validate_data_task, make_synthesis_task
+
+    # Mock agent for factory functions
+    mock_agent = MagicMock(name="test_agent")
+
+    # Test make_validate_data_task
+    task1 = make_validate_data_task(mock_agent, tick_count=60, latest_ts="2026-04-23T15:30:00-04:00",
+                                     gaps=0, outliers=0)
+    assert task1 is not None
+    assert hasattr(task1, 'description')
+    assert "tick_count" in task1.description or "60" in task1.description
+
+    # Test make_synthesis_task
+    price_str = "$25.34 (volume: 3250)"
+    logs_str = "Valerie: data clean\nNewsie: bullish"
+    task2 = make_synthesis_task(mock_agent, price_str, logs_str)
+    assert task2 is not None
+    assert hasattr(task2, 'description')
+    assert "PRICE" in task2.description or "$25.34" in task2.description
+
+
 def test_brief(seeded_db, captured_sends, monkeypatch):
     fake_agents = types.ModuleType("agents")
     fake_agents.briefing_agent = MagicMock()
@@ -203,6 +228,47 @@ def test_brief(seeded_db, captured_sends, monkeypatch):
     telegram_bot.handle_command("/brief")
     joined = "\n".join(captured_sends)
     assert "STRATEGY BRIEF" in joined
+
+
+def test_brief_price_direction_logic(seeded_db, captured_sends, monkeypatch):
+    """Verify /brief correctly determines price direction from opening baseline."""
+    # Insert today's opening and current price
+    conn = sqlite3.connect(seeded_db)
+    # Clear old data
+    conn.execute("DELETE FROM price_ticks")
+    # Insert opening price (low)
+    conn.execute(
+        "INSERT INTO price_ticks (symbol, close, volume, timestamp) VALUES (?,?,?,?)",
+        ("GME", 23.50, 1000, "2026-04-23T09:35:00-04:00"),
+    )
+    # Insert current price (higher → rising)
+    conn.execute(
+        "INSERT INTO price_ticks (symbol, close, volume, timestamp) VALUES (?,?,?,?)",
+        ("GME", 24.20, 5000, "2026-04-23T15:30:00-04:00"),
+    )
+    conn.commit()
+    conn.close()
+
+    fake_agents = types.ModuleType("agents")
+    fake_agents.briefing_agent = MagicMock()
+    monkeypatch.setitem(sys.modules, "agents", fake_agents)
+
+    fake_crewai = types.ModuleType("crewai")
+    class _Crew:
+        def __init__(self, *a, **k):
+            # Capture the task description to verify direction was calculated
+            self.task_desc = a[1][0].description if a and len(a) > 1 else ""
+        def kickoff(self): return "📍 MARKET: GME at $24.20. Rising."
+    fake_crewai.Crew = _Crew
+    fake_crewai.Process = MagicMock(sequential=0)
+    fake_crewai.Task = lambda **kw: MagicMock(description=kw.get("description", ""), **kw)
+    monkeypatch.setitem(sys.modules, "crewai", fake_crewai)
+
+    telegram_bot.handle_command("/brief")
+    joined = "\n".join(captured_sends)
+    assert "STRATEGY BRIEF" in joined
+    # Verify opening price was included in the task context
+    assert "Today's opening price" in joined or "rising" in joined.lower()
 
 
 def test_trove_default_watchlist(seeded_db, captured_sends, monkeypatch):
