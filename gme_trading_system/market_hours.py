@@ -66,10 +66,9 @@ def _last_weekday(year: int, month: int, weekday: int) -> date:
 MARKET_OPEN  = time(9, 30)
 MARKET_CLOSE = time(16, 0)
 
-# Active window: 2h before open through 2h after close.
-# Covers pre-market prep, market hours, and post-market wrap-up.
-ACTIVE_WINDOW_START = time(7, 30)
-ACTIVE_WINDOW_END   = time(18, 0)
+# Active window: 1h before open through 1h after close.
+ACTIVE_WINDOW_START = time(8, 30)
+ACTIVE_WINDOW_END   = time(17, 0)
 
 
 def is_market_open(dt: datetime | None = None) -> bool:
@@ -86,9 +85,9 @@ def is_market_open(dt: datetime | None = None) -> bool:
 
 
 def is_active_window(dt: datetime | None = None) -> bool:
-    """Return True if within the active trading window (2h before/after market hours).
+    """Return True if within the active trading window (1h before/after market hours).
 
-    Active window: 07:30–18:00 ET, Mon-Fri, excluding US holidays.
+    Active window: 08:30–17:00 ET, Mon-Fri, excluding US holidays.
     Use this to gate scheduled jobs so they don't run overnight or on weekends.
     """
     now_et = (dt or datetime.now(ET)).astimezone(ET)
@@ -117,10 +116,10 @@ def market_hours_required(func):
 
 
 def active_window_required(func):
-    """Decorator: skip function if outside the active window (07:30–18:00 ET, Mon-Fri).
+    """Decorator: skip function if outside the active window (08:30–17:00 ET, Mon-Fri).
 
-    Looser than market_hours_required — allows pre-market analysis (07:30-09:30)
-    and post-market wrap-up (16:00-18:00). Blocks overnight, weekend, and holiday runs.
+    Looser than market_hours_required — allows light pre-market analysis (08:30-09:30)
+    and 1h post-market wrap-up (16:00-17:00). Blocks overnight, weekend, and holiday runs.
     """
     import logging
     log = logging.getLogger(__name__)
