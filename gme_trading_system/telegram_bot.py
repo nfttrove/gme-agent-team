@@ -425,7 +425,7 @@ def handle_command(text: str):
             sys.path.insert(0, os.path.dirname(__file__))
             from crewai import Crew, Process, Task
             from agents import briefing_agent
-            from market_state import get_market_fact, enforce_direction
+            from market_state import get_market_fact, enforce_direction, enforce_levels
 
             # Single source of truth for price direction
             fact = get_market_fact("GME", DB_PATH)
@@ -444,19 +444,36 @@ def handle_command(text: str):
             ) if agent_logs else "  No recent agent logs."
             safety_str = safety[0][:200] if safety else "No safety gate result."
 
+            today_low = fact.get('today_low')
+            today_high = fact.get('today_high')
+            r5_low = fact.get('range_5d_low')
+            r5_high = fact.get('range_5d_high')
+            range_str = (
+                f"${today_low:.2f} to ${today_high:.2f}"
+                if today_low is not None else "[not available]"
+            )
+            sr_rule = (
+                f"Support/resistance MUST fall inside the 5-day range "
+                f"${r5_low:.2f}–${r5_high:.2f}. Do NOT invent round numbers outside it."
+                if r5_low is not None else
+                "Only cite support/resistance from verified price data."
+            )
             live_task = Task(
                 description=(
                     f"Produce a plain-English strategy briefing for the CEO. No jargon.\n\n"
                     f"{fact['prompt_line']}\n\n"
                     f"Recent agent logs:\n{logs_str}\n"
                     f"Safety gate: {safety_str}\n\n"
-                    "Write EXACTLY this format — use the MARKET FACT verbatim, do not invent direction:\n\n"
+                    "Write EXACTLY this format — use the MARKET FACT verbatim, do not invent direction or levels:\n\n"
                     f"📍 MARKET: GME is at ${fact['price']:.2f}. It is {fact['direction'].lower()} today.\n\n"
                     "📐 PATTERN: [Describe any pattern in plain English.]\n\n"
-                    "🎯 KEY LEVELS: Support at $[X]. Resistance at $[Y]. Today's range: $[low] to $[high].\n\n"
+                    f"🎯 KEY LEVELS: Support at $[X]. Resistance at $[Y]. Today's range: {range_str}.\n\n"
                     "⏳ WAITING FOR: [What signal the system needs before placing a trade.]\n\n"
                     "⚠️ RISK: [One thing that would stop today's plan.]\n\n"
-                    "🔮 CONFIDENCE: [X]% — [one sentence on why]"
+                    "🔮 CONFIDENCE: [X]% — [one sentence on why]\n\n"
+                    f"RULES:\n"
+                    f"- Today's range is already filled in above — DO NOT change it.\n"
+                    f"- {sr_rule}"
                 ),
                 expected_output="A structured 6-section strategy brief using the live data provided.",
                 agent=briefing_agent,
@@ -465,8 +482,9 @@ def handle_command(text: str):
                         process=Process.sequential, verbose=False)
             result = crew.kickoff()
 
-            # Safety net: enforce correct direction even if LLM ignored instructions
+            # Safety net: enforce correct direction + verified ranges
             result_str = enforce_direction(str(result), fact)
+            result_str = enforce_levels(result_str, fact)
             _send(f"<b>📋 STRATEGY BRIEF</b>\n\n{result_str[:3000]}")
         except Exception as e:
             _send(f"Brief failed: {e}")
@@ -953,22 +971,22 @@ def _register_commands():
     if not ENABLED:
         return
     commands = [
-        {"command": "help", "description": "Full command guide + chat capabilities"},
-        {"command": "status", "description": "System health — tick count, last agent activity"},
-        {"command": "brief", "description": "Today's strategy brief (price, direction, signals)"},
-        {"command": "standup", "description": "Agent daily performance (signals, win rates, ROI)"},
-        {"command": "agents", "description": "Last run time for each agent"},
-        {"command": "ticks", "description": "Price data received today"},
-        {"command": "freshness", "description": "Verify agents are reading current data"},
-        {"command": "trove", "description": "Deep-value Trove screen: /trove [TICKERS]"},
-        {"command": "update", "description": "Force sync local data to Supabase now"},
-        {"command": "learn", "description": "Teach agents a rule: /learn \"...\" --why \"...\""},
-        {"command": "lessons", "description": "Show lessons agents learned"},
-        {"command": "compare", "description": "Ask Gemma + DeepSeek: /compare <question>"},
-        {"command": "frequency", "description": "Notification level: low | medium | high"},
-        {"command": "supportme", "description": "Buy-me-a-coffee / PayPal link"},
-        {"command": "test", "description": "Run Telegram handler smoke tests (~1 sec)"},
-        {"command": "force", "description": "Force an agent to run: /force <agent>"},
+        {"command": "brief",     "description": "Strategy brief — price, direction, agent signals"},
+        {"command": "status",    "description": "System heartbeat — ticks, agents, last activity"},
+        {"command": "standup",   "description": "Agent scorecard — signals, win rates, OK %"},
+        {"command": "agents",    "description": "Last-run timestamp for every agent"},
+        {"command": "freshness", "description": "Are agents reading fresh data? (staleness check)"},
+        {"command": "ticks",     "description": "Price ticks received today"},
+        {"command": "force",     "description": "Run an agent on demand — /force valerie|newsie|futurist|…"},
+        {"command": "compare",   "description": "Gemma vs DeepSeek side-by-side — /compare <question>"},
+        {"command": "trove",     "description": "Deep-value Trove screen — /trove [TICKERS]"},
+        {"command": "learn",     "description": "Teach agents a rule — /learn \"…\" --why \"…\""},
+        {"command": "lessons",   "description": "Show rules agents have learned"},
+        {"command": "update",    "description": "Sync local SQLite → Supabase now"},
+        {"command": "frequency", "description": "Notification volume — low | medium | high"},
+        {"command": "test",      "description": "Run Telegram handler smoke tests (~1 sec)"},
+        {"command": "supportme", "description": "Tip jar — buy-me-a-coffee / PayPal"},
+        {"command": "help",      "description": "Full command reference + chat tips"},
     ]
     try:
         requests.post(f"{BASE_URL}/setMyCommands", json={"commands": commands}, timeout=10)

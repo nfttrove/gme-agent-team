@@ -39,6 +39,11 @@ def get_market_fact(symbol: str = "GME", db_path: Optional[str] = None) -> dict:
         'prev_close': None,
         'pct_change': 0.0,
         'direction': 'UNKNOWN',
+        'today_low': None,
+        'today_high': None,
+        'today_ticks': 0,
+        'range_5d_low': None,
+        'range_5d_high': None,
         'prompt_line': 'MARKET FACT: price data unavailable',
     }
 
@@ -51,6 +56,16 @@ def get_market_fact(symbol: str = "GME", db_path: Optional[str] = None) -> dict:
         prev_close_row = conn.execute(
             "SELECT close FROM price_ticks WHERE symbol=? AND date(timestamp) < date('now') "
             "ORDER BY timestamp DESC LIMIT 1",
+            (symbol,),
+        ).fetchone()
+        today_row = conn.execute(
+            "SELECT MIN(close), MAX(close), COUNT(*) FROM price_ticks "
+            "WHERE symbol=? AND date(timestamp)=date('now','localtime')",
+            (symbol,),
+        ).fetchone()
+        r5_row = conn.execute(
+            "SELECT MIN(close), MAX(close) FROM price_ticks "
+            "WHERE symbol=? AND timestamp >= datetime('now','-5 days')",
             (symbol,),
         ).fetchone()
         conn.close()
@@ -66,6 +81,15 @@ def get_market_fact(symbol: str = "GME", db_path: Optional[str] = None) -> dict:
             if result['prev_close']:
                 result['pct_change'] = (result['price'] - result['prev_close']) / result['prev_close'] * 100
 
+        if today_row and today_row[0] is not None:
+            result['today_low'] = float(today_row[0])
+            result['today_high'] = float(today_row[1])
+            result['today_ticks'] = int(today_row[2] or 0)
+
+        if r5_row and r5_row[0] is not None:
+            result['range_5d_low'] = float(r5_row[0])
+            result['range_5d_high'] = float(r5_row[1])
+
         # Calculate direction from actual price movement
         if result['pct_change'] > 0.5:
             result['direction'] = 'RISING'
@@ -75,17 +99,32 @@ def get_market_fact(symbol: str = "GME", db_path: Optional[str] = None) -> dict:
             result['direction'] = 'SIDEWAYS'
 
         # Pre-format the prompt line that agents must reference
+        lines = []
         if result['prev_close']:
-            result['prompt_line'] = (
+            lines.append(
                 f"MARKET FACT (verified from price_ticks, DO NOT contradict): "
                 f"{symbol} ${result['price']:.2f} — {result['direction']} "
                 f"{result['pct_change']:+.2f}% vs yesterday's close of ${result['prev_close']:.2f}"
             )
         else:
-            result['prompt_line'] = (
+            lines.append(
                 f"MARKET FACT (verified from price_ticks): "
                 f"{symbol} ${result['price']:.2f} (no prior-day baseline available)"
             )
+        if result['today_low'] is not None:
+            lines.append(
+                f"  Today's range: ${result['today_low']:.2f}–${result['today_high']:.2f} "
+                f"({result['today_ticks']} ticks)"
+            )
+        if result['range_5d_low'] is not None:
+            lines.append(
+                f"  5-day range: ${result['range_5d_low']:.2f}–${result['range_5d_high']:.2f}"
+            )
+            lines.append(
+                "  RULE: cite today's range verbatim. Any support/resistance you name must "
+                "fall within the 5-day range — do NOT round to invented levels outside it."
+            )
+        result['prompt_line'] = "\n".join(lines)
 
     except Exception as e:
         result['prompt_line'] = f"MARKET FACT: error fetching price data ({e})"
@@ -114,5 +153,56 @@ def enforce_direction(text: str, fact: dict) -> str:
         text,
         flags=re.IGNORECASE,
     )
+
+    return text
+
+
+def enforce_levels(text: str, fact: dict) -> str:
+    """Scrub fabricated range / support / resistance claims.
+
+    - Today's range is fully verifiable → always replace with actual low/high.
+    - Support/resistance are subjective, but values outside the 5-day range
+      are definitively wrong → clamp to the 5-day bound.
+    """
+    import re
+
+    today_low = fact.get('today_low')
+    today_high = fact.get('today_high')
+    r5_low = fact.get('range_5d_low')
+    r5_high = fact.get('range_5d_high')
+
+    if today_low is not None and today_high is not None:
+        text = re.sub(
+            r"Today['\u2019]s range:?\s*\$?\d+(?:\.\d+)?\s*(?:to|\u2013|-)\s*\$?\d+(?:\.\d+)?",
+            f"Today's range: ${today_low:.2f} to ${today_high:.2f}",
+            text,
+            flags=re.IGNORECASE,
+        )
+
+    if r5_high is not None:
+        def _clamp_resistance(m):
+            val = float(m.group(1))
+            if val > r5_high:
+                return f"Resistance at ${r5_high:.2f}"
+            return m.group(0)
+        text = re.sub(
+            r"Resistance at \$?(\d+(?:\.\d+)?)",
+            _clamp_resistance,
+            text,
+            flags=re.IGNORECASE,
+        )
+
+    if r5_low is not None:
+        def _clamp_support(m):
+            val = float(m.group(1))
+            if val < r5_low:
+                return f"Support at ${r5_low:.2f}"
+            return m.group(0)
+        text = re.sub(
+            r"Support at \$?(\d+(?:\.\d+)?)",
+            _clamp_support,
+            text,
+            flags=re.IGNORECASE,
+        )
 
     return text
