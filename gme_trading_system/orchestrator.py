@@ -191,6 +191,69 @@ def run_validation():
 
 
 @active_window_required
+def _volume_regime(conn: sqlite3.Connection, symbol: str = "GME") -> dict:
+    """Session-relative volume regime, computed deterministically.
+
+    Ratio = today's cumulative volume / (20-day ADV pro-rated to minutes elapsed
+    in the 09:30-16:00 ET session). Labels: quiet (<0.5x), normal (0.5-1.3x),
+    elevated (1.3-2.0x), heavy (2.0-3.5x), spike (>=3.5x).
+
+    Outside session hours (pre/post/weekend/holiday), compares cumulative-so-far
+    against full ADV with no pro-rating. Returns label='unknown' if ADV or
+    today's volume isn't available yet.
+    """
+    from datetime import time as dtime
+    now_et    = datetime.now(ET)
+    today_str = now_et.date().isoformat()
+
+    # Today's cumulative volume — daily_candles is kept fresh by the aggregator;
+    # fall back to summing raw price_ticks if not yet populated.
+    row = conn.execute(
+        "SELECT volume FROM daily_candles WHERE symbol=? AND date=?",
+        (symbol, today_str),
+    ).fetchone()
+    today_vol = float(row[0]) if row and row[0] else 0.0
+    if today_vol == 0:
+        row = conn.execute(
+            "SELECT COALESCE(SUM(volume),0) FROM price_ticks "
+            "WHERE symbol=? AND date(timestamp)=?",
+            (symbol, today_str),
+        ).fetchone()
+        today_vol = float(row[0]) if row and row[0] else 0.0
+
+    # 20-day ADV excluding today
+    rows = conn.execute(
+        "SELECT volume FROM daily_candles WHERE symbol=? AND date<? "
+        "ORDER BY date DESC LIMIT 20",
+        (symbol, today_str),
+    ).fetchall()
+    vols = [float(r[0]) for r in rows if r[0]]
+    adv  = sum(vols) / len(vols) if vols else 0.0
+
+    if adv <= 0 or today_vol <= 0:
+        return {"label": "unknown", "ratio": 0.0,
+                "today_volume": int(today_vol), "baseline_adv": int(adv)}
+
+    MARKET_OPEN  = dtime(9, 30)
+    MARKET_CLOSE = dtime(16, 0)
+    t = now_et.time().replace(tzinfo=None)
+    if MARKET_OPEN <= t < MARKET_CLOSE:
+        minutes_elapsed = max(1, (t.hour - 9) * 60 + (t.minute - 30))
+        expected = adv * (minutes_elapsed / 390.0)
+    else:
+        expected = adv
+
+    ratio = today_vol / expected if expected > 0 else 0.0
+    if   ratio < 0.5: label = "quiet"
+    elif ratio < 1.3: label = "normal"
+    elif ratio < 2.0: label = "elevated"
+    elif ratio < 3.5: label = "heavy"
+    else:             label = "spike"
+
+    return {"label": label, "ratio": round(ratio, 2),
+            "today_volume": int(today_vol), "baseline_adv": int(adv)}
+
+
 def run_commentary():
     """Chatty — one-shot pithy commentary via direct Ollama call.
 
@@ -199,6 +262,10 @@ def run_commentary():
     backstory as str(result) — which is what was getting logged for months
     instead of actual commentary. Direct Ollama also avoids the 180s crew
     timeout since there's no orchestration layer.
+
+    Dedup: skip send if state bucket (price-tick, vol-regime, consensus)
+    hasn't materially shifted since last comment. Prevents the 6-in-a-row
+    "bullish, volume mixed" paraphrase spam.
     """
     write_log("Chatty", "Composing commentary", "commentary", "running")
     try:
@@ -211,21 +278,34 @@ def run_commentary():
             "SELECT close, volume, timestamp FROM price_ticks "
             "WHERE symbol='GME' ORDER BY timestamp DESC LIMIT 1"
         ).fetchone()
-        avg_vol_row = conn.execute(
-            "SELECT AVG(volume) FROM price_ticks WHERE symbol='GME' "
-            "AND timestamp > datetime('now','-10 minutes')"
-        ).fetchone()
 
         synthesis_text = synthesis[0][:200] if synthesis else "No consensus yet"
-        price, vol, _ts = latest_tick if latest_tick else (0, 0, "")
-        avg_vol = avg_vol_row[0] if avg_vol_row and avg_vol_row[0] else 0
-        vol_ratio = (vol / avg_vol) if avg_vol else 0
+        price, _vol, _ts = latest_tick if latest_tick else (0, 0, "")
+
+        regime = _volume_regime(conn, "GME")
+        vol_label = regime["label"]
+        vol_ratio = regime["ratio"]
+
+        # Dedup gate — compute a coarse state key; skip if unchanged vs last run.
+        price_bucket = round(float(price), 1) if price else 0.0
+        consensus_bucket = (synthesis_text or "")[:60].lower()
+        state_key = f"{price_bucket}|{vol_label}|{consensus_bucket}"
+        last_state = conn.execute(
+            "SELECT content FROM agent_logs WHERE agent_name='Chatty' "
+            "AND task_type='commentary_state' ORDER BY id DESC LIMIT 1"
+        ).fetchone()
+        if last_state and last_state[0] == state_key:
+            log.info(f"[Chatty] state unchanged ({state_key}) — skipping")
+            conn.close()
+            write_log("Chatty", "state unchanged; no new comment", "commentary", "skipped")
+            return
 
         prompt = (
             "You are GME's live-stream commentator. Produce ONE punchy insight (max 120 chars) "
-            "grounded in the data below. No preamble, no quotes, no markdown — just the comment.\n\n"
+            "grounded in the data below. No preamble, no quotes, no markdown — just the comment. "
+            "Use the volume label as given — do NOT invent your own descriptor.\n\n"
             f"Price: ${price}\n"
-            f"Volume: {int(vol):,} ({vol_ratio:.1f}x 10-min avg)\n"
+            f"Volume regime: {vol_label} ({vol_ratio:.2f}x session-pro-rated 20d ADV)\n"
             f"Team consensus: {synthesis_text}\n"
         )
 
@@ -254,6 +334,8 @@ def run_commentary():
 
         log.info(f"[Chatty] {comment}")
         write_log("Chatty", comment, "commentary")
+        # Record the state key so the next run can detect "nothing changed"
+        write_log("Chatty", state_key, "commentary_state")
     except requests.Timeout:
         log.error("[Chatty] Ollama timeout")
         write_log("Chatty", "Ollama timeout after 30s", "commentary", "timeout")
