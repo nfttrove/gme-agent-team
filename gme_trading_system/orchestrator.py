@@ -1113,6 +1113,115 @@ def run_social_scan():
         write_log("Social", str(e)[:300], "social", "error")
 
 
+def run_cto_trove_score():
+    """CTO — Trove deep-value score for GME with delta vs previous run.
+
+    Writes a formatted score card to agent_logs (task_type='trove_score', agent='CTO')
+    which the voice forwarder picks up for Telegram. LLM is used only for the
+    one-paragraph interpretation at the end — the numerical scoring is
+    deterministic (trove.score()), so it can't hallucinate points.
+    """
+    log.info("[CTO] Running Trove score")
+    write_log("CTO", "Computing Trove deep-value score for GME", "trove_score", "running")
+    try:
+        from trove import fetch, score as trove_score_fn
+
+        inp = fetch("GME")
+        if inp is None:
+            write_log("CTO", "trove.fetch returned None (data source down?)", "trove_score", "error")
+            return
+        r = trove_score_fn(inp)
+        total = r["total"]
+        rating = r["rating"]
+        A = r["pillars"]["A"]
+        B = r["pillars"]["B"]
+        C = r["pillars"]["C"]
+        imm = r["immunity"]
+        imm_count = r["immunity_count"]
+        net_cash_pct = (inp.cash_mm - inp.total_debt_mm) / inp.market_cap_mm if inp.market_cap_mm else 0
+
+        # Look up previous run for delta
+        conn = sqlite3.connect(DB_PATH)
+        prev_row = conn.execute(
+            "SELECT content FROM agent_logs WHERE agent_name='CTO' "
+            "AND task_type='trove_score' AND status='ok' "
+            "ORDER BY timestamp DESC LIMIT 1"
+        ).fetchone()
+        conn.close()
+
+        prev_total = None
+        if prev_row and prev_row[0]:
+            import re
+            m = re.search(r"Score:\s*([\d.]+)/100", prev_row[0])
+            if m:
+                try:
+                    prev_total = float(m.group(1))
+                except ValueError:
+                    pass
+
+        if prev_total is None:
+            delta_str = "(first score)"
+        else:
+            diff = total - prev_total
+            if diff > 0.05:
+                delta_str = f"↑ {diff:+.1f} vs prior {prev_total:.1f}"
+            elif diff < -0.05:
+                delta_str = f"↓ {diff:+.1f} vs prior {prev_total:.1f}"
+            else:
+                delta_str = f"= unchanged (prior {prev_total:.1f})"
+
+        # Ask Gemma for the interpretation paragraph only — numbers are locked above.
+        prompt = (
+            "You are the CTO — a deep-value analyst. In ONE paragraph (max 350 chars), "
+            "interpret this Trove score. Note any tension between earnings metrics and "
+            "balance-sheet strength. No preamble, no markdown, no quotes.\n\n"
+            f"GME | Score {total:.1f}/100 ({rating}) | Immunity {imm_count}/5\n"
+            f"Pillars — Valuation: {A:.1f}/30 · Capital: {B:.1f}/45 · Quality: {C:.1f}/25\n"
+            f"Inputs: EV/FCF {inp.ev_fcf:.1f} · EV/EBITDA {inp.ev_ebitda:.1f} · P/B {inp.pb:.2f} · "
+            f"Altman Z {inp.altman_z:.1f} · D/E {inp.debt_equity:.2f} · "
+            f"Net Cash {net_cash_pct*100:.1f}% of MCap · Op Margin {inp.operating_margin*100:.1f}% · "
+            f"ROE {inp.roe*100:.1f}% · Net Margin {inp.net_margin*100:.1f}%"
+        )
+        interpretation = ""
+        try:
+            ollama_host = os.getenv("OLLAMA_HOST", "http://localhost:11434")
+            resp = requests.post(
+                f"{ollama_host}/api/generate",
+                json={"model": "gemma2:9b", "prompt": prompt, "stream": False,
+                      "options": {"num_predict": 200, "temperature": 0.4}},
+                timeout=30,
+            )
+            resp.raise_for_status()
+            interpretation = resp.json().get("response", "").strip().strip('"').strip("'")
+            interpretation = " ".join(interpretation.split())[:500]
+        except Exception as e:
+            log.warning(f"[CTO] Trove interpretation LLM failed: {e}")
+
+        imm_line = (
+            f"{'✓' if imm['debt_free'] else '✗'} Debt-free · "
+            f"{'✓' if imm['cash_over_1b'] else '✗'} Cash>$1B · "
+            f"{'✓' if imm['net_cash_positive'] else '✗'} Net Cash+ · "
+            f"{'✓' if imm['profitable'] else '✗'} Profitable · "
+            f"{'✓' if imm['altman_safe'] else '✗'} Altman Safe"
+        )
+        brief = (
+            f"GME Trove Score: {total:.1f}/100 {rating} {delta_str}\n"
+            f"Pillars — Valuation {A:.1f}/30 · Capital {B:.1f}/45 · Quality {C:.1f}/25\n"
+            f"Immunity {imm_count}/5: {imm_line}\n"
+            f"Inputs — EV/FCF {inp.ev_fcf:.1f} · EV/EBITDA {inp.ev_ebitda:.1f} · P/B {inp.pb:.2f} · "
+            f"Altman Z {inp.altman_z:.1f} · D/E {inp.debt_equity:.2f} · Net Cash {net_cash_pct*100:.1f}% · "
+            f"OpMgn {inp.operating_margin*100:.1f}% · ROE {inp.roe*100:.1f}% · NetMgn {inp.net_margin*100:.1f}%"
+        )
+        if interpretation:
+            brief += f"\n— {interpretation}"
+
+        log.info(f"[CTO] Trove: {total:.1f}/100 {delta_str}")
+        write_log("CTO", brief, "trove_score", "ok")
+    except Exception as e:
+        log.error(f"[CTO] Trove score failed: {e}")
+        write_log("CTO", str(e), "trove_score", "error")
+
+
 def run_cto_daily_brief():
     """9:05 AM ET — CTO structural intelligence brief, just after morning huddle."""
     from agents import cto_agent
@@ -1576,6 +1685,7 @@ class TradingSystemOrchestrator:
 
         # CTO structural intelligence — PE playbook monitoring and short side research
         self.scheduler.add_job(run_cto_daily_brief,    CronTrigger(hour=9,  minute=5),                        id="cto_brief")
+        self.scheduler.add_job(run_cto_trove_score,    CronTrigger(hour=9,  minute=10),                       id="cto_trove")
         self.scheduler.add_job(run_cto_structural_scan, CronTrigger(day_of_week="sun", hour=8, minute=0),     id="cto_scan")
         self.scheduler.add_job(run_investor_intel_scan, CronTrigger(hour=8, minute=0),                        id="investor_intel")
 

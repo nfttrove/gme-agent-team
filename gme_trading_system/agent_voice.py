@@ -38,6 +38,7 @@ class Voice:
 # Agents currently producing real output (CrewAI-bypass rewrites). Add more
 # here as they are fixed. Order matters — forwarded in this order each run.
 VOICES: list[Voice] = [
+    Voice("CTO",       "trove_score",       "🛡️", "CTO",       max_per_run=1),
     Voice("Synthesis", "synthesis",         "🧠", "Synthesis", max_per_run=1),
     Voice("Trendy",    "trend_signal",      "📈", "Trendy",    max_per_run=1),
     Voice("Pattern",   "pattern_signal",    "🎯", "Pattern",   max_per_run=1),
