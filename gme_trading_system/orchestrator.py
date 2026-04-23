@@ -2014,31 +2014,33 @@ class TradingSystemOrchestrator:
         # Gemma hallucinated without tool output; bypass versions already cover these.
         self.scheduler.add_job(run_georisk,      IntervalTrigger(hours=1),    id="georisk")   # hourly geopolitical scan
 
-        # Daily jobs (market-hours aware)
-        self.scheduler.add_job(run_daily_huddle,      CronTrigger(hour=9,  minute=0),  id="huddle")
-        self.scheduler.add_job(run_daily_briefing,    CronTrigger(hour=10, minute=0),  id="briefing")
-        self.scheduler.add_job(run_standup_report,    CronTrigger(hour=11, minute=0),  id="standup_midday")
-        self.scheduler.add_job(run_daily_trend,       CronTrigger(hour=20, minute=0),  id="trendy_eod")
-        self.scheduler.add_job(run_daily_aggregation, CronTrigger(hour=16, minute=35), id="aggregator")
+        # Daily jobs (market-hours aware) — timezone pinned to ET on every trigger
+        # since BackgroundScheduler(timezone=...) default isn't being honored on
+        # this host (suspected missing tzdata).
+        self.scheduler.add_job(run_daily_huddle,      CronTrigger(hour=9,  minute=0,  timezone=ET), id="huddle")
+        self.scheduler.add_job(run_daily_briefing,    CronTrigger(hour=10, minute=0,  timezone=ET), id="briefing")
+        self.scheduler.add_job(run_standup_report,    CronTrigger(hour=11, minute=0,  timezone=ET), id="standup_midday")
+        self.scheduler.add_job(run_daily_trend,       CronTrigger(hour=20, minute=0,  timezone=ET), id="trendy_eod")
+        self.scheduler.add_job(run_daily_aggregation, CronTrigger(hour=16, minute=35, timezone=ET), id="aggregator")
         self.scheduler.add_job(run_intraday_aggregation, IntervalTrigger(minutes=5), id="aggregator_intraday")
         self.scheduler.add_job(run_voice_forwarder, IntervalTrigger(minutes=10), id="voice_forwarder")
-        self.scheduler.add_job(run_standup_report,    CronTrigger(hour=16, minute=0),  id="standup_close")
+        self.scheduler.add_job(run_standup_report,    CronTrigger(hour=16, minute=0,  timezone=ET), id="standup_close")
 
         # Learning sessions — agents review their own performance and adapt
-        self.scheduler.add_job(run_learning_debrief, CronTrigger(hour=16, minute=30), id="debrief")
-        self.scheduler.add_job(run_weekly_review,    CronTrigger(day_of_week="fri", hour=17, minute=0), id="weekly_review")
+        self.scheduler.add_job(run_learning_debrief, CronTrigger(hour=16, minute=30, timezone=ET), id="debrief")
+        self.scheduler.add_job(run_weekly_review,    CronTrigger(day_of_week="fri", hour=17, minute=0, timezone=ET), id="weekly_review")
 
         # CTO structural intelligence — PE playbook monitoring and short side research
-        self.scheduler.add_job(run_cto_daily_brief,    CronTrigger(hour=9,  minute=5),                        id="cto_brief")
-        self.scheduler.add_job(run_cto_trove_score,    CronTrigger(hour=9,  minute=10),                       id="cto_trove")
-        self.scheduler.add_job(run_cto_structural_scan, CronTrigger(day_of_week="sun", hour=8, minute=0),     id="cto_scan")
-        self.scheduler.add_job(run_investor_intel_scan, CronTrigger(hour=8, minute=0),                        id="investor_intel")
+        self.scheduler.add_job(run_cto_daily_brief,    CronTrigger(hour=9,  minute=5,  timezone=ET),                   id="cto_brief")
+        self.scheduler.add_job(run_cto_trove_score,    CronTrigger(hour=9,  minute=10, timezone=ET),                   id="cto_trove")
+        self.scheduler.add_job(run_cto_structural_scan, CronTrigger(day_of_week="sun", hour=8, minute=0, timezone=ET), id="cto_scan")
+        self.scheduler.add_job(run_investor_intel_scan, CronTrigger(hour=8, minute=0, timezone=ET),                    id="investor_intel")
 
         # Options intelligence — max pain every Monday pre-market
-        self.scheduler.add_job(run_options_update, CronTrigger(day_of_week="mon", hour=8, minute=30), id="options")
+        self.scheduler.add_job(run_options_update, CronTrigger(day_of_week="mon", hour=8, minute=30, timezone=ET), id="options")
 
         # Weekly coffee nudge — Sundays 10:00 AM ET
-        self.scheduler.add_job(run_sunday_support_message, CronTrigger(day_of_week="sun", hour=10, minute=0), id="sunday_support")
+        self.scheduler.add_job(run_sunday_support_message, CronTrigger(day_of_week="sun", hour=10, minute=0, timezone=ET), id="sunday_support")
 
         # Social monitor — scan tracked accounts every 15 minutes during market hours
         self.scheduler.add_job(run_social_scan, IntervalTrigger(minutes=15), id="social")
@@ -2048,7 +2050,7 @@ class TradingSystemOrchestrator:
 
         # Nightly DB maintenance: backup + prune old backups + log cleanup (3 AM ET)
         from db_maintenance import nightly_maintenance
-        self.scheduler.add_job(nightly_maintenance, CronTrigger(hour=3, minute=0), id="db_nightly")
+        self.scheduler.add_job(nightly_maintenance, CronTrigger(hour=3, minute=0, timezone=ET), id="db_nightly")
 
     def start(self):
         self.configure_schedule()
@@ -2056,6 +2058,15 @@ class TradingSystemOrchestrator:
         start_bot_thread()
         start_sync_thread()
         write_log("Orchestrator", "All 10 agents online", "startup")
+
+        # Sanity-check: print next fire time of the daily briefing so we can
+        # confirm cron triggers are honoring ET and not falling back to host tz.
+        try:
+            j = self.scheduler.get_job("briefing")
+            if j and j.next_run_time:
+                log.info(f"[tz-check] briefing next_run_time: {j.next_run_time.isoformat()}")
+        except Exception:
+            pass
 
         log.info("""
 ╔══════════════════════════════════════════════════════════════════╗
