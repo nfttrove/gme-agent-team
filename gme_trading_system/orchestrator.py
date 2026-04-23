@@ -134,17 +134,57 @@ def write_log(agent: str, content: str, task_type: str, status: str = "ok"):
 
 @active_window_required
 def run_validation():
-    from agents import valerie_agent
-    from tasks import validate_data_task
+    """Valerie — data feed health check. No LLM; pure SQL measurement.
+
+    The old crew-based version handed the LLM placeholder values ('tick_count:
+    0, latest_ts: unknown, max_gap: 999s') because validate_data_task was
+    created at import time and never re-populated, so 1000+ Valerie logs are
+    either timeouts or LLM reformats of those zero/unknown placeholders.
+
+    Since this is a pure data-quality measurement (count ticks, measure gaps,
+    spot outliers), there's no reason to involve an LLM at all. Compute the
+    values, write a single-line summary. Sub-100ms instead of multi-second.
+    """
     write_log("Valerie", "Starting validation cycle", "validation", "running")
     try:
-        crew = Crew(agents=[valerie_agent], tasks=[validate_data_task],
-                    process=Process.sequential, verbose=False)
-        result = safe_kickoff_with_fallback(crew, agent_name="Valerie", timeout_seconds=180, label="valerie")
-        write_log("Valerie", str(result)[:500], "validation")
-    except CrewTimeout as e:
-        log.error(f"[Valerie] TIMEOUT: {e}")
-        write_log("Valerie", f"TIMEOUT: {e}", "validation", "timeout")
+        conn = sqlite3.connect(DB_PATH)
+        rows = conn.execute(
+            "SELECT timestamp, close FROM price_ticks WHERE symbol='GME' "
+            "AND timestamp > datetime('now','-5 minutes') "
+            "ORDER BY timestamp ASC"
+        ).fetchall()
+        conn.close()
+
+        tick_count = len(rows)
+        latest_ts = rows[-1][0] if rows else "none"
+        max_gap_s = 0.0
+        outliers = 0
+        if tick_count >= 2:
+            from datetime import datetime as _dt
+            prev_t = None
+            prev_p = None
+            for ts, close in rows:
+                try:
+                    t = _dt.fromisoformat(ts.replace("Z", "+00:00"))
+                except Exception:
+                    continue
+                if prev_t is not None:
+                    gap = (t - prev_t).total_seconds()
+                    if gap > max_gap_s:
+                        max_gap_s = gap
+                    if prev_p and close and abs(close - prev_p) / prev_p > 0.20:
+                        outliers += 1
+                prev_t, prev_p = t, float(close or 0)
+
+        status = "ok" if tick_count > 0 and max_gap_s < 120 and outliers == 0 else "degraded"
+        brief = (
+            f"{status.upper()} · ticks(5m)={tick_count} · "
+            f"latest={latest_ts[:19] if isinstance(latest_ts, str) else latest_ts} · "
+            f"max_gap={max_gap_s:.0f}s · outliers={outliers}"
+        )
+        log.info(f"[Valerie] {brief}")
+        write_log("Valerie", brief, "validation",
+                  "ok" if status == "ok" else "degraded")
     except Exception as e:
         log.error(f"[Valerie] {e}")
         write_log("Valerie", str(e), "validation", "error")
@@ -1222,20 +1262,83 @@ def run_synthesis():
         write_log("Synthesis", str(e), "synthesis", "error")
 
 
+_GEORISK_KEYWORDS = (
+    "tariff", "tariffs", "sanction", "sanctions", "shipping", "port",
+    "strike", "strikes", "disruption", "war", "conflict", "attack",
+    "cable", "pipeline", "outage", "blackout", "suez", "panama", "red sea",
+    "baltic", "taiwan", "iran", "russia", "ukraine", "china", "hurricane",
+    "typhoon", "flood", "blockade", "embargo", "chip shortage",
+)
+
+
+def _compute_georisk():
+    """Fetch recent news, filter for geopolitical/supply-chain headlines, ask
+    Gemma for a risk rating. Returns (level, narrative). CrewAI-bypass.
+
+    Honest fallback: if no keyword-matched headlines, emit
+    'LOW - No geopolitical signals detected in recent news' rather than
+    hallucinating 'Baltic stable, Suez open' from the task template.
+    """
+    from tools import NewsAPITool
+    articles = NewsAPITool()._run("GME")
+    articles = [a for a in articles if a.get("headline") and "error" not in a]
+
+    def is_geo(text: str) -> bool:
+        t = (text or "").lower()
+        return any(kw in t for kw in _GEORISK_KEYWORDS)
+
+    geo_hits = [
+        a for a in articles
+        if is_geo(a.get("headline", "")) or is_geo(a.get("summary", ""))
+    ]
+    if not geo_hits:
+        return "LOW", "LOW - No geopolitical or supply-chain signals detected in the last news scan."
+
+    lines = "\n".join(
+        f"  - [{(a.get('sentiment') or 'neutral')[:4]}] {a.get('source','?')}: "
+        f"{a.get('headline','')[:140]}"
+        for a in geo_hits[:8]
+    )
+    prompt = (
+        "You are the GeoRisk agent — geopolitical + supply-chain risk monitor for GME.\n"
+        "Rate current risk based ONLY on the headlines below. One line, format:\n"
+        "  '[LEVEL] - [short assessment citing specific events, max 240 chars]'\n"
+        "LEVEL is LOW / MEDIUM / HIGH. No preamble, no markdown, no quotes.\n\n"
+        "Thresholds: LOW = indirect/minor relevance; MEDIUM = active disruption with "
+        "plausible retail impact; HIGH = immediate supply-chain or consumer-demand shock.\n\n"
+        f"RECENT GEO-TAGGED HEADLINES ({len(geo_hits)} hits):\n{lines}\n"
+    )
+    ollama_host = os.getenv("OLLAMA_HOST", "http://localhost:11434")
+    r = requests.post(
+        f"{ollama_host}/api/generate",
+        json={"model": "gemma2:9b", "prompt": prompt, "stream": False,
+              "options": {"num_predict": 120, "temperature": 0.3}},
+        timeout=45,
+    )
+    r.raise_for_status()
+    brief = r.json().get("response", "").strip().strip('"').strip("'")
+    brief = brief.split("\n")[0].strip()[:400]
+    level = "LOW"
+    for candidate in ("HIGH", "MEDIUM", "LOW"):
+        if brief.upper().startswith(candidate):
+            level = candidate
+            break
+    if not brief:
+        brief = f"{level} - GeoRisk LLM returned empty despite {len(geo_hits)} geo headlines."
+    return level, brief
+
+
 @active_window_required
 def run_georisk():
-    """Hourly GeoRisk scan — monitor global supply chain events."""
-    from agents import georisk_agent
-    from tasks import georisk_task
+    """Hourly GeoRisk scan — news-keyword-filtered geopolitical + supply-chain risk."""
+    write_log("GeoRisk", "Scanning geopolitical signals", "georisk", "running")
     try:
-        crew = Crew(agents=[georisk_agent], tasks=[georisk_task],
-                    process=Process.sequential, verbose=False)
-        result = safe_kickoff_with_fallback(crew, agent_name="GeoRisk", timeout_seconds=180, label="georisk")
-        log.info(f"[GeoRisk] {str(result)[:120]}")
-        write_log("GeoRisk", str(result)[:500], "georisk")
-    except CrewTimeout as e:
-        log.error(f"[GeoRisk] TIMEOUT: {e}")
-        write_log("GeoRisk", f"TIMEOUT: {e}", "georisk", "timeout")
+        level, brief = _compute_georisk()
+        log.info(f"[GeoRisk] {brief}")
+        write_log("GeoRisk", brief, "georisk")
+        return level, brief
+    except requests.Timeout:
+        write_log("GeoRisk", "Ollama timeout after 45s", "georisk", "timeout")
     except Exception as e:
         log.error(f"[GeoRisk] {e}")
         write_log("GeoRisk", str(e), "georisk", "error")
