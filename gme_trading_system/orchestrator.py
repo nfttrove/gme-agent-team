@@ -2059,22 +2059,26 @@ class TradingSystemOrchestrator:
 
         log.info("""
 ╔══════════════════════════════════════════════════════════════════╗
-║      GME Multi-Agent Trading System — ONLINE (Gemini-first)     ║
+║      GME Multi-Agent Trading System — ONLINE (Gemma-first)       ║
 ╠══════════════════════════════════════════════════════════════════╣
 ║  Synthesis (cross-agent brief) every 5 min — shared context      ║
-║  Valerie  (data validator)     every 1 min                       ║
-║  Chatty   (commentary)         every 30 sec — reads Synthesis    ║
+║  Valerie  (data validator)     every 5 min                       ║
+║  Chatty   (commentary)         every 5 min — reads Synthesis     ║
 ║  Newsie   (news sentiment)     every 30 min                      ║
 ║  Pattern  (multi-day)          every 2 hours                     ║
 ║  Trendy   (daily trend)        every 4 hours + 8:00 PM ET EOD    ║
 ║  Futurist (strategic signal)   every 2 hours (gate-checked)      ║
+║  Voice Forwarder               every 10 min — agent→Telegram     ║
 ║  Boss     (daily huddle)       9:00 AM ET — mission briefing     ║
 ║  CTO      (structural brief)   9:05 AM ET — PE playbook + shorts ║
+║  CTO      (Trove score)        9:10 AM ET — deep-value rating    ║
+║  Daily Strategy Brief         10:00 AM ET — team game plan       ║
 ║  📊 STANDUP (agent perf)       11:00 AM & 4:00 PM ET — ROI check ║
 ║  Aggregator                    4:35 PM ET                        ║
 ║  Learner  (daily debrief)      4:30 PM ET — score + adapt        ║
 ║  Learner  (weekly review)      Fridays 5:00 PM ET                ║
 ║  CTO      (structural scan)    Sundays 8:00 AM — EDGAR + shorts  ║
+║  ☕ Support message            Sundays 10:00 AM — coffee nudge    ║
 ╚══════════════════════════════════════════════════════════════════╝
         """)
 
