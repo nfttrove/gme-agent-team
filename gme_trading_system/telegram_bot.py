@@ -464,7 +464,16 @@ def handle_command(text: str):
             crew = Crew(agents=[briefing_agent], tasks=[live_task],
                         process=Process.sequential, verbose=False)
             result = crew.kickoff()
-            _send(f"<b>📋 STRATEGY BRIEF</b>\n\n{str(result)[:3000]}")
+            result_str = str(result)
+
+            # CRITICAL: Strip any auto-generated direction line and replace with calculated one
+            # This prevents LLM from hallucinating direction based on sentiment
+            result_lines = result_str.split('\n')
+            if result_lines and '📍 MARKET:' in result_lines[0]:
+                result_lines[0] = f"📍 MARKET: GME is at ${price_row[0]:.2f}. It is {direction_hint} today."
+            result_str = '\n'.join(result_lines)
+
+            _send(f"<b>📋 STRATEGY BRIEF</b>\n\n{result_str[:3000]}")
         except Exception as e:
             _send(f"Brief failed: {e}")
 
