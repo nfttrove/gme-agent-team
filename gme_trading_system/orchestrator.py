@@ -1251,16 +1251,101 @@ def run_cto_trove_score():
 
 
 def run_cto_daily_brief():
-    """9:05 AM ET — CTO structural intelligence brief, just after morning huddle."""
-    from agents import cto_agent
-    from tasks import cto_daily_brief_task
+    """9:05 AM ET — CTO structural intelligence brief, just after morning huddle.
+
+    Bypass pattern: pulls structural_signals, investor_intel, and news_analysis
+    rows deterministically. Gemma only writes a short commentary on the
+    short-watchlist and anti-pattern flags. GME immunity math is handled
+    separately by run_cto_trove_score at 9:10.
+    """
     log.info("[CTO] === Daily structural intelligence brief ===")
     write_log("CTO", "Running daily structural brief", "structural_brief", "running")
     try:
-        crew = Crew(agents=[cto_agent], tasks=[cto_daily_brief_task],
-                    process=Process.sequential, verbose=True)
-        result = crew.kickoff()
-        write_log("CTO", str(result)[:2000], "structural_brief")
+        conn = sqlite3.connect(DB_PATH)
+        conn.row_factory = sqlite3.Row
+
+        # Top non-GME short candidates from structural_signals (last 30d)
+        shorts = conn.execute(
+            "SELECT ticker, signal_name, confidence, action, timeline_months, headline "
+            "FROM structural_signals WHERE ticker != 'GME' "
+            "AND filing_date >= date('now', '-30 days') "
+            "ORDER BY confidence DESC LIMIT 5"
+        ).fetchall()
+
+        # Most recent investor intelligence snapshot
+        inv_row = conn.execute(
+            "SELECT content FROM agent_logs WHERE task_type='investor_intel' "
+            "AND status='ok' ORDER BY timestamp DESC LIMIT 1"
+        ).fetchone()
+        inv_line = inv_row["content"][:240] if inv_row else "No investor intel logged."
+
+        # Recent news sentiment distribution (last 24h)
+        news_rows = conn.execute(
+            "SELECT headline, sentiment_score FROM news_analysis "
+            "WHERE datetime(timestamp) > datetime('now', '-1 day') "
+            "ORDER BY timestamp DESC LIMIT 10"
+        ).fetchall()
+        conn.close()
+
+        if news_rows:
+            avg_sent = sum(r["sentiment_score"] or 0 for r in news_rows) / len(news_rows)
+            if avg_sent > 0.15:
+                news_bias = f"bullish ({avg_sent:+.2f})"
+            elif avg_sent < -0.15:
+                news_bias = f"bearish ({avg_sent:+.2f})"
+            else:
+                news_bias = f"neutral ({avg_sent:+.2f})"
+        else:
+            news_bias = "no headlines in last 24h"
+
+        # Format short watchlist
+        if shorts:
+            short_lines = [
+                f"  {i+1}. {s['ticker']} — {s['signal_name']} "
+                f"(conf {int((s['confidence'] or 0)*100)}%, {s['action'] or 'MONITOR'}, "
+                f"{s['timeline_months'] or '?'}mo)"
+                for i, s in enumerate(shorts[:3])
+            ]
+            shorts_block = "\n".join(short_lines)
+        else:
+            shorts_block = "  (no structural signals in last 30d)"
+
+        # Gemma commentary — short paragraph on watchlist + anti-patterns
+        prompt = (
+            "You are the CTO — structural-intelligence analyst for a GME trading team. "
+            "In ONE short paragraph (max 280 chars, plain English, no preamble, no markdown, "
+            "no quotes), comment on today's structural picture. Call out the top short "
+            "candidate if any, and flag anti-pattern risk if news bias conflicts with fundamentals.\n\n"
+            "FACTS (do not contradict):\n"
+            f"- Short watchlist (top 3 by confidence):\n{shorts_block}\n"
+            f"- Investor intel: {inv_line}\n"
+            f"- GME news bias last 24h: {news_bias}\n"
+        )
+        commentary = "No new structural signals to act on today."
+        try:
+            ollama_host = os.getenv("OLLAMA_HOST", "http://localhost:11434")
+            resp = requests.post(
+                f"{ollama_host}/api/generate",
+                json={"model": "gemma2:9b", "prompt": prompt, "stream": False,
+                      "options": {"num_predict": 160, "temperature": 0.3}},
+                timeout=30,
+            )
+            resp.raise_for_status()
+            raw = resp.json().get("response", "").strip().strip('"').strip("'")
+            raw = " ".join(raw.split())
+            if raw:
+                commentary = raw[:500]
+        except Exception as e:
+            log.warning(f"[CTO] Brief LLM failed ({e}), using fallback")
+
+        brief = (
+            "🛡️ CTO STRUCTURAL INTEL BRIEF\n"
+            f"Short watchlist:\n{shorts_block}\n"
+            f"Investor intel: {inv_line}\n"
+            f"News bias (24h): {news_bias}\n"
+            f"— {commentary}"
+        )
+        write_log("CTO", brief[:2000], "structural_brief")
         log.info(f"[CTO] Brief complete")
     except Exception as e:
         log.error(f"[CTO] Brief failed: {e}")
@@ -1698,16 +1783,100 @@ def run_daily_briefing():
 
 
 def run_daily_huddle():
-    """Morning briefing — Boss recaps the mission and reviews yesterday's performance."""
-    from agents import project_manager_agent
-    from tasks import daily_huddle_task
+    """9:00 AM ET — Boss recaps yesterday + frames today's focus.
+
+    Bypass pattern: yesterday's trades/predictions and today's active signals
+    are pulled deterministically. Gemma only writes the 1-line focus. The
+    previous CrewAI version was handed hardcoded 'No trades today' via the
+    default make_daily_huddle_task() — Boss never saw the real data.
+    """
     log.info("[Huddle] === DAILY TEAM BRIEFING ===")
     try:
-        crew = Crew(agents=[project_manager_agent], tasks=[daily_huddle_task],
-                    process=Process.sequential, verbose=True)
-        result = crew.kickoff()
-        log.info(f"[Huddle]\n{result}")
-        write_log("Boss", str(result), "daily_huddle")
+        conn = sqlite3.connect(DB_PATH)
+        conn.row_factory = sqlite3.Row
+
+        # Yesterday's trades (last 24h)
+        trades = conn.execute(
+            "SELECT action, symbol, entry_price, exit_price, pnl, status "
+            "FROM trade_decisions WHERE datetime(timestamp) > datetime('now', '-1 day') "
+            "ORDER BY timestamp DESC"
+        ).fetchall()
+
+        # Yesterday's scored predictions (have actual_price filled in)
+        preds = conn.execute(
+            "SELECT horizon, predicted_price, actual_price, error_pct FROM predictions "
+            "WHERE datetime(timestamp) > datetime('now', '-1 day') "
+            "AND actual_price IS NOT NULL ORDER BY timestamp DESC"
+        ).fetchall()
+
+        # Today's fresh agent signals (last 8h)
+        signals = conn.execute(
+            "SELECT agent_name, signal_type, confidence FROM signal_alerts "
+            "WHERE datetime(timestamp) > datetime('now', '-8 hours') "
+            "ORDER BY timestamp DESC"
+        ).fetchall()
+        conn.close()
+
+        trades_line = (
+            f"{len(trades)} trades: " + ", ".join(
+                f"{t['action']} {t['symbol']} @ ${t['entry_price']:.2f}"
+                + (f" → pnl ${t['pnl']:.2f}" if t['pnl'] is not None else "")
+                for t in trades[:3]
+            )
+        ) if trades else "No trades yesterday."
+
+        if preds:
+            avg_err = sum(abs(p['error_pct']) for p in preds if p['error_pct'] is not None) / max(1, len(preds))
+            preds_line = f"{len(preds)} predictions scored, avg abs error {avg_err:.1f}%."
+        else:
+            preds_line = "No scored predictions yet."
+
+        # Team bias today (deterministic)
+        confs = [s['confidence'] for s in signals] if signals else []
+        team_conf = int(round(sum(confs) / len(confs) * 100)) if confs else 50
+        n_bullish = len([s for s in signals if s['signal_type'] in
+                         ('trend_signal', 'pattern_signal', 'price_prediction')])
+        on_track = team_conf >= 60 and n_bullish >= 2
+        on_track_line = "YES" if on_track else "NO" if signals else "UNKNOWN"
+
+        # Gemma only writes the focus line — everything above is locked
+        prompt = (
+            "You are the Boss running a daily team huddle for a GME trading crew. "
+            "Given these facts, write ONE short sentence stating the focus for today. "
+            "No preamble, no markdown, no quotes, no label. Plain English, under 140 chars.\n\n"
+            f"- Yesterday: {trades_line}\n"
+            f"- Predictions: {preds_line}\n"
+            f"- Active signals this morning: {len(signals)}, team conf {team_conf}%\n"
+            f"- On track for profit: {on_track_line}\n"
+        )
+        focus_txt = (
+            "Wait for confluence — only act when Trendy, Pattern, and Futurist all align."
+        )
+        try:
+            ollama_host = os.getenv("OLLAMA_HOST", "http://localhost:11434")
+            resp = requests.post(
+                f"{ollama_host}/api/generate",
+                json={"model": "gemma2:9b", "prompt": prompt, "stream": False,
+                      "options": {"num_predict": 80, "temperature": 0.4}},
+                timeout=30,
+            )
+            resp.raise_for_status()
+            raw = resp.json().get("response", "").strip().strip('"').strip("'")
+            raw = " ".join(raw.split())
+            if raw:
+                focus_txt = raw[:160]
+        except Exception as e:
+            log.warning(f"[Huddle] LLM focus line failed ({e}), using fallback")
+
+        brief = (
+            "DIRECTIVE: Make money first, do good with it second.\n"
+            f"YESTERDAY: {trades_line} {preds_line}\n"
+            f"TODAY: {len(signals)} active signals, team conf {team_conf}%.\n"
+            f"ON TRACK: {on_track_line}\n"
+            f"FOCUS: {focus_txt}"
+        )
+        log.info(f"[Huddle]\n{brief}")
+        write_log("Boss", brief, "daily_huddle")
     except Exception as e:
         log.error(f"[Huddle] {e}")
         write_log("Boss", str(e), "daily_huddle", "error")
