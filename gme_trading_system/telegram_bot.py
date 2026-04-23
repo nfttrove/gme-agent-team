@@ -715,7 +715,7 @@ Keep responses brief (1 paragraph max). Think: Bloomberg meets a knowledgeable f
             "/brief — today's strategy in plain English\n"
             "/update — sync data to Supabase now\n"
             "/trove [TICKERS] — deep-value score screen\n"
-            "/test — run Playwright tests\n"
+            "/test — run Telegram handler smoke tests\n"
             "/supportme — buy-me-a-coffee / PayPal link\n"
             "/frequency — notification settings\n\n"
             "Send /help for detailed guide."
@@ -904,17 +904,21 @@ def _register_commands():
     if not ENABLED:
         return
     commands = [
-        {"command": "status", "description": "System health check"},
+        {"command": "help", "description": "Full command guide + chat capabilities"},
+        {"command": "status", "description": "System health — tick count, last agent activity"},
+        {"command": "brief", "description": "Today's strategy brief (price, direction, signals)"},
         {"command": "standup", "description": "Agent daily performance (signals, win rates, ROI)"},
-        {"command": "agents", "description": "Last agent run times"},
-        {"command": "ticks", "description": "Price data received"},
-        {"command": "brief", "description": "Strategy briefing"},
-        {"command": "trove", "description": "Deep-value screen: /trove [TICKERS]"},
-        {"command": "update", "description": "Sync to Supabase"},
-        {"command": "test", "description": "Run Playwright tests"},
-        {"command": "frequency", "description": "Notification settings"},
-        {"command": "learn", "description": "Teach agents rules"},
-        {"command": "lessons", "description": "View learned rules"},
+        {"command": "agents", "description": "Last run time for each agent"},
+        {"command": "ticks", "description": "Price data received today"},
+        {"command": "freshness", "description": "Verify agents are reading current data"},
+        {"command": "trove", "description": "Deep-value Trove screen: /trove [TICKERS]"},
+        {"command": "update", "description": "Force sync local data to Supabase now"},
+        {"command": "learn", "description": "Teach agents a rule: /learn \"...\" --why \"...\""},
+        {"command": "lessons", "description": "Show lessons agents learned"},
+        {"command": "compare", "description": "Ask Gemma + DeepSeek: /compare <question>"},
+        {"command": "frequency", "description": "Notification level: low | medium | high"},
+        {"command": "supportme", "description": "Buy-me-a-coffee / PayPal link"},
+        {"command": "test", "description": "Run Telegram handler smoke tests (~1 sec)"},
     ]
     try:
         requests.post(f"{BASE_URL}/setMyCommands", json={"commands": commands}, timeout=10)
