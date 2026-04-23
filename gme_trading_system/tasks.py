@@ -15,28 +15,38 @@ from agents import (
     georisk_agent,
 )
 
-daily_trend_task = Task(
-    description=(
-        "Query the daily_candles table for the last 10 days of GME data. "
-        "Calculate support and resistance levels, identify the current trend direction "
-        "(bullish/bearish/sideways), and rate trend strength 0–1. "
-        "Output JSON: {support, resistance, trend_direction, strength, notes}"
-    ),
-    expected_output='{"support": 20.50, "resistance": 24.80, "trend_direction": "bullish", "strength": 0.72, "notes": "..."}',
-    agent=daily_trend_agent,
-)
+def make_daily_trend_task(agent, candles_str: str) -> Task:
+    return Task(
+        description=(
+            "Calculate GME support/resistance levels, trend direction, and strength.\n\n"
+            f"LIVE CANDLE DATA (last 10 days — use these exact numbers, do not invent):\n{candles_str}\n\n"
+            "From this data: identify the lowest low (support), highest high (resistance), "
+            "whether price is trending up/down/sideways, and rate trend strength 0–1. "
+            "Output JSON: {support, resistance, trend_direction, strength, notes}"
+        ),
+        expected_output='{"support": 0.0, "resistance": 0.0, "trend_direction": "sideways", "strength": 0.5, "notes": "based on live data"}',
+        agent=agent,
+    )
 
-multiday_trend_task = Task(
-    description=(
-        "Query the daily_candles table for the last 30 days of GME data. "
-        "Identify any multi-day chart patterns (flags, wedges, breakouts, reversals). "
-        "Summarise momentum over the last 5 and 10 days. "
-        "Output JSON: {pattern, momentum_5d, momentum_10d, signal, notes}"
-    ),
-    expected_output='{"pattern": "bull_flag", "momentum_5d": 0.6, "momentum_10d": 0.3, "signal": "bullish", "notes": "..."}',
-    agent=multiday_trend_agent,
-    context=[daily_trend_task],
-)
+
+def make_multiday_trend_task(agent, candles_str: str, daily_trend_task=None) -> Task:
+    return Task(
+        description=(
+            "Identify multi-day chart patterns and momentum for GME.\n\n"
+            f"LIVE CANDLE DATA (last 30 days — use these exact numbers, do not invent):\n{candles_str}\n\n"
+            "Identify any flags, wedges, breakouts, or reversals visible in the data. "
+            "Compute momentum over the last 5 and 10 candles (positive = up, negative = down). "
+            "Output JSON: {pattern, momentum_5d, momentum_10d, signal, notes}"
+        ),
+        expected_output='{"pattern": "unknown", "momentum_5d": 0.0, "momentum_10d": 0.0, "signal": "neutral", "notes": "based on live data"}',
+        agent=agent,
+        context=[daily_trend_task] if daily_trend_task else [],
+    )
+
+
+# Module-level fallbacks (used when no live data is available — orchestrator uses factories)
+daily_trend_task = make_daily_trend_task(daily_trend_agent, "No candle data available — state trend as unknown.")
+multiday_trend_task = make_multiday_trend_task(multiday_trend_agent, "No candle data available — state pattern as unknown.", daily_trend_task)
 
 news_task = Task(
     description=(
@@ -50,36 +60,29 @@ news_task = Task(
     agent=news_analyst_agent,
 )
 
-futurist_task = Task(
-    description=(
-        "Using the daily trend analysis, multi-day pattern, and news sentiment from previous tasks, "
-        "predict GME price for the next 1h, 4h, and 24h.\n\n"
+def make_futurist_task(agent, price_str: str, futurist_logs_str: str, synthesis_str: str, context_tasks=None) -> Task:
+    return Task(
+        description=(
+            "Using the trend analysis and news sentiment from previous tasks, "
+            "predict GME price for the next 1h, 4h, and 24h.\n\n"
+            f"LIVE DATA (do not invent — use these exact values):\n"
+            f"  Current GME price: {price_str}\n"
+            f"  Team consensus: {synthesis_str}\n"
+            f"  Your recent prediction logs:\n{futurist_logs_str}\n\n"
+            "Self-reflect: if your recent predictions were bullish but price fell, widen your uncertainty band. "
+            "If recent predictions were accurate, tighten it. State your calibration note.\n\n"
+            "For each horizon provide: predicted_price (relative to the LIVE price above), confidence (0–1), brief reasoning. "
+            "State trade bias: BUY, SELL, or HOLD. "
+            "Output JSON: {1h: {price, confidence, reasoning}, 4h: {...}, 24h: {...}, bias, overall_confidence, "
+            "self_reflection: '<calibration note>'}"
+        ),
+        expected_output='{"1h": {"price": 0.0, "confidence": 0.5, "reasoning": "based on live data"}, "bias": "HOLD", "overall_confidence": 0.5, "self_reflection": "insufficient history"}',
+        agent=agent,
+        context=context_tasks or [],
+    )
 
-        "BEFORE making predictions — review your own recent accuracy:\n"
-        "  SELECT timestamp, content FROM agent_logs WHERE agent_name='Futurist' "
-        "  AND task_type IN ('full_cycle','gate_check') ORDER BY timestamp DESC LIMIT 5\n"
-        "  Also check the current price:\n"
-        "  SELECT close, timestamp FROM price_ticks WHERE symbol='GME' ORDER BY timestamp DESC LIMIT 1\n\n"
 
-        "Self-reflect: if your recent predictions were bullish but price fell, widen your uncertainty band. "
-        "If your recent predictions were accurate, you may tighten it. State your calibration note.\n\n"
-
-        "Also read the team's current consensus:\n"
-        "  SELECT content FROM agent_logs WHERE agent_name='Synthesis' ORDER BY timestamp DESC LIMIT 1\n\n"
-
-        "For each horizon provide: predicted_price, confidence (0–1), brief reasoning. "
-        "State trade bias: BUY, SELL, or HOLD. "
-        "Output JSON: {1h: {price, confidence, reasoning}, 4h: {...}, 24h: {...}, bias, overall_confidence, "
-        "self_reflection: '<calibration note>'}"
-    ),
-    expected_output=(
-        '{"1h": {"price": 22.10, "confidence": 0.65, "reasoning": "Triangle support holding"}, '
-        '"bias": "BUY", "overall_confidence": 0.68, '
-        '"self_reflection": "Last 4h prediction was +1.2% off actual — maintaining confidence band."}'
-    ),
-    agent=futurist_agent,
-    context=[daily_trend_task, multiday_trend_task, news_task],
-)
+futurist_task = make_futurist_task(futurist_agent, "unknown", "No logs available", "No synthesis available", [daily_trend_task, multiday_trend_task, news_task])
 
 manager_task = Task(
     description=(
@@ -97,36 +100,45 @@ manager_task = Task(
 
 # ── New tasks ──────────────────────────────────────────────────────────────────
 
-validate_data_task = Task(
-    description=(
-        "Run these SQL checks on price_ticks for the last 5 minutes:\n"
-        "1. SELECT COUNT(*) ticks, MAX(timestamp) latest FROM price_ticks WHERE symbol='GME' AND timestamp > datetime('now','-5 minutes')\n"
-        "2. Find any gap > 120 seconds between consecutive ticks.\n"
-        "3. Find any close price that differs > 20% from the previous close.\n"
-        "Report findings as JSON: {tick_count, latest_timestamp, gaps_found, outliers_found, status}. "
-        "Insert a row into data_quality_logs with the result."
-    ),
-    expected_output='{"tick_count": 60, "latest_timestamp": "...", "gaps_found": 0, "outliers_found": 0, "status": "ok"}',
-    agent=valerie_agent,
-)
+def make_validate_data_task(agent, tick_count: int, latest_ts: str, max_gap_s: float, outliers: int) -> Task:
+    status = "ok" if tick_count > 0 and max_gap_s < 120 and outliers == 0 else "degraded"
+    return Task(
+        description=(
+            "Report the current GME data feed health as JSON.\n\n"
+            f"LIVE MEASUREMENTS (pre-computed — do not invent):\n"
+            f"  Ticks in last 5 min: {tick_count}\n"
+            f"  Latest tick timestamp: {latest_ts}\n"
+            f"  Largest gap between ticks: {max_gap_s:.0f}s\n"
+            f"  Outlier ticks (>20% price jump): {outliers}\n"
+            f"  Derived status: {status}\n\n"
+            "Output ONLY this JSON using the numbers above:\n"
+            "{tick_count, latest_timestamp, gaps_found, outliers_found, status}"
+        ),
+        expected_output=f'{{"tick_count": {tick_count}, "latest_timestamp": "{latest_ts}", "gaps_found": {int(max_gap_s >= 120)}, "outliers_found": {outliers}, "status": "{status}"}}',
+        agent=agent,
+    )
 
-commentary_task = Task(
-    description=(
-        "Step 1 — Read the latest team intelligence brief (Synthesis):\n"
-        "  SELECT content, timestamp FROM agent_logs WHERE agent_name='Synthesis' ORDER BY timestamp DESC LIMIT 1\n\n"
-        "Step 2 — Query the latest price tick:\n"
-        "  SELECT close, volume, timestamp FROM price_ticks WHERE symbol='GME' ORDER BY timestamp DESC LIMIT 1\n\n"
-        "Step 3 — Query 10-minute average volume:\n"
-        "  SELECT AVG(volume) avg_vol FROM price_ticks WHERE symbol='GME' AND timestamp > datetime('now','-10 minutes')\n\n"
-        "Generate ONE insight (max 120 chars) that combines the team's current consensus with the latest price action. "
-        "If Synthesis shows BULLISH consensus, lean bullish. If BEARISH, lean bearish. If no synthesis yet, base on price only. "
-        "Examples: 'Consensus BULLISH 65%: vol 2.3× avg — triangle holding.' | 'Team cautious: news drag, wait for $24.80 break.' "
-        "Insert it into stream_comments: INSERT INTO stream_comments (timestamp, comment) VALUES (datetime('now'), '<comment>'). "
-        "Return just the comment text."
-    ),
-    expected_output="Consensus BULLISH 65%: vol 2.3× avg — triangle holding at $24.20.",
-    agent=chatty_agent,
-)
+
+validate_data_task = make_validate_data_task(valerie_agent, 0, "unknown", 999, 0)
+
+def make_commentary_task(agent, price_str: str, synthesis_str: str, avg_vol_str: str) -> Task:
+    return Task(
+        description=(
+            "Generate ONE market insight for GME (max 120 chars).\n\n"
+            f"LIVE DATA (do not invent):\n"
+            f"  Latest GME price: {price_str}\n"
+            f"  Team consensus (Synthesis): {synthesis_str}\n"
+            f"  10-min average volume: {avg_vol_str}\n\n"
+            "Combine the team's consensus with the latest price action into a single insight. "
+            "If consensus is BULLISH, lean bullish. If BEARISH, lean bearish. If no consensus, base on price only. "
+            "Return just the comment text (max 120 chars)."
+        ),
+        expected_output="GME $25.60 flat — no consensus yet, waiting for direction.",
+        agent=agent,
+    )
+
+
+commentary_task = make_commentary_task(chatty_agent, "unknown", "No synthesis available", "unknown")
 
 historia_task = Task(
     description=(
@@ -260,75 +272,63 @@ cto_structural_scan_task = Task(
 
 # ── Daily huddle ───────────────────────────────────────────────────────────────
 
-daily_huddle_task = Task(
-    description=(
-        f"DAILY TEAM BRIEFING\n\n"
-        f"{MISSION_FULL}\n\n"
-        "--- BRIEFING AGENDA ---\n"
-        "1. Restate the operative directive in your own words (1 sentence).\n"
-        "2. Query today's trade decisions: SELECT action, status, pnl FROM trade_decisions WHERE timestamp LIKE date('now')||'%'\n"
-        "3. Query today's predictions: SELECT horizon, predicted_price, confidence FROM predictions WHERE timestamp LIKE date('now')||'%'\n"
-        "4. State whether the team is on track to generate profit today — YES or NO — and why in one sentence.\n"
-        "5. Name ONE thing the team should focus on in the next cycle to improve our edge.\n"
-        "Output a clean briefing summary."
-    ),
-    expected_output=(
-        "DIRECTIVE: Make money first, do good with it second.\n"
-        "TODAY: 0 trades executed, 2 predictions made (confidence avg 0.67).\n"
-        "ON TRACK: YES — gate is holding correctly, no bad trades taken.\n"
-        "FOCUS: Improve news sentiment scoring to reduce false positives."
-    ),
-    agent=project_manager_agent,
-)
+def make_daily_huddle_task(agent, trades_str: str, predictions_str: str) -> Task:
+    return Task(
+        description=(
+            f"DAILY TEAM BRIEFING\n\n"
+            f"{MISSION_FULL}\n\n"
+            "--- BRIEFING AGENDA ---\n"
+            "1. Restate the operative directive in your own words (1 sentence).\n"
+            f"2. Today's trade decisions (live data — do not invent):\n{trades_str}\n"
+            f"3. Today's predictions (live data — do not invent):\n{predictions_str}\n"
+            "4. State whether the team is on track to generate profit today — YES or NO — and why in one sentence.\n"
+            "5. Name ONE thing the team should focus on in the next cycle to improve our edge.\n"
+            "Output a clean briefing summary."
+        ),
+        expected_output=(
+            "DIRECTIVE: Make money first, do good with it second.\n"
+            "TODAY: [use live data above]\n"
+            "ON TRACK: [YES/NO based on live data]\n"
+            "FOCUS: [one specific improvement]"
+        ),
+        agent=agent,
+    )
+
+
+daily_huddle_task = make_daily_huddle_task(project_manager_agent, "No trades today.", "No predictions today.")
 
 # ── Synthesis task (every 5 min — cross-agent shared context) ─────────────────
 
-synthesis_task = Task(
-    description=(
-        "Read all recent agent outputs and produce a one-line structured intelligence brief "
-        "that captures the team's current consensus. This brief is the shared context "
-        "that Chatty and Futurist will read before producing their own outputs.\n\n"
+def make_synthesis_task(agent, price_str: str, agent_logs_str: str) -> Task:
+    return Task(
+        description=(
+            "Produce a one-line structured intelligence brief capturing the team's current consensus.\n\n"
+            f"LIVE DATA (do not invent — use exactly what is provided):\n"
+            f"Latest GME price: {price_str}\n"
+            f"Recent agent logs (last 2h):\n{agent_logs_str}\n\n"
+            "Extract signals from the logs:\n"
+            "  - Valerie: data feed clean or degraded?\n"
+            "  - Newsie: news sentiment (bullish/bearish/neutral, score)\n"
+            "  - Pattern: chart pattern and breakout bias\n"
+            "  - Trendy: trend direction and strength\n"
+            "  - Futurist: trade bias (BUY/SELL/HOLD) and confidence\n"
+            "  - CTO: structural bias (GREEN/YELLOW/RED)\n"
+            "  - Social: any tracked account posts (or 'none')\n"
+            "  - SafetyGate: PASS or BLOCK\n\n"
+            "Count bullish vs bearish signals: ≥60% bullish → CONSENSUS: BULLISH; "
+            "≥60% bearish → CONSENSUS: BEARISH; otherwise → NEUTRAL.\n\n"
+            "Return ONE line in this exact format:\n"
+            "PRICE: $XX.XX [trend] | DATA: [clean/degraded] | NEWS: [sentiment, score] | "
+            "PATTERN: [type, bias] | TREND: [direction, strength] | "
+            "PREDICTION: [bias, confidence] | STRUCTURAL: [status] | SOCIAL: [alert or none] | "
+            "GATE: [PASS/BLOCK] | CONSENSUS: [BULLISH/BEARISH/NEUTRAL] [X]%"
+        ),
+        expected_output="PRICE: $0.00 unknown | DATA: degraded | NEWS: neutral 0.0 | PATTERN: unknown | TREND: unknown | PREDICTION: HOLD | STRUCTURAL: unknown | SOCIAL: none | GATE: BLOCK no_data | CONSENSUS: NEUTRAL 50%",
+        agent=agent,
+    )
 
-        "STEP 1 — Query recent agent logs (last 2 hours):\n"
-        "  SELECT agent_name, task_type, content, timestamp FROM agent_logs "
-        "  WHERE timestamp > datetime('now','-2 hours') ORDER BY timestamp DESC LIMIT 40\n\n"
 
-        "STEP 2 — Query latest price:\n"
-        "  SELECT close, volume, timestamp FROM price_ticks WHERE symbol='GME' ORDER BY timestamp DESC LIMIT 1\n\n"
-
-        "STEP 3 — Extract key signals from each agent:\n"
-        "  - Valerie: is the data feed clean or degraded?\n"
-        "  - Newsie: composite news sentiment (bullish/bearish/neutral, score)\n"
-        "  - Pattern: chart pattern type and breakout bias\n"
-        "  - Trendy: trend direction and strength\n"
-        "  - Futurist: trade bias (BUY/SELL/HOLD) and overall confidence\n"
-        "  - CTO: structural bias (GREEN/YELLOW/RED)\n"
-        "  - Social: any recent posts from tracked accounts (or 'none')\n"
-        "  - SafetyGate: PASS or BLOCK and why\n\n"
-
-        "STEP 4 — Compute team consensus:\n"
-        "  Count bullish signals vs bearish signals. If ≥60% bullish → CONSENSUS: BULLISH. "
-        "  If ≥60% bearish → CONSENSUS: BEARISH. Otherwise → NEUTRAL.\n\n"
-
-        "STEP 5 — Write the brief as a single row:\n"
-        "  INSERT INTO agent_logs (agent_name, timestamp, task_type, content, status) "
-        "  VALUES ('Synthesis', datetime('now'), 'synthesis', '<brief>', 'ok')\n\n"
-
-        "Brief format (one line, pipe-separated):\n"
-        "PRICE: $XX.XX [trend] | DATA: [clean/degraded] | NEWS: [sentiment, score] | "
-        "PATTERN: [type, bias] | TREND: [direction, strength] | "
-        "PREDICTION: [bias, confidence] | STRUCTURAL: [status] | SOCIAL: [alert or none] | "
-        "GATE: [PASS/BLOCK] | CONSENSUS: [BULLISH/BEARISH/NEUTRAL] [X]%\n\n"
-        "Return the brief text."
-    ),
-    expected_output=(
-        "PRICE: $24.28 flat | DATA: clean | NEWS: bullish 0.45 | "
-        "PATTERN: symmetrical_triangle bullish | TREND: bullish 0.72 | "
-        "PREDICTION: BUY 0.68 | STRUCTURAL: GREEN | SOCIAL: none | "
-        "GATE: BLOCK no_signal | CONSENSUS: BULLISH 65%"
-    ),
-    agent=synthesis_agent,
-)
+synthesis_task = make_synthesis_task(synthesis_agent, "unknown", "No agent logs available")
 
 # ── Daily strategy briefing (ELI5 for CEO) ────────────────────────────────────
 
@@ -339,10 +339,18 @@ daily_briefing_task = Task(
         "  SELECT agent_name, task_type, content, timestamp FROM agent_logs ORDER BY timestamp DESC LIMIT 5\n\n"
         "Step 2 — read the latest price tick:\n"
         "  SELECT close, volume, timestamp FROM price_ticks WHERE symbol='GME' ORDER BY timestamp DESC LIMIT 1\n\n"
-        "Step 3 — read the last safety gate result:\n"
+        "Step 3 — read yesterday's close (previous trading day):\n"
+        "  SELECT close FROM price_ticks WHERE symbol='GME' AND date(timestamp) < date('now') ORDER BY timestamp DESC LIMIT 1\n\n"
+        "Step 4 — read the last safety gate result:\n"
         "  SELECT content FROM agent_logs WHERE agent_name='SafetyGate' ORDER BY timestamp DESC LIMIT 1\n\n"
-        "Then write EXACTLY this format (fill in the blanks):\n\n"
-        "📍 MARKET: GME is at $[price]. It is [rising/falling/sideways] today.\n\n"
+        "CRITICAL RULE — Compare to yesterday's close, NOT sentiment:\n"
+        "  - Calculate: (current_price - yesterday_close) / yesterday_close * 100\n"
+        "  - If result > 0.5%, direction = RISING\n"
+        "  - If result < -0.5%, direction = FALLING\n"
+        "  - Otherwise, direction = SIDEWAYS\n"
+        "  - Use this calculated direction. Do NOT infer from sentiment or news.\n\n"
+        "Then write EXACTLY this format (fill in the blanks from actual data):\n\n"
+        "📍 MARKET: GME is at $[price]. It is [RISING/FALLING/SIDEWAYS] today.\n\n"
         "📐 PATTERN: [Describe any triangle, flag or pattern forming in plain English. "
         "If no clear pattern, say what price is doing instead.]\n\n"
         "🎯 KEY LEVELS: Support at $[X] (price bounces here). Resistance at $[Y] (price struggles here). "
