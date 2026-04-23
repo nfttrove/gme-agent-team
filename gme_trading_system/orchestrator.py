@@ -1699,7 +1699,7 @@ class TradingSystemOrchestrator:
 
         # Daily jobs (market-hours aware)
         self.scheduler.add_job(run_daily_huddle,      CronTrigger(hour=9,  minute=0),  id="huddle")
-        self.scheduler.add_job(run_daily_briefing,    CronTrigger(hour=9,  minute=32), id="briefing")
+        self.scheduler.add_job(run_daily_briefing,    CronTrigger(hour=10, minute=0),  id="briefing")
         self.scheduler.add_job(run_standup_report,    CronTrigger(hour=11, minute=0),  id="standup_midday")
         self.scheduler.add_job(run_daily_trend,       CronTrigger(hour=20, minute=0),  id="trendy_eod")
         self.scheduler.add_job(run_daily_aggregation, CronTrigger(hour=16, minute=35), id="aggregator")
