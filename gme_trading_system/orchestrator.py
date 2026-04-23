@@ -1542,20 +1542,156 @@ def run_periodic_brief():
 
 
 def run_daily_briefing():
-    """9:32 AM ET — ELI5 strategy briefing sent to Telegram after market opens."""
-    from agents import briefing_agent
-    from tasks import daily_briefing_task
+    """10:00 AM ET — ELI5 strategy briefing sent to Telegram after market opens.
+
+    Bypass pattern: numbers and direction are computed deterministically from
+    daily_candles + signal_alerts. Gemma only fills the narrative fragments
+    (pattern description, waiting-for, risk). Prevents the 'sideways on an
+    up day' hallucination the previous CrewAI version produced.
+    """
+    from datetime import datetime
     log.info("[Briefing] === Daily Strategy Brief ===")
     write_log("Briefing", "Composing daily strategy brief", "daily_brief", "running")
     try:
-        crew = Crew(agents=[briefing_agent], tasks=[daily_briefing_task],
-                    process=Process.sequential, verbose=False)
-        result = crew.kickoff()
-        brief = str(result)
+        conn = sqlite3.connect(DB_PATH)
+        conn.row_factory = sqlite3.Row
+
+        # ---------- 1. Price facts (deterministic) ----------
+        tick = conn.execute(
+            "SELECT close, timestamp FROM price_ticks WHERE symbol='GME' "
+            "ORDER BY timestamp DESC LIMIT 1"
+        ).fetchone()
+        candles = conn.execute(
+            "SELECT date, open, high, low, close FROM daily_candles "
+            "WHERE symbol='GME' ORDER BY date DESC LIMIT 2"
+        ).fetchall()
+
+        if not tick or not candles:
+            write_log("Briefing", "No price data", "daily_brief", "error")
+            conn.close()
+            return
+
+        current = float(tick["close"])
+        today = candles[0]
+        prev_close = float(candles[1]["close"]) if len(candles) > 1 else float(today["open"])
+        day_open = float(today["open"])
+        day_high = max(float(today["high"]), current)
+        day_low  = min(float(today["low"]),  current)
+
+        pct_vs_open = ((current - day_open) / day_open) * 100 if day_open else 0
+        pct_vs_prev = ((current - prev_close) / prev_close) * 100 if prev_close else 0
+
+        # Direction thresholded at ±0.5% (matches common intraday "flat" band)
+        if pct_vs_prev > 0.5:
+            direction = "rising"
+        elif pct_vs_prev < -0.5:
+            direction = "falling"
+        else:
+            direction = "sideways"
+
+        # ---------- 2. Latest agent signals (from signal_alerts, not vague logs) ----------
+        def latest_signal(agent: str) -> dict | None:
+            row = conn.execute(
+                "SELECT signal_type, confidence, entry_price, stop_loss, take_profit, "
+                "reasoning, timestamp FROM signal_alerts WHERE agent_name=? "
+                "AND datetime(timestamp) > datetime('now', '-1 day') "
+                "ORDER BY timestamp DESC LIMIT 1",
+                (agent,)
+            ).fetchone()
+            return dict(row) if row else None
+
+        trendy   = latest_signal("Trendy")
+        pattern  = latest_signal("Pattern")
+        futurist = latest_signal("Futurist")
+        conn.close()
+
+        # Support/resistance: prefer Trendy (explicit S/R fields), fall back to today's range
+        if trendy:
+            support    = float(trendy["stop_loss"])
+            resistance = float(trendy["take_profit"])
+        elif pattern:
+            support    = float(pattern["stop_loss"])
+            resistance = float(pattern["take_profit"])
+        else:
+            support    = day_low
+            resistance = day_high
+
+        # Team confidence = weighted average of bullish agents
+        confidences = [s["confidence"] for s in (trendy, pattern, futurist) if s]
+        team_conf = int(round(sum(confidences) / len(confidences) * 100)) if confidences else 50
+
+        # ---------- 3. Gemma fills narrative only (numbers are locked) ----------
+        signal_lines = []
+        if trendy:
+            signal_lines.append(f"Trendy (trend): conf {int(trendy['confidence']*100)}% — {trendy['reasoning'][:120]}")
+        if pattern:
+            signal_lines.append(f"Pattern (chart): conf {int(pattern['confidence']*100)}% — {pattern['reasoning'][:120]}")
+        if futurist:
+            signal_lines.append(f"Futurist (forecast): conf {int(futurist['confidence']*100)}% — {futurist['reasoning'][:120]}")
+        signals_blob = "\n".join(signal_lines) if signal_lines else "(no fresh signals in last 24h)"
+
+        prompt = (
+            "You are writing a plain-English trading brief for a non-technical CEO. "
+            "Output EXACTLY three short labelled sections, no preamble, no markdown, "
+            "no quotes, no emoji. Keep each section to 1-2 short sentences.\n\n"
+            "FACTS (use these — do NOT contradict):\n"
+            f"- GME is currently ${current:.2f}, {direction} ({pct_vs_prev:+.1f}% vs prior close).\n"
+            f"- Today's intraday range: ${day_low:.2f} to ${day_high:.2f}.\n"
+            f"- Support ${support:.2f}, resistance ${resistance:.2f}.\n"
+            f"- Team confidence: {team_conf}%.\n\n"
+            f"AGENT SIGNALS (last 24h):\n{signals_blob}\n\n"
+            "WRITE THESE THREE SECTIONS (fill brackets only, keep labels exact):\n"
+            "PATTERN: [one sentence describing the chart pattern or price behavior, "
+            "plain English, no jargon — if Pattern agent called a named formation use it]\n"
+            "WAITING_FOR: [one sentence on what trigger (price level, indicator condition) "
+            "would turn this into a trade]\n"
+            "RISK: [one sentence on what single thing would invalidate today's plan]"
+        )
+
+        pattern_txt = "Price consolidating; no clear formation right now."
+        waiting_txt = f"Break above ${resistance:.2f} with follow-through volume."
+        risk_txt    = f"A close below ${support:.2f} cancels the setup."
+        try:
+            ollama_host = os.getenv("OLLAMA_HOST", "http://localhost:11434")
+            resp = requests.post(
+                f"{ollama_host}/api/generate",
+                json={"model": "gemma2:9b", "prompt": prompt, "stream": False,
+                      "options": {"num_predict": 250, "temperature": 0.3}},
+                timeout=30,
+            )
+            resp.raise_for_status()
+            text = resp.json().get("response", "").strip()
+            # Parse labelled sections
+            for line in text.splitlines():
+                s = line.strip()
+                if s.upper().startswith("PATTERN:"):
+                    pattern_txt = s.split(":", 1)[1].strip()[:250] or pattern_txt
+                elif s.upper().startswith("WAITING_FOR:") or s.upper().startswith("WAITING FOR:"):
+                    waiting_txt = s.split(":", 1)[1].strip()[:250] or waiting_txt
+                elif s.upper().startswith("RISK:"):
+                    risk_txt = s.split(":", 1)[1].strip()[:250] or risk_txt
+        except Exception as e:
+            log.warning(f"[Briefing] LLM narrative failed ({e}), using fallback text")
+
+        conf_tone = "team sees a clear setup" if team_conf >= 70 else \
+                    "team is leaning in but wants confirmation" if team_conf >= 55 else \
+                    "team is cautious, no strong edge"
+
+        brief = (
+            f"📍 MARKET: GME is at ${current:.2f}. It is {direction} today "
+            f"({pct_vs_prev:+.1f}% vs prior close).\n\n"
+            f"📐 PATTERN: {pattern_txt}\n\n"
+            f"🎯 KEY LEVELS: Support at ${support:.2f}. Resistance at ${resistance:.2f}. "
+            f"Today's range: ${day_low:.2f} to ${day_high:.2f}.\n\n"
+            f"⏳ WAITING FOR: {waiting_txt}\n\n"
+            f"⚠️ RISK: {risk_txt}\n\n"
+            f"🔮 CONFIDENCE: {team_conf}% — {conf_tone}."
+        )
+
         write_log("Briefing", brief[:2000], "daily_brief")
         from notifier import notify
-        notify(f"<b>📋 DAILY STRATEGY BRIEF</b>\n\n{brief[:3000]}")
-        log.info(f"[Briefing] Brief sent to Telegram")
+        notify(f"<b>📋 DAILY STRATEGY BRIEF</b>\n\n{brief}")
+        log.info(f"[Briefing] Brief sent — {direction} {pct_vs_prev:+.1f}% conf={team_conf}%")
     except Exception as e:
         log.error(f"[Briefing] {e}")
         write_log("Briefing", str(e), "daily_brief", "error")
