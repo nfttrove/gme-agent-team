@@ -1170,11 +1170,39 @@ def run_cto_trove_score():
             else:
                 delta_str = f"= unchanged (prior {prev_total:.1f})"
 
+        # Rating-tier hint so the LLM uses the right adjective
+        if total >= 80:
+            tier_hint = "exceptional deep value — top of the rubric"
+        elif total >= 65:
+            tier_hint = "strong deep value — well above the investment-grade cutoff"
+        elif total >= 50:
+            tier_hint = "investment-grade deep value — solid, not weak"
+        elif total >= 35:
+            tier_hint = "speculative — some pillars working, others not"
+        else:
+            tier_hint = "below the bar — avoid"
+
         # Ask Gemma for the interpretation paragraph only — numbers are locked above.
+        # Primed with the GME turnaround thesis so it doesn't default to generic
+        # "stretched valuation" framing that contradicts the actual setup.
         prompt = (
-            "You are the CTO — a deep-value analyst. In ONE paragraph (max 350 chars), "
-            "interpret this Trove score. Note any tension between earnings metrics and "
-            "balance-sheet strength. No preamble, no markdown, no quotes.\n\n"
+            "You are the CTO — a deep-value analyst covering GME. Write ONE paragraph "
+            "(max 350 chars, no preamble, no markdown, no quotes) interpreting today's "
+            "Trove score through the turnaround lens below.\n\n"
+            "SCORING RUBRIC (so you use the right language):\n"
+            "  ≥80 exceptional · ≥65 strong · ≥50 investment-grade deep value · "
+            "≥35 speculative · <35 avoid. Do NOT call a 50+ score 'low' or 'weak'.\n\n"
+            "GME CONTEXT (use this framing, don't contradict it):\n"
+            "  • Pre-2021: private equity overleveraged the company and stripped it, "
+            "Blockbuster/Toys-R-Us playbook. Weak historical P&L and depressed sales "
+            "are LEGACY PE DAMAGE being worked off — not current mismanagement.\n"
+            "  • Ryan Cohen took the board in 2021, cleared house, executed a turnaround.\n"
+            "  • 4-year swing: ~$400M loss → ~$400M profit (~$800M). Raised ~$9B, "
+            "now debt-light with a large cash pile.\n"
+            "  • Heavily shorted; thesis analogy is early Tesla.\n"
+            "  • If Valuation pillar is weak but Capital Structure + Quality are strong, "
+            "that IS the thesis shape — call it out, don't flag it as a contradiction.\n\n"
+            f"TODAY'S SCORE — {tier_hint}:\n"
             f"GME | Score {total:.1f}/100 ({rating}) | Immunity {imm_count}/5\n"
             f"Pillars — Valuation: {A:.1f}/30 · Capital: {B:.1f}/45 · Quality: {C:.1f}/25\n"
             f"Inputs: EV/FCF {inp.ev_fcf:.1f} · EV/EBITDA {inp.ev_ebitda:.1f} · P/B {inp.pb:.2f} · "
@@ -1193,7 +1221,7 @@ def run_cto_trove_score():
             )
             resp.raise_for_status()
             interpretation = resp.json().get("response", "").strip().strip('"').strip("'")
-            interpretation = " ".join(interpretation.split())[:500]
+            interpretation = " ".join(interpretation.split())[:600]
         except Exception as e:
             log.warning(f"[CTO] Trove interpretation LLM failed: {e}")
 
