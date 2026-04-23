@@ -122,6 +122,10 @@ def _run_agent_refresh():
         from crewai import Crew, Process
         from agents import valerie_agent, synthesis_agent, news_analyst_agent, cto_agent
         from tasks import make_validate_data_task, make_synthesis_task, news_task, cto_daily_brief_task
+        from market_state import get_market_fact
+
+        # Single source of truth for price direction
+        fact = get_market_fact("GME", DB_PATH)
 
         # Pre-fetch all live data in one pass
         conn = sqlite3.connect(DB_PATH)
@@ -146,7 +150,15 @@ def _run_agent_refresh():
         ).fetchall()
         conn.close()
 
-        price_str = f"${price_row[0]:.2f} (volume: {int(price_row[1] or 0)}, as of {price_row[2][:16]})" if price_row else "unavailable"
+        # Inject market fact into price_str so Synthesis/Valerie see direction
+        price_str = (
+            f"${price_row[0]:.2f} {fact['direction'].lower()} "
+            f"({fact['pct_change']:+.2f}% vs yesterday's ${fact['prev_close']:.2f if fact['prev_close'] else 'N/A'}) "
+            f"(volume: {int(price_row[1] or 0)}, as of {price_row[2][:16]})"
+        ) if price_row and fact['prev_close'] else (
+            f"${price_row[0]:.2f} (volume: {int(price_row[1] or 0)}, as of {price_row[2][:16]})"
+            if price_row else "unavailable"
+        )
         latest_ts = latest_ts_row[0][:19] if latest_ts_row else "never"
         agent_logs_str = "\n".join(f"  [{r[3][:16]}] {r[0]} ({r[1]}): {str(r[2])[:150]}" for r in agent_logs) if agent_logs else "  No recent logs."
 
@@ -413,12 +425,12 @@ def handle_command(text: str):
             sys.path.insert(0, os.path.dirname(__file__))
             from crewai import Crew, Process, Task
             from agents import briefing_agent
+            from market_state import get_market_fact, enforce_direction
 
-            # Fetch live data before kickoff — agent can't execute SQL itself
+            # Single source of truth for price direction
+            fact = get_market_fact("GME", DB_PATH)
+
             conn = sqlite3.connect(DB_PATH)
-            price_row = conn.execute(
-                "SELECT close, volume, timestamp FROM price_ticks WHERE symbol='GME' ORDER BY timestamp DESC LIMIT 1"
-            ).fetchone()
             agent_logs = conn.execute(
                 "SELECT agent_name, task_type, content, timestamp FROM agent_logs ORDER BY timestamp DESC LIMIT 5"
             ).fetchall()
@@ -427,7 +439,6 @@ def handle_command(text: str):
             ).fetchone()
             conn.close()
 
-            price_str = f"${price_row[0]:.2f} (volume: {int(price_row[1] or 0)}, as of {price_row[2][:16]})" if price_row else "unavailable"
             logs_str = "\n".join(
                 f"  [{r[3][:16]}] {r[0]} ({r[1]}): {str(r[2])[:120]}" for r in agent_logs
             ) if agent_logs else "  No recent agent logs."
@@ -436,12 +447,11 @@ def handle_command(text: str):
             live_task = Task(
                 description=(
                     f"Produce a plain-English strategy briefing for the CEO. No jargon.\n\n"
-                    f"LIVE DATA (use this — do not invent numbers):\n"
-                    f"Latest GME price: {price_str}\n"
+                    f"{fact['prompt_line']}\n\n"
                     f"Recent agent logs:\n{logs_str}\n"
                     f"Safety gate: {safety_str}\n\n"
-                    "Write EXACTLY this format:\n\n"
-                    "📍 MARKET: GME is at $[price]. It is [rising/falling/sideways] today.\n\n"
+                    "Write EXACTLY this format — use the MARKET FACT verbatim, do not invent direction:\n\n"
+                    f"📍 MARKET: GME is at ${fact['price']:.2f}. It is {fact['direction'].lower()} today.\n\n"
                     "📐 PATTERN: [Describe any pattern in plain English.]\n\n"
                     "🎯 KEY LEVELS: Support at $[X]. Resistance at $[Y]. Today's range: $[low] to $[high].\n\n"
                     "⏳ WAITING FOR: [What signal the system needs before placing a trade.]\n\n"
@@ -454,7 +464,10 @@ def handle_command(text: str):
             crew = Crew(agents=[briefing_agent], tasks=[live_task],
                         process=Process.sequential, verbose=False)
             result = crew.kickoff()
-            _send(f"<b>📋 STRATEGY BRIEF</b>\n\n{str(result)[:3000]}")
+
+            # Safety net: enforce correct direction even if LLM ignored instructions
+            result_str = enforce_direction(str(result), fact)
+            _send(f"<b>📋 STRATEGY BRIEF</b>\n\n{result_str[:3000]}")
         except Exception as e:
             _send(f"Brief failed: {e}")
 
@@ -564,6 +577,52 @@ def handle_command(text: str):
             _send(f"❌ Recall error: {str(e)[:200]}")
             log.error(f"[tgbot] /lessons failed: {e}")
 
+    elif cmd == "/force":
+        agent_map = {
+            "valerie":   ("run_validation",                "Valerie (data validation)"),
+            "chatty":    ("run_commentary",                "Chatty (commentary)"),
+            "newsie":    ("run_news",                      "Newsie (news sentiment)"),
+            "pattern":   ("run_pattern",                   "Pattern (chart patterns)"),
+            "trendy":    ("run_daily_trend",               "Trendy (daily trend)"),
+            "futurist":  ("run_futurist_prediction_signal","Futurist (price prediction)"),
+            "georisk":   ("run_georisk",                   "GeoRisk (geopolitical)"),
+            "synthesis": ("run_synthesis",                 "Synthesis (team consensus)"),
+            "boss":      ("run_daily_huddle",              "Boss (daily mission briefing)"),
+            "cto":       ("run_cto_daily_brief",           "CTO (short-side research)"),
+        }
+        if not args or args[0].lower() not in agent_map:
+            names = ", ".join(sorted(agent_map))
+            _send(
+                "<b>Force an agent cycle</b>\n\n"
+                f"Usage: /force &lt;agent&gt;\nAgents: {names}\n\n"
+                "Runs the agent once on demand. Takes 10–60s depending on LLM."
+            )
+        else:
+            key = args[0].lower()
+            func_name, label = agent_map[key]
+            _send(f"⏳ Forcing {label}…")
+            try:
+                import orchestrator
+                func = getattr(orchestrator, func_name)
+                func()
+                # Report the log line the agent just wrote
+                conn = sqlite3.connect(DB_PATH)
+                row = conn.execute(
+                    "SELECT content, status, timestamp FROM agent_logs "
+                    "WHERE lower(agent_name) = ? ORDER BY timestamp DESC LIMIT 1",
+                    (key,),
+                ).fetchone()
+                conn.close()
+                if row:
+                    content, status, ts = row
+                    icon = "✅" if status == "ok" else "⚠️"
+                    _send(f"{icon} <b>{label}</b> [{status}]\n\n<i>{content[:1500]}</i>")
+                else:
+                    _send(f"✅ {label} ran — no new log row (check /status)")
+            except Exception as e:
+                log.error(f"[tgbot] /force {key} failed: {e}")
+                _send(f"❌ /force {key} failed: {str(e)[:400]}")
+
     elif cmd == "/test":
         _send("⏳ Running Telegram handler smoke tests…")
         try:
@@ -639,7 +698,10 @@ def handle_command(text: str):
             "<b>☕ Support:</b>\n"
             "/supportme — buy-me-a-coffee / PayPal link\n\n"
             "<b>🧪 Testing:</b>\n"
-            "/test — run Telegram handler smoke tests (~1 sec)\n\n"
+            "/test — run Telegram handler smoke tests (~1 sec)\n"
+            "/force &lt;agent&gt; — force an agent to run now "
+            "(valerie, chatty, newsie, pattern, trendy, futurist, georisk, "
+            "synthesis, boss, cto)\n\n"
             "<b>💬 Interactive Chat:</b>\n"
             "Just send any question (no slash) to ask:\n"
             "• Current GME price & analysis\n"
@@ -702,7 +764,7 @@ Keep responses brief (1 paragraph max). Think: Bloomberg meets a knowledgeable f
             "/brief — today's strategy in plain English\n"
             "/update — sync data to Supabase now\n"
             "/trove [TICKERS] — deep-value score screen\n"
-            "/test — run Playwright tests\n"
+            "/test — run Telegram handler smoke tests\n"
             "/supportme — buy-me-a-coffee / PayPal link\n"
             "/frequency — notification settings\n\n"
             "Send /help for detailed guide."
@@ -891,17 +953,22 @@ def _register_commands():
     if not ENABLED:
         return
     commands = [
-        {"command": "status", "description": "System health check"},
+        {"command": "help", "description": "Full command guide + chat capabilities"},
+        {"command": "status", "description": "System health — tick count, last agent activity"},
+        {"command": "brief", "description": "Today's strategy brief (price, direction, signals)"},
         {"command": "standup", "description": "Agent daily performance (signals, win rates, ROI)"},
-        {"command": "agents", "description": "Last agent run times"},
-        {"command": "ticks", "description": "Price data received"},
-        {"command": "brief", "description": "Strategy briefing"},
-        {"command": "trove", "description": "Deep-value screen: /trove [TICKERS]"},
-        {"command": "update", "description": "Sync to Supabase"},
-        {"command": "test", "description": "Run Playwright tests"},
-        {"command": "frequency", "description": "Notification settings"},
-        {"command": "learn", "description": "Teach agents rules"},
-        {"command": "lessons", "description": "View learned rules"},
+        {"command": "agents", "description": "Last run time for each agent"},
+        {"command": "ticks", "description": "Price data received today"},
+        {"command": "freshness", "description": "Verify agents are reading current data"},
+        {"command": "trove", "description": "Deep-value Trove screen: /trove [TICKERS]"},
+        {"command": "update", "description": "Force sync local data to Supabase now"},
+        {"command": "learn", "description": "Teach agents a rule: /learn \"...\" --why \"...\""},
+        {"command": "lessons", "description": "Show lessons agents learned"},
+        {"command": "compare", "description": "Ask Gemma + DeepSeek: /compare <question>"},
+        {"command": "frequency", "description": "Notification level: low | medium | high"},
+        {"command": "supportme", "description": "Buy-me-a-coffee / PayPal link"},
+        {"command": "test", "description": "Run Telegram handler smoke tests (~1 sec)"},
+        {"command": "force", "description": "Force an agent to run: /force <agent>"},
     ]
     try:
         requests.post(f"{BASE_URL}/setMyCommands", json={"commands": commands}, timeout=10)

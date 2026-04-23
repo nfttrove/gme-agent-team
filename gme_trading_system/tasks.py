@@ -406,3 +406,43 @@ georisk_task = Task(
     ),
     agent=georisk_agent,
 )
+
+
+# ── Factory functions for dynamic task creation (Telegram bot) ────────────────
+
+def make_validate_data_task(agent, tick_count, latest_ts, gaps, outliers):
+    """Factory: create a dynamic validate_data_task with live counts."""
+    return Task(
+        description=(
+            f"Review this data quality check result:\n"
+            f"  Tick count (last 5 min): {tick_count}\n"
+            f"  Latest timestamp: {latest_ts}\n"
+            f"  Gaps found: {gaps}\n"
+            f"  Outliers found: {outliers}\n\n"
+            f"Format your response as JSON: {{'tick_count': {tick_count}, 'latest_timestamp': '{latest_ts}', "
+            f"'gaps_found': {gaps}, 'outliers_found': {outliers}, 'status': 'ok' if {gaps} == 0 and {outliers} == 0 else 'degraded'}}"
+        ),
+        expected_output='{"tick_count": 60, "latest_timestamp": "2026-04-23T14:30:00-04:00", "gaps_found": 0, "outliers_found": 0, "status": "ok"}',
+        agent=agent,
+    )
+
+
+def make_synthesis_task(agent, price_str, agent_logs_str):
+    """Factory: create a dynamic synthesis_task with live price and agent data."""
+    return Task(
+        description=(
+            f"Produce the team's consensus brief in ONE line.\n\n"
+            f"LIVE DATA (use exactly as provided):\n"
+            f"  Current price: {price_str}\n"
+            f"  Recent agent outputs:\n{agent_logs_str}\n\n"
+            f"Output EXACTLY this format (no preamble, no markdown):\n"
+            f"PRICE: $XX.XX [direction] | DATA: [clean/degraded] | NEWS: [sentiment, score] | "
+            f"TREND: [direction, strength] | PREDICTION: [bias, confidence%] | "
+            f"STRUCTURAL: [status] | CONSENSUS: [BULLISH/BEARISH/NEUTRAL] [XX]%"
+        ),
+        expected_output=(
+            "PRICE: $24.28 up | DATA: clean | NEWS: bullish 0.45 | TREND: up 0.72 | "
+            "PREDICTION: BUY 0.68 | STRUCTURAL: GREEN | CONSENSUS: BULLISH 65%"
+        ),
+        agent=agent,
+    )

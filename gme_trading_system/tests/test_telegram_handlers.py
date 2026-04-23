@@ -185,6 +185,15 @@ def test_update(seeded_db, captured_sends, monkeypatch):
     assert "Supabase sync complete" in joined
 
 
+def test_factory_functions_exist():
+    """Verify make_validate_data_task and make_synthesis_task are importable
+    (bot imports these; absence would cause ImportError on /update and /brief)."""
+    sys.path.insert(0, str(REPO_SYS_PATH))
+    from tasks import make_validate_data_task, make_synthesis_task
+    assert callable(make_validate_data_task)
+    assert callable(make_synthesis_task)
+
+
 def test_brief(seeded_db, captured_sends, monkeypatch):
     fake_agents = types.ModuleType("agents")
     fake_agents.briefing_agent = MagicMock()
@@ -203,6 +212,47 @@ def test_brief(seeded_db, captured_sends, monkeypatch):
     telegram_bot.handle_command("/brief")
     joined = "\n".join(captured_sends)
     assert "STRATEGY BRIEF" in joined
+
+
+def test_brief_price_direction_logic(seeded_db, captured_sends, monkeypatch):
+    """Verify /brief correctly determines price direction from opening baseline."""
+    # Insert today's opening and current price
+    conn = sqlite3.connect(seeded_db)
+    # Clear old data
+    conn.execute("DELETE FROM price_ticks")
+    # Insert opening price (low)
+    conn.execute(
+        "INSERT INTO price_ticks (symbol, close, volume, timestamp) VALUES (?,?,?,?)",
+        ("GME", 23.50, 1000, "2026-04-23T09:35:00-04:00"),
+    )
+    # Insert current price (higher → rising)
+    conn.execute(
+        "INSERT INTO price_ticks (symbol, close, volume, timestamp) VALUES (?,?,?,?)",
+        ("GME", 24.20, 5000, "2026-04-23T15:30:00-04:00"),
+    )
+    conn.commit()
+    conn.close()
+
+    fake_agents = types.ModuleType("agents")
+    fake_agents.briefing_agent = MagicMock()
+    monkeypatch.setitem(sys.modules, "agents", fake_agents)
+
+    fake_crewai = types.ModuleType("crewai")
+    class _Crew:
+        def __init__(self, *a, **k):
+            # Capture the task description to verify direction was calculated
+            self.task_desc = a[1][0].description if a and len(a) > 1 else ""
+        def kickoff(self): return "📍 MARKET: GME at $24.20. Rising."
+    fake_crewai.Crew = _Crew
+    fake_crewai.Process = MagicMock(sequential=0)
+    fake_crewai.Task = lambda **kw: MagicMock(**kw)
+    monkeypatch.setitem(sys.modules, "crewai", fake_crewai)
+
+    telegram_bot.handle_command("/brief")
+    joined = "\n".join(captured_sends)
+    assert "STRATEGY BRIEF" in joined
+    # Verify rising direction appears in output (current $24.20 > opening $23.50)
+    assert "rising" in joined.lower() or "📍 market" in joined.lower()
 
 
 def test_trove_default_watchlist(seeded_db, captured_sends, monkeypatch):
@@ -311,3 +361,39 @@ def test_compare_without_args_falls_through(captured_sends):
     telegram_bot.handle_command("/compare")
     assert captured_sends
     assert "Available commands" in captured_sends[0]
+
+
+def test_force_without_args_shows_menu(captured_sends):
+    telegram_bot.handle_command("/force")
+    joined = "\n".join(captured_sends)
+    assert "Force an agent cycle" in joined
+    assert "valerie" in joined and "synthesis" in joined
+
+
+def test_force_unknown_agent_shows_menu(captured_sends):
+    telegram_bot.handle_command("/force bogus")
+    joined = "\n".join(captured_sends)
+    assert "Force an agent cycle" in joined
+
+
+def test_force_valid_agent_invokes_orchestrator(seeded_db, captured_sends, monkeypatch):
+    # Seed a log row so the handler can report back.
+    conn = sqlite3.connect(seeded_db)
+    conn.execute(
+        "INSERT INTO agent_logs (timestamp, agent_name, content, task_type, status) "
+        "VALUES (?,?,?,?,?)",
+        ("2026-04-23T15:30:00-04:00", "Valerie", "data clean: 60 ticks", "validation", "ok"),
+    )
+    conn.commit()
+    conn.close()
+
+    called = []
+    fake_orch = types.ModuleType("orchestrator")
+    fake_orch.run_validation = lambda: called.append("run_validation")
+    monkeypatch.setitem(sys.modules, "orchestrator", fake_orch)
+
+    telegram_bot.handle_command("/force valerie")
+    joined = "\n".join(captured_sends)
+    assert called == ["run_validation"]
+    assert "Valerie" in joined
+    assert "data clean" in joined

@@ -269,27 +269,26 @@ def run_commentary():
     """
     write_log("Chatty", "Composing commentary", "commentary", "running")
     try:
+        from market_state import get_market_fact
+        fact = get_market_fact("GME", DB_PATH)
+
         conn = sqlite3.connect(DB_PATH)
         synthesis = conn.execute(
             "SELECT content FROM agent_logs WHERE agent_name='Synthesis' "
             "AND status='ok' ORDER BY timestamp DESC LIMIT 1"
         ).fetchone()
-        latest_tick = conn.execute(
-            "SELECT close, volume, timestamp FROM price_ticks "
-            "WHERE symbol='GME' ORDER BY timestamp DESC LIMIT 1"
-        ).fetchone()
 
         synthesis_text = synthesis[0][:200] if synthesis else "No consensus yet"
-        price, _vol, _ts = latest_tick if latest_tick else (0, 0, "")
+        price = fact['price'] or 0.0
 
         regime = _volume_regime(conn, "GME")
         vol_label = regime["label"]
         vol_ratio = regime["ratio"]
 
-        # Dedup gate — compute a coarse state key; skip if unchanged vs last run.
+        # Dedup gate — include direction so up/down flips trigger fresh comment
         price_bucket = round(float(price), 1) if price else 0.0
         consensus_bucket = (synthesis_text or "")[:60].lower()
-        state_key = f"{price_bucket}|{vol_label}|{consensus_bucket}"
+        state_key = f"{price_bucket}|{fact['direction']}|{vol_label}|{consensus_bucket}"
         last_state = conn.execute(
             "SELECT content FROM agent_logs WHERE agent_name='Chatty' "
             "AND task_type='commentary_state' ORDER BY id DESC LIMIT 1"
@@ -303,8 +302,10 @@ def run_commentary():
         prompt = (
             "You are GME's live-stream commentator. Produce ONE punchy insight (max 120 chars) "
             "grounded in the data below. No preamble, no quotes, no markdown — just the comment. "
-            "Use the volume label as given — do NOT invent your own descriptor.\n\n"
-            f"Price: ${price}\n"
+            "Use the volume label as given — do NOT invent your own descriptor. "
+            "Your commentary MUST be consistent with the MARKET FACT direction (don't say "
+            "'bullish price action' when price is FALLING).\n\n"
+            f"{fact['prompt_line']}\n"
             f"Volume regime: {vol_label} ({vol_ratio:.2f}x session-pro-rated 20d ADV)\n"
             f"Team consensus: {synthesis_text}\n"
         )
@@ -1509,18 +1510,14 @@ def run_synthesis():
     """
     write_log("Synthesis", "Composing consensus brief", "synthesis", "running")
     try:
+        from market_state import get_market_fact
+        fact = get_market_fact("GME", DB_PATH)
+        if fact['price'] is None:
+            write_log("Synthesis", "no price data available", "synthesis", "error")
+            return
+
         conn = sqlite3.connect(DB_PATH)
         conn.row_factory = sqlite3.Row
-
-        price_row = conn.execute(
-            "SELECT close, volume, timestamp FROM price_ticks WHERE symbol='GME' "
-            "ORDER BY timestamp DESC LIMIT 1"
-        ).fetchone()
-        if not price_row:
-            write_log("Synthesis", "no price data available", "synthesis", "error")
-            conn.close()
-            return
-        price = float(price_row["close"])
 
         # Pull most-recent ok log per agent so we get *the current view*, not
         # a scroll of stale repeats.
@@ -1543,15 +1540,19 @@ def run_synthesis():
             return
 
         logs_block = "\n".join(f"  {name}: {content}" for name, content in per_agent.items())
+        # PRICE token is pre-formatted from market fact — LLM must use it verbatim
+        price_token = f"${fact['price']:.2f} {fact['direction'].lower()}"
         prompt = (
             "You are the team's Synthesis agent. Produce ONE line summarising the current consensus, "
             "in this EXACT format (keep labels, replace bracketed values):\n"
-            "PRICE: $XX.XX | DATA: [clean/degraded] | NEWS: [bullish/bearish/neutral, score] | "
+            f"PRICE: {price_token} | DATA: [clean/degraded] | NEWS: [bullish/bearish/neutral, score] | "
             "TREND: [up/down/sideways] | PREDICTION: [bias, confidence%] | "
             "STRUCTURAL: [GREEN/YELLOW/RED] | CONSENSUS: [BULLISH/BEARISH/NEUTRAL] [XX]%\n\n"
             "Rules: use ONLY the data below, do not invent. If an agent is missing, write 'n/a'. "
+            f"Use the PRICE token EXACTLY as given: '{price_token}' — do NOT change the direction. "
             "Consensus = majority of the non-n/a directional signals. No preamble, no markdown, no quotes.\n\n"
-            f"LIVE DATA:\n  Price: ${price:.2f}\n  Recent per-agent outputs (last 4h):\n{logs_block}\n"
+            f"{fact['prompt_line']}\n"
+            f"Recent per-agent outputs (last 4h):\n{logs_block}\n"
         )
 
         ollama_host = os.getenv("OLLAMA_HOST", "http://localhost:11434")
@@ -1568,6 +1569,16 @@ def run_synthesis():
         if not brief or "PRICE" not in brief.upper():
             write_log("Synthesis", f"malformed brief: {brief[:200]}", "synthesis", "error")
             return
+
+        # Safety net: force correct PRICE token even if LLM drifted
+        import re
+        brief = re.sub(
+            r'PRICE:\s*\$[\d.]+\s*\w*',
+            f'PRICE: {price_token}',
+            brief,
+            count=1,
+            flags=re.IGNORECASE,
+        )
 
         log.info(f"[Synthesis] {brief}")
         write_log("Synthesis", brief, "synthesis")
@@ -1668,14 +1679,14 @@ def run_periodic_brief():
     from notifier import notify_periodic_brief
 
     try:
+        from market_state import get_market_fact
+        fact = get_market_fact("GME", DB_PATH)
+
         conn = sqlite3.connect(DB_PATH)
         conn.row_factory = sqlite3.Row
 
-        # Get latest price
-        price_row = conn.execute(
-            "SELECT close, timestamp FROM price_ticks WHERE symbol='GME' ORDER BY timestamp DESC LIMIT 1"
-        ).fetchone()
-        price = price_row['close'] if price_row else 0
+        price = fact['price'] or 0
+        pct_change = fact['pct_change']
 
         # Get latest synthesis for consensus
         synth = conn.execute(
@@ -1702,9 +1713,6 @@ def run_periodic_brief():
         geo_risk = georisk['content'][:80] if georisk else "No geopolitical alerts"
 
         conn.close()
-
-        # Calculate % change (simple: compare to previous close or assume 0)
-        pct_change = 0.5  # placeholder; could enhance by querying two ticks
 
         notify_periodic_brief(
             price=price,
