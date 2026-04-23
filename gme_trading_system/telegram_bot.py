@@ -577,6 +577,52 @@ def handle_command(text: str):
             _send(f"❌ Recall error: {str(e)[:200]}")
             log.error(f"[tgbot] /lessons failed: {e}")
 
+    elif cmd == "/force":
+        agent_map = {
+            "valerie":   ("run_validation",                "Valerie (data validation)"),
+            "chatty":    ("run_commentary",                "Chatty (commentary)"),
+            "newsie":    ("run_news",                      "Newsie (news sentiment)"),
+            "pattern":   ("run_pattern",                   "Pattern (chart patterns)"),
+            "trendy":    ("run_daily_trend",               "Trendy (daily trend)"),
+            "futurist":  ("run_futurist_prediction_signal","Futurist (price prediction)"),
+            "georisk":   ("run_georisk",                   "GeoRisk (geopolitical)"),
+            "synthesis": ("run_synthesis",                 "Synthesis (team consensus)"),
+            "boss":      ("run_daily_huddle",              "Boss (daily mission briefing)"),
+            "cto":       ("run_cto_daily_brief",           "CTO (short-side research)"),
+        }
+        if not args or args[0].lower() not in agent_map:
+            names = ", ".join(sorted(agent_map))
+            _send(
+                "<b>Force an agent cycle</b>\n\n"
+                f"Usage: /force &lt;agent&gt;\nAgents: {names}\n\n"
+                "Runs the agent once on demand. Takes 10–60s depending on LLM."
+            )
+        else:
+            key = args[0].lower()
+            func_name, label = agent_map[key]
+            _send(f"⏳ Forcing {label}…")
+            try:
+                import orchestrator
+                func = getattr(orchestrator, func_name)
+                func()
+                # Report the log line the agent just wrote
+                conn = sqlite3.connect(DB_PATH)
+                row = conn.execute(
+                    "SELECT content, status, timestamp FROM agent_logs "
+                    "WHERE lower(agent_name) = ? ORDER BY timestamp DESC LIMIT 1",
+                    (key,),
+                ).fetchone()
+                conn.close()
+                if row:
+                    content, status, ts = row
+                    icon = "✅" if status == "ok" else "⚠️"
+                    _send(f"{icon} <b>{label}</b> [{status}]\n\n<i>{content[:1500]}</i>")
+                else:
+                    _send(f"✅ {label} ran — no new log row (check /status)")
+            except Exception as e:
+                log.error(f"[tgbot] /force {key} failed: {e}")
+                _send(f"❌ /force {key} failed: {str(e)[:400]}")
+
     elif cmd == "/test":
         _send("⏳ Running Telegram handler smoke tests…")
         try:
@@ -652,7 +698,10 @@ def handle_command(text: str):
             "<b>☕ Support:</b>\n"
             "/supportme — buy-me-a-coffee / PayPal link\n\n"
             "<b>🧪 Testing:</b>\n"
-            "/test — run Telegram handler smoke tests (~1 sec)\n\n"
+            "/test — run Telegram handler smoke tests (~1 sec)\n"
+            "/force &lt;agent&gt; — force an agent to run now "
+            "(valerie, chatty, newsie, pattern, trendy, futurist, georisk, "
+            "synthesis, boss, cto)\n\n"
             "<b>💬 Interactive Chat:</b>\n"
             "Just send any question (no slash) to ask:\n"
             "• Current GME price & analysis\n"
@@ -919,6 +968,7 @@ def _register_commands():
         {"command": "frequency", "description": "Notification level: low | medium | high"},
         {"command": "supportme", "description": "Buy-me-a-coffee / PayPal link"},
         {"command": "test", "description": "Run Telegram handler smoke tests (~1 sec)"},
+        {"command": "force", "description": "Force an agent to run: /force <agent>"},
     ]
     try:
         requests.post(f"{BASE_URL}/setMyCommands", json={"commands": commands}, timeout=10)

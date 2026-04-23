@@ -361,3 +361,39 @@ def test_compare_without_args_falls_through(captured_sends):
     telegram_bot.handle_command("/compare")
     assert captured_sends
     assert "Available commands" in captured_sends[0]
+
+
+def test_force_without_args_shows_menu(captured_sends):
+    telegram_bot.handle_command("/force")
+    joined = "\n".join(captured_sends)
+    assert "Force an agent cycle" in joined
+    assert "valerie" in joined and "synthesis" in joined
+
+
+def test_force_unknown_agent_shows_menu(captured_sends):
+    telegram_bot.handle_command("/force bogus")
+    joined = "\n".join(captured_sends)
+    assert "Force an agent cycle" in joined
+
+
+def test_force_valid_agent_invokes_orchestrator(seeded_db, captured_sends, monkeypatch):
+    # Seed a log row so the handler can report back.
+    conn = sqlite3.connect(seeded_db)
+    conn.execute(
+        "INSERT INTO agent_logs (timestamp, agent_name, content, task_type, status) "
+        "VALUES (?,?,?,?,?)",
+        ("2026-04-23T15:30:00-04:00", "Valerie", "data clean: 60 ticks", "validation", "ok"),
+    )
+    conn.commit()
+    conn.close()
+
+    called = []
+    fake_orch = types.ModuleType("orchestrator")
+    fake_orch.run_validation = lambda: called.append("run_validation")
+    monkeypatch.setitem(sys.modules, "orchestrator", fake_orch)
+
+    telegram_bot.handle_command("/force valerie")
+    joined = "\n".join(captured_sends)
+    assert called == ["run_validation"]
+    assert "Valerie" in joined
+    assert "data clean" in joined
