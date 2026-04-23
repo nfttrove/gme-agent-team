@@ -122,6 +122,10 @@ def _run_agent_refresh():
         from crewai import Crew, Process
         from agents import valerie_agent, synthesis_agent, news_analyst_agent, cto_agent
         from tasks import make_validate_data_task, make_synthesis_task, news_task, cto_daily_brief_task
+        from market_state import get_market_fact
+
+        # Single source of truth for price direction
+        fact = get_market_fact("GME", DB_PATH)
 
         # Pre-fetch all live data in one pass
         conn = sqlite3.connect(DB_PATH)
@@ -146,7 +150,15 @@ def _run_agent_refresh():
         ).fetchall()
         conn.close()
 
-        price_str = f"${price_row[0]:.2f} (volume: {int(price_row[1] or 0)}, as of {price_row[2][:16]})" if price_row else "unavailable"
+        # Inject market fact into price_str so Synthesis/Valerie see direction
+        price_str = (
+            f"${price_row[0]:.2f} {fact['direction'].lower()} "
+            f"({fact['pct_change']:+.2f}% vs yesterday's ${fact['prev_close']:.2f if fact['prev_close'] else 'N/A'}) "
+            f"(volume: {int(price_row[1] or 0)}, as of {price_row[2][:16]})"
+        ) if price_row and fact['prev_close'] else (
+            f"${price_row[0]:.2f} (volume: {int(price_row[1] or 0)}, as of {price_row[2][:16]})"
+            if price_row else "unavailable"
+        )
         latest_ts = latest_ts_row[0][:19] if latest_ts_row else "never"
         agent_logs_str = "\n".join(f"  [{r[3][:16]}] {r[0]} ({r[1]}): {str(r[2])[:150]}" for r in agent_logs) if agent_logs else "  No recent logs."
 
@@ -413,16 +425,12 @@ def handle_command(text: str):
             sys.path.insert(0, os.path.dirname(__file__))
             from crewai import Crew, Process, Task
             from agents import briefing_agent
+            from market_state import get_market_fact, enforce_direction
 
-            # Fetch live data before kickoff — agent can't execute SQL itself
+            # Single source of truth for price direction
+            fact = get_market_fact("GME", DB_PATH)
+
             conn = sqlite3.connect(DB_PATH)
-            price_row = conn.execute(
-                "SELECT close, volume, timestamp FROM price_ticks WHERE symbol='GME' ORDER BY timestamp DESC LIMIT 1"
-            ).fetchone()
-            # Get yesterday's close (previous trading day) as baseline for "up/down today"
-            prev_close_row = conn.execute(
-                "SELECT close FROM price_ticks WHERE symbol='GME' AND date(timestamp) < date('now') ORDER BY timestamp DESC LIMIT 1"
-            ).fetchone()
             agent_logs = conn.execute(
                 "SELECT agent_name, task_type, content, timestamp FROM agent_logs ORDER BY timestamp DESC LIMIT 5"
             ).fetchall()
@@ -431,10 +439,6 @@ def handle_command(text: str):
             ).fetchone()
             conn.close()
 
-            price_str = f"${price_row[0]:.2f} (volume: {int(price_row[1] or 0)}, as of {price_row[2][:16]})" if price_row else "unavailable"
-            prev_close = prev_close_row[0] if prev_close_row else (price_row[0] if price_row else None)
-            price_change_pct = ((price_row[0] - prev_close) / prev_close * 100) if prev_close and price_row else 0
-            direction_hint = "falling" if price_change_pct < -0.5 else "rising" if price_change_pct > 0.5 else "sideways"
             logs_str = "\n".join(
                 f"  [{r[3][:16]}] {r[0]} ({r[1]}): {str(r[2])[:120]}" for r in agent_logs
             ) if agent_logs else "  No recent agent logs."
@@ -443,15 +447,11 @@ def handle_command(text: str):
             live_task = Task(
                 description=(
                     f"Produce a plain-English strategy briefing for the CEO. No jargon.\n\n"
-                    f"LIVE DATA (use this — do not invent numbers):\n"
-                    f"Latest GME price: {price_str}\n"
-                    f"Yesterday's close: ${prev_close:.2f if prev_close else 'N/A'}\n"
-                    f"Price change vs yesterday: {price_change_pct:+.2f}% ({direction_hint})\n"
-                    f"CRITICAL: Use the direction calculated from price data, NOT from sentiment.\n"
+                    f"{fact['prompt_line']}\n\n"
                     f"Recent agent logs:\n{logs_str}\n"
                     f"Safety gate: {safety_str}\n\n"
-                    "Write EXACTLY this format:\n\n"
-                    f"📍 MARKET: GME is at ${price_row[0]:.2f}. It is {direction_hint} today.\n\n"
+                    "Write EXACTLY this format — use the MARKET FACT verbatim, do not invent direction:\n\n"
+                    f"📍 MARKET: GME is at ${fact['price']:.2f}. It is {fact['direction'].lower()} today.\n\n"
                     "📐 PATTERN: [Describe any pattern in plain English.]\n\n"
                     "🎯 KEY LEVELS: Support at $[X]. Resistance at $[Y]. Today's range: $[low] to $[high].\n\n"
                     "⏳ WAITING FOR: [What signal the system needs before placing a trade.]\n\n"
@@ -464,19 +464,9 @@ def handle_command(text: str):
             crew = Crew(agents=[briefing_agent], tasks=[live_task],
                         process=Process.sequential, verbose=False)
             result = crew.kickoff()
-            result_str = str(result)
 
-            # CRITICAL: Strip any auto-generated direction line and replace with calculated one
-            # This prevents LLM from hallucinating direction based on sentiment
-            import re
-            # Find and replace any MARKET line, wherever it appears, with the correct direction
-            result_str = re.sub(
-                r'📍 MARKET:.*?It is (rising|falling|sideways|up|down) today\.',
-                f'📍 MARKET: GME is at ${price_row[0]:.2f}. It is {direction_hint} today.',
-                result_str,
-                flags=re.IGNORECASE
-            )
-
+            # Safety net: enforce correct direction even if LLM ignored instructions
+            result_str = enforce_direction(str(result), fact)
             _send(f"<b>📋 STRATEGY BRIEF</b>\n\n{result_str[:3000]}")
         except Exception as e:
             _send(f"Brief failed: {e}")
