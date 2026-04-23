@@ -36,7 +36,7 @@ from metrics_logger import MetricsLogger
 from safety_gate import run_gate_check
 from market_hours import is_market_open, market_hours_required, is_active_window, active_window_required
 from learner import AgentLearner
-from telegram_bot import start_bot_thread, is_halted
+from telegram_bot import start_bot_thread
 from supabase_sync import start_sync_thread
 from safe_kickoff import safe_kickoff, safe_kickoff_with_fallback, CrewTimeout
 from db_maintenance import enable_wal_mode
@@ -974,10 +974,6 @@ def run_newsie_signal():
 
 def run_futurist_cycle():
     """Full strategic cycle: gate check → Futurist → Boss → emit signal to team."""
-    if is_halted():
-        log.info("[Futurist] Trading halted by Telegram /halt — skipping cycle")
-        return
-
     log.info("[Futurist] Starting full strategic cycle")
     write_log("Futurist", "Starting strategic cycle — gate check", "full_cycle", "running")
 
@@ -1058,6 +1054,23 @@ def run_voice_forwarder():
             log.info(f"[Voice] forwarded {sent}")
     except Exception as e:
         log.error(f"[Voice] {e}")
+
+
+def run_sunday_support_message():
+    """Sunday 10:00 AM ET — friendly weekly support/coffee nudge."""
+    try:
+        from notifier import notify
+        paypal_url = "https://www.paypal.com/paypalme/2r0v3"
+        notify(
+            "☕ <b>Weekly check-in</b>\n\n"
+            "If the signals, briefs, and voices have earned their keep this week, "
+            "a coffee helps keep the team running:\n"
+            f"👉 <a href=\"{paypal_url}\">{paypal_url}</a>\n\n"
+            "<i>Send /supportme anytime. Happy Sunday.</i>"
+        )
+        log.info("[Support] Sunday support message sent")
+    except Exception as e:
+        log.error(f"[Support] Failed: {e}")
 
 
 def run_learning_debrief():
@@ -2023,6 +2036,9 @@ class TradingSystemOrchestrator:
 
         # Options intelligence — max pain every Monday pre-market
         self.scheduler.add_job(run_options_update, CronTrigger(day_of_week="mon", hour=8, minute=30), id="options")
+
+        # Weekly coffee nudge — Sundays 10:00 AM ET
+        self.scheduler.add_job(run_sunday_support_message, CronTrigger(day_of_week="sun", hour=10, minute=0), id="sunday_support")
 
         # Social monitor — scan tracked accounts every 15 minutes during market hours
         self.scheduler.add_job(run_social_scan, IntervalTrigger(minutes=15), id="social")

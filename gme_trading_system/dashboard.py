@@ -280,27 +280,7 @@ with tab_console:
 
     # ── Quick actions ──────────────────────────────────────────────────────────
     st.subheader("Quick Actions")
-    qa1, qa2, qa3, qa4 = st.columns(4)
-
-    if qa1.button("🛑 Halt Trading", use_container_width=True):
-        try:
-            from notifier import notify
-            notify("🛑 <b>HALT</b> issued from dashboard — new trades paused.")
-            open(os.path.join(os.path.dirname(__file__), "halt.flag"), "w").close()
-            st.warning("Halt flag written. Restart orchestrator to apply if needed.")
-        except Exception as e:
-            st.error(str(e))
-
-    if qa2.button("▶️ Resume Trading", use_container_width=True):
-        try:
-            flag = os.path.join(os.path.dirname(__file__), "halt.flag")
-            if os.path.exists(flag):
-                os.remove(flag)
-            from notifier import notify
-            notify("▶️ <b>RESUME</b> issued from dashboard — trading re-enabled.")
-            st.success("Halt flag removed.")
-        except Exception as e:
-            st.error(str(e))
+    qa3, qa4 = st.columns(2)
 
     if qa3.button("📋 Trigger Daily Brief", use_container_width=True):
         with st.spinner("Running Briefing Officer..."):

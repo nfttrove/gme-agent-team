@@ -2,7 +2,7 @@
 Discord Bot — Complete GME trading system interface (mirrors Telegram functionality).
 
 Commands:
-  /help, /status, /balance, /ticks, /agents, /brief, /update, /halt, /resume,
+  /help, /status, /ticks, /agents, /brief, /update, /supportme,
   /frequency, /learn, /lessons, /trove
 
 Chat: Send any message (no /) for LLM responses with trading context.
@@ -35,7 +35,7 @@ ET = ZoneInfo("America/New_York")
 
 DISCORD_TOKEN = os.getenv("DISCORD_BOT_TOKEN", "")
 DB_PATH = os.path.join(os.path.dirname(__file__), "agent_memory.db")
-HALT_FILE = os.path.join(os.path.dirname(__file__), "halt.flag")
+PAYPAL_URL = "https://www.paypal.com/paypalme/2r0v3"
 
 if not DISCORD_TOKEN:
     print("[discord_bot] ERROR: DISCORD_BOT_TOKEN not in .env")
@@ -81,19 +81,6 @@ def _db_write(query: str, params=None) -> bool:
     except Exception as e:
         log.error(f"[discord] DB write failed: {e}")
         return False
-
-
-# ── Trading halt/resume ────────────────────────────────────────────────────────
-
-def is_halted() -> bool:
-    return os.path.exists(HALT_FILE)
-
-
-def set_halted(halted: bool):
-    if halted and not os.path.exists(HALT_FILE):
-        open(HALT_FILE, "w").close()
-    elif not halted and os.path.exists(HALT_FILE):
-        os.remove(HALT_FILE)
 
 
 # ── Notification frequency ────────────────────────────────────────────────────
@@ -198,10 +185,9 @@ async def help_cmd(interaction: discord.Interaction):
         inline=False,
     )
     embed.add_field(
-        name="Trading Control",
-        value="/halt — pause all new trades (risk override)\n"
-              "/resume — re-enable trading\n"
-              "/frequency [low|medium|high] — notification level\n",
+        name="Settings",
+        value="/frequency [low|medium|high] — notification level\n"
+              "/supportme — buy-me-a-coffee / PayPal link\n",
         inline=False,
     )
     embed.add_field(
@@ -226,11 +212,9 @@ async def status_cmd(interaction: discord.Interaction):
     await interaction.response.defer()
     tick_count = _db_scalar("SELECT COUNT(*) FROM price_ticks WHERE date(timestamp)=date('now')") or 0
     last_log = _db_scalar("SELECT agent_name || ': ' || task_type FROM agent_logs ORDER BY timestamp DESC LIMIT 1") or "none yet"
-    halt_str = "🛑 HALTED" if is_halted() else "🟢 ACTIVE"
     freq = _get_frequency()
 
-    embed = discord.Embed(title="📊 GME System Status", color=discord.Color.green() if not is_halted() else discord.Color.red())
-    embed.add_field(name="Trading", value=halt_str, inline=True)
+    embed = discord.Embed(title="📊 GME System Status", color=discord.Color.green())
     embed.add_field(name="Ticks Today", value=str(tick_count), inline=True)
     embed.add_field(name="Notifications", value=freq, inline=True)
     embed.add_field(name="Last Agent", value=last_log, inline=False)
@@ -302,20 +286,18 @@ async def update_cmd(interaction: discord.Interaction):
         await interaction.followup.send(f"❌ Refresh failed: {str(e)[:200]}")
 
 
-@bot.tree.command(name="halt", description="Pause all new trades")
-async def halt_cmd(interaction: discord.Interaction):
-    set_halted(True)
-    embed = discord.Embed(title="🛑 Trading Halted", description="All new trades paused.", color=discord.Color.red())
+@bot.tree.command(name="supportme", description="Buy-me-a-coffee / PayPal link")
+async def supportme_cmd(interaction: discord.Interaction):
+    embed = discord.Embed(
+        title="☕ Support the team",
+        description=(
+            "If this bot has been useful, a coffee keeps it brewing:\n"
+            f"👉 {PAYPAL_URL}\n\n"
+            "*No pressure — the signals stay free either way.*"
+        ),
+        color=discord.Color.gold(),
+    )
     await interaction.response.send_message(embed=embed)
-    log.warning("[discord] Trading halted by command")
-
-
-@bot.tree.command(name="resume", description="Re-enable trading")
-async def resume_cmd(interaction: discord.Interaction):
-    set_halted(False)
-    embed = discord.Embed(title="🟢 Trading Resumed", description="Trading re-enabled.", color=discord.Color.green())
-    await interaction.response.send_message(embed=embed)
-    log.info("[discord] Trading resumed by command")
 
 
 @bot.tree.command(name="frequency", description="View or set notification frequency")

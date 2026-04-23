@@ -5,13 +5,12 @@ Commands:
   /help        — full command guide and chat capabilities
   /status      — system health, agents, tick count
   /standup     — agent daily standup (signals, win rates, ROI)
-  /balance     — live IBKR account balance
   /ticks       — price ticks received today
+  /freshness   — verify agents are reading current data (not stale tables)
   /agents      — last run time for each agent
   /brief       — today's strategy in plain English
   /update      — sync local data to Supabase immediately
-  /halt        — pause all new trades (risk override)
-  /resume      — re-enable trading
+  /supportme   — buy-me-a-coffee / PayPal link
   /frequency   — show current notification frequency
   /frequency low|medium|high — set notification level
                low    = daily summary only
@@ -49,12 +48,7 @@ BASE_URL = f"https://api.telegram.org/bot{TOKEN}"
 
 ENABLED = bool(TOKEN and CHAT_ID)
 
-_halt_flag = threading.Event()   # set = halted, clear = trading allowed
-_HALT_FILE = os.path.join(os.path.dirname(__file__), "halt.flag")
-
-
-def is_halted() -> bool:
-    return _halt_flag.is_set() or os.path.exists(_HALT_FILE)
+PAYPAL_URL = "https://www.paypal.com/paypalme/2r0v3"
 
 
 def _send(text: str):
@@ -127,12 +121,39 @@ def _run_agent_refresh():
     try:
         from crewai import Crew, Process
         from agents import valerie_agent, synthesis_agent, news_analyst_agent, cto_agent
-        from tasks import validate_data_task, synthesis_task, news_task, cto_daily_brief_task
-        from datetime import datetime
+        from tasks import make_validate_data_task, make_synthesis_task, news_task, cto_daily_brief_task
+
+        # Pre-fetch all live data in one pass
+        conn = sqlite3.connect(DB_PATH)
+        price_row = conn.execute(
+            "SELECT close, volume, timestamp FROM price_ticks WHERE symbol='GME' ORDER BY timestamp DESC LIMIT 1"
+        ).fetchone()
+        latest_ts_row = conn.execute(
+            "SELECT timestamp FROM price_ticks WHERE symbol='GME' ORDER BY timestamp DESC LIMIT 1"
+        ).fetchone()
+        tick_count = conn.execute(
+            "SELECT COUNT(*) FROM price_ticks WHERE symbol='GME' AND datetime(timestamp) > datetime('now','-5 minutes')"
+        ).fetchone()[0]
+        agent_logs = conn.execute(
+            "SELECT agent_name, task_type, content, timestamp FROM agent_logs "
+            "WHERE datetime(timestamp) > datetime('now', '-2 hours') ORDER BY timestamp DESC LIMIT 40"
+        ).fetchall()
+        structural = conn.execute(
+            "SELECT content FROM agent_logs WHERE task_type='investor_intel' ORDER BY timestamp DESC LIMIT 1"
+        ).fetchone()
+        news_rows = conn.execute(
+            "SELECT headline, sentiment_score FROM news_analysis ORDER BY timestamp DESC LIMIT 10"
+        ).fetchall()
+        conn.close()
+
+        price_str = f"${price_row[0]:.2f} (volume: {int(price_row[1] or 0)}, as of {price_row[2][:16]})" if price_row else "unavailable"
+        latest_ts = latest_ts_row[0][:19] if latest_ts_row else "never"
+        agent_logs_str = "\n".join(f"  [{r[3][:16]}] {r[0]} ({r[1]}): {str(r[2])[:150]}" for r in agent_logs) if agent_logs else "  No recent logs."
 
         # Valerie — data quality check (fast)
         try:
-            crew = Crew(agents=[valerie_agent], tasks=[validate_data_task],
+            task = make_validate_data_task(valerie_agent, tick_count, latest_ts, 0, 0)
+            crew = Crew(agents=[valerie_agent], tasks=[task],
                        process=Process.sequential, verbose=False)
             result = crew.kickoff()
             results['valerie'] = str(result)[:300]
@@ -140,9 +161,10 @@ def _run_agent_refresh():
         except Exception as e:
             results['valerie'] = f"Error: {str(e)[:100]}"
 
-        # Synthesis — team consensus (fast, 5-min refresh)
+        # Synthesis — team consensus with live data
         try:
-            crew = Crew(agents=[synthesis_agent], tasks=[synthesis_task],
+            task = make_synthesis_task(synthesis_agent, price_str, agent_logs_str)
+            crew = Crew(agents=[synthesis_agent], tasks=[task],
                        process=Process.sequential, verbose=False)
             result = crew.kickoff()
             results['synthesis'] = str(result)[:300]
@@ -164,9 +186,23 @@ def _run_agent_refresh():
         except Exception as e:
             results['news'] = f"Error: {str(e)[:100]}"
 
-        # CTO brief (structural intel)
+        # CTO brief — inject pre-fetched news and investor intel
         try:
-            crew = Crew(agents=[cto_agent], tasks=[cto_daily_brief_task],
+            structural_str = structural[0][:300] if structural else "No investor intel logged."
+            news_str = "\n".join(f"  {r[0][:80]} (score: {r[1]})" for r in news_rows) if news_rows else "  No recent news."
+            from crewai import Task as _Task
+            cto_task = _Task(
+                description=(
+                    cto_daily_brief_task.description.split("STEP 3")[0] +
+                    f"STEP 3 — ANTI-PATTERN ALERTS\nLIVE NEWS (do not invent):\n{news_str}\n\n"
+                    f"STEP 4 — KEY INVESTOR INTELLIGENCE\nLIVE DATA:\n{structural_str}\n\n"
+                    "STEP 5 — STATE STRUCTURAL BIAS: BULLISH / BEARISH / NEUTRAL\n\n"
+                    "Output in the format specified."
+                ),
+                expected_output=cto_daily_brief_task.expected_output,
+                agent=cto_agent,
+            )
+            crew = Crew(agents=[cto_agent], tasks=[cto_task],
                        process=Process.sequential, verbose=False)
             result = crew.kickoff()
             results['cto'] = str(result)[:300]
@@ -222,11 +258,9 @@ def handle_command(text: str):
     elif cmd == "/status":
         tick_count = _db_scalar("SELECT COUNT(*) FROM price_ticks WHERE date(timestamp)=date('now')")
         last_log   = _db_scalar("SELECT agent_name || ': ' || task_type FROM agent_logs ORDER BY timestamp DESC LIMIT 1")
-        halt_str   = "HALTED" if is_halted() else "ACTIVE"
         freq       = _get_frequency()
         _send(
             f"<b>GME System Status</b>\n"
-            f"Trading: <b>{halt_str}</b>\n"
             f"Ticks today: {tick_count or 0}\n"
             f"Notifications: {freq}\n"
             f"Last agent: {last_log or 'none yet'}\n"
@@ -257,6 +291,24 @@ def handle_command(text: str):
                 _send("No price ticks in database yet.")
         except Exception as e:
             _send(f"Ticks error: {e}")
+
+    elif cmd == "/freshness":
+        try:
+            import data_freshness
+            results = data_freshness.check()
+            lines = ["<b>Data Freshness</b>"]
+            any_bad = False
+            for name, ok, detail in results:
+                icon = "✅" if ok else "❌"
+                if not ok:
+                    any_bad = True
+                lines.append(f"{icon} <code>{name}</code>\n   {detail}")
+            verdict = "⚠️ Stale data — agent narratives may be wrong." if any_bad else "All green — safe to trust agent output."
+            lines.append("")
+            lines.append(f"<b>{verdict}</b>")
+            _send("\n".join(lines))
+        except Exception as e:
+            _send(f"Freshness error: {e}")
 
     elif cmd == "/agents":
         try:
@@ -346,28 +398,60 @@ def handle_command(text: str):
             _send(f"Standup error: {e}")
             log.error(f"[tgbot] /standup failed: {e}")
 
-    elif cmd == "/halt":
-        _halt_flag.set()
-        open(_HALT_FILE, "w").close()
-        _send("🛑 <b>Trading HALTED.</b> No new orders will be placed.\nSend /resume to re-enable.")
-        log.warning("[tgbot] Trading halted by Telegram command")
-
-    elif cmd == "/resume":
-        _halt_flag.clear()
-        if os.path.exists(_HALT_FILE):
-            os.remove(_HALT_FILE)
-        _send("✅ <b>Trading RESUMED.</b> System is active.")
-        log.info("[tgbot] Trading resumed by Telegram command")
+    elif cmd in ("/supportme", "/buymeacoffee"):
+        _send(
+            "☕ <b>Support the team</b>\n\n"
+            "If this bot has been useful, a coffee keeps it brewing:\n"
+            f"👉 <a href=\"{PAYPAL_URL}\">{PAYPAL_URL}</a>\n\n"
+            "<i>No pressure — the signals stay free either way.</i>"
+        )
 
     elif cmd == "/brief":
         _send("⏳ Generating strategy brief — takes ~30 seconds...")
         try:
             import sys, os
             sys.path.insert(0, os.path.dirname(__file__))
-            from crewai import Crew, Process
+            from crewai import Crew, Process, Task
             from agents import briefing_agent
-            from tasks import daily_briefing_task
-            crew = Crew(agents=[briefing_agent], tasks=[daily_briefing_task],
+
+            # Fetch live data before kickoff — agent can't execute SQL itself
+            conn = sqlite3.connect(DB_PATH)
+            price_row = conn.execute(
+                "SELECT close, volume, timestamp FROM price_ticks WHERE symbol='GME' ORDER BY timestamp DESC LIMIT 1"
+            ).fetchone()
+            agent_logs = conn.execute(
+                "SELECT agent_name, task_type, content, timestamp FROM agent_logs ORDER BY timestamp DESC LIMIT 5"
+            ).fetchall()
+            safety = conn.execute(
+                "SELECT content FROM agent_logs WHERE agent_name='SafetyGate' ORDER BY timestamp DESC LIMIT 1"
+            ).fetchone()
+            conn.close()
+
+            price_str = f"${price_row[0]:.2f} (volume: {int(price_row[1] or 0)}, as of {price_row[2][:16]})" if price_row else "unavailable"
+            logs_str = "\n".join(
+                f"  [{r[3][:16]}] {r[0]} ({r[1]}): {str(r[2])[:120]}" for r in agent_logs
+            ) if agent_logs else "  No recent agent logs."
+            safety_str = safety[0][:200] if safety else "No safety gate result."
+
+            live_task = Task(
+                description=(
+                    f"Produce a plain-English strategy briefing for the CEO. No jargon.\n\n"
+                    f"LIVE DATA (use this — do not invent numbers):\n"
+                    f"Latest GME price: {price_str}\n"
+                    f"Recent agent logs:\n{logs_str}\n"
+                    f"Safety gate: {safety_str}\n\n"
+                    "Write EXACTLY this format:\n\n"
+                    "📍 MARKET: GME is at $[price]. It is [rising/falling/sideways] today.\n\n"
+                    "📐 PATTERN: [Describe any pattern in plain English.]\n\n"
+                    "🎯 KEY LEVELS: Support at $[X]. Resistance at $[Y]. Today's range: $[low] to $[high].\n\n"
+                    "⏳ WAITING FOR: [What signal the system needs before placing a trade.]\n\n"
+                    "⚠️ RISK: [One thing that would stop today's plan.]\n\n"
+                    "🔮 CONFIDENCE: [X]% — [one sentence on why]"
+                ),
+                expected_output="A structured 6-section strategy brief using the live data provided.",
+                agent=briefing_agent,
+            )
+            crew = Crew(agents=[briefing_agent], tasks=[live_task],
                         process=Process.sequential, verbose=False)
             result = crew.kickoff()
             _send(f"<b>📋 STRATEGY BRIEF</b>\n\n{str(result)[:3000]}")
@@ -546,7 +630,7 @@ def handle_command(text: str):
             "/standup — agent daily standup (signals, win rates, team ROI)\n"
             "/agents — last run time for each agent\n"
             "/ticks — price data received today\n"
-            "/balance — live IBKR account balance\n\n"
+            "/freshness — verify agents are reading current data\n\n"
             "<b>Research & Intel:</b>\n"
             "/brief — today's strategy brief from synthesis agent\n"
             "/update — force sync local data to Supabase now\n"
@@ -555,11 +639,11 @@ def handle_command(text: str):
             "/learn \"<lesson>\" --why \"<reason>\" — teach agents a rule\n"
             "/lessons [topic] — show lessons agents learned\n\n"
             "<b>Settings:</b>\n"
-            "/frequency [low|medium|high] — notification level\n"
-            "/halt — pause trading (risk override)\n"
-            "/resume — re-enable trading\n\n"
+            "/frequency [low|medium|high] — notification level\n\n"
+            "<b>☕ Support:</b>\n"
+            "/supportme — buy-me-a-coffee / PayPal link\n\n"
             "<b>🧪 Testing:</b>\n"
-            "/test — run all 35 Playwright tests (dashboard, feedback, metrics)\n\n"
+            "/test — run Playwright tests (dashboard, feedback, metrics)\n\n"
             "<b>💬 Interactive Chat:</b>\n"
             "Just send any question (no slash) to ask:\n"
             "• Current GME price & analysis\n"
@@ -616,15 +700,14 @@ Keep responses brief (1 paragraph max). Think: Bloomberg meets a knowledgeable f
             "/help — full command guide and chat capabilities\n"
             "/status — system health\n"
             "/standup — agent daily standup (ROI, win rates)\n"
-            "/balance — IBKR account balance\n"
             "/ticks — price data received\n"
+            "/freshness — verify data freshness\n"
             "/agents — last agent activity\n"
             "/brief — today's strategy in plain English\n"
             "/update — sync data to Supabase now\n"
             "/trove [TICKERS] — deep-value score screen\n"
-            "/test — run 35 Playwright tests\n"
-            "/halt — pause trading\n"
-            "/resume — re-enable trading\n"
+            "/test — run Playwright tests\n"
+            "/supportme — buy-me-a-coffee / PayPal link\n"
             "/frequency — notification settings\n\n"
             "Send /help for detailed guide."
         )
