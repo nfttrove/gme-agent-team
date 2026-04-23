@@ -39,6 +39,8 @@ class Voice:
 # here as they are fixed. Order matters — forwarded in this order each run.
 VOICES: list[Voice] = [
     Voice("Synthesis", "synthesis",         "🧠", "Synthesis", max_per_run=1),
+    Voice("Trendy",    "trend_signal",      "📈", "Trendy",    max_per_run=1),
+    Voice("Pattern",   "pattern_signal",    "🎯", "Pattern",   max_per_run=1),
     Voice("Futurist",  "prediction_signal", "🔮", "Futurist",  max_per_run=2),
     Voice("Newsie",    "news",              "📰", "Newsie",    max_per_run=1),
     Voice("Chatty",    "commentary",        "💬", "Chatty",    max_per_run=2),

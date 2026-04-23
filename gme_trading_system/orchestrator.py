@@ -299,41 +299,182 @@ def run_news():
             write_log("Newsie", str(e), "news", "error")
 
 
+def _compute_pattern_signal():
+    """Shared helper: chart pattern detection from 30-day candles. CrewAI bypass.
+
+    Returns (signal: PatternSignal, narrative: str) or (None, reason: str) on failure.
+    """
+    from tools import IndicatorTool, PriceDataTool
+    from models.agent_outputs import PatternSignal
+
+    ind = IndicatorTool()._run(lookback_days=30)
+    if not ind or not ind.get("price"):
+        return None, "no indicator data available"
+    candles = PriceDataTool()._run(lookback_days=30)
+    if not candles or len(candles) < 10:
+        return None, "insufficient candles (<10)"
+
+    # Build a compact recent-history string — last 15 days, oldest first
+    tail = candles[-15:]
+    history = "\n".join(
+        f"    {c.get('date','')[:10]}  "
+        f"O={float(c.get('open',0) or 0):.2f} H={float(c.get('high',0) or 0):.2f} "
+        f"L={float(c.get('low',0) or 0):.2f} C={float(c.get('close',0) or 0):.2f} "
+        f"V={int(c.get('volume',0) or 0):,}"
+        for c in tail
+    )
+    recent_high = max(float(c.get("high", 0) or 0) for c in tail)
+    recent_low = min(float(c.get("low", 0) or 0) for c in tail if (c.get("low") or 0) > 0)
+    price = float(ind["price"])
+
+    prompt = (
+        "You are the Pattern agent — multi-day chart pattern analyst for GME.\n"
+        "Respond with ONE JSON object only (no markdown, no preamble).\n\n"
+        f"LIVE DATA:\n"
+        f"  price={price:.2f}  vwap={ind.get('vwap',0):.2f}  ema21={ind.get('ema21',0):.2f}  "
+        f"ema50={ind.get('ema50',0):.2f}  rsi14={ind.get('rsi14',0):.1f}\n"
+        f"  15d high={recent_high:.2f}  15d low={recent_low:.2f}\n"
+        f"  Recent OHLCV (oldest → newest):\n{history}\n\n"
+        "Schema (all fields required):\n"
+        '{"pattern_type": "<ascending_triangle|descending_triangle|flag|wedge|breakout|breakdown|channel|consolidation|none>", '
+        '"confidence": <0.0-1.0>, "breakout_level": <float>, '
+        '"breakout_direction": "UP"|"DOWN", '
+        '"reasoning": "<one sentence citing specific dates/levels from the data, max 220 chars>", '
+        '"severity": "HIGH"|"MEDIUM"|"LOW"}\n\n'
+        "Rules: breakout_level must be within the observed 15d range. "
+        "Use 'none' pattern_type and confidence ≤ 0.40 if no clear structure. "
+        "severity=HIGH only if confidence >= 0.75 AND price is within 2% of breakout_level."
+    )
+
+    ollama_host = os.getenv("OLLAMA_HOST", "http://localhost:11434")
+    r = requests.post(
+        f"{ollama_host}/api/generate",
+        json={"model": "gemma2:9b", "prompt": prompt, "stream": False,
+              "options": {"num_predict": 320, "temperature": 0.3}},
+        timeout=60,
+    )
+    r.raise_for_status()
+    raw = r.json().get("response", "")
+    data = _extract_json(raw)
+    if not data:
+        return None, f"parse error: {raw[:300]}"
+    try:
+        signal = PatternSignal(**data)
+    except Exception as e:
+        return None, f"validation error: {e} | raw={raw[:300]}"
+
+    narrative = (
+        f"{signal.pattern_type} · {signal.breakout_direction} break @ ${signal.breakout_level:.2f} "
+        f"(conf={signal.confidence:.0%}) · {signal.reasoning[:220]}"
+    )
+    return signal, narrative
+
+
 @market_hours_required
 def run_pattern():
-    from agents import multiday_trend_agent
-    from tasks import multiday_trend_task, daily_trend_task
+    """Every 2h — multi-day chart pattern analysis. CrewAI-bypassed."""
     log.info("[Pattern] Running multi-day pattern analysis")
     write_log("Pattern", "Analysing multi-day chart patterns", "pattern", "running")
     with metrics.cycle("pattern"):
         try:
-            crew = Crew(agents=[multiday_trend_agent], tasks=[multiday_trend_task],
-                        process=Process.sequential, verbose=True)
-            result = safe_kickoff_with_fallback(crew, agent_name="Pattern", timeout_seconds=300, label="pattern")
-            write_log("Pattern", str(result)[:1000], "pattern")
-        except CrewTimeout as e:
-            log.error(f"[Pattern] TIMEOUT: {e}")
-            write_log("Pattern", f"TIMEOUT: {e}", "pattern", "timeout")
+            signal, narrative = _compute_pattern_signal()
+            if signal is None:
+                write_log("Pattern", narrative, "pattern", "error")
+                return
+            write_log("Pattern", narrative, "pattern")
+            log.info(f"[Pattern] {narrative}")
+        except requests.Timeout:
+            write_log("Pattern", "Ollama timeout after 60s", "pattern", "timeout")
         except Exception as e:
             log.error(f"[Pattern] {e}")
             write_log("Pattern", str(e), "pattern", "error")
 
 
+def _compute_trendy_signal():
+    """Shared helper: fetch indicators + lookback, ask Gemma for a TrendySignal JSON.
+
+    Returns (signal: TrendySignal, narrative: str) or (None, reason: str) on failure.
+    Used by both run_daily_trend (reports to agent_logs) and run_trendy_signal
+    (also writes to signal_alerts + Telegram).
+    """
+    from tools import IndicatorTool, PriceDataTool
+    from models.agent_outputs import TrendySignal
+
+    ind = IndicatorTool()._run(lookback_days=30)
+    if not ind or not ind.get("price"):
+        return None, "no indicator data available"
+    candles = PriceDataTool()._run(lookback_days=20)
+    closes = [float(c.get("close", 0) or 0) for c in candles if c.get("close")]
+    highs = [float(c.get("high", 0) or 0) for c in candles if c.get("high")]
+    lows = [float(c.get("low", 0) or 0) for c in candles if c.get("low")]
+    if not closes or not highs or not lows:
+        return None, "no lookback candles available"
+
+    support_hint = round(min(lows), 2)
+    resistance_hint = round(max(highs), 2)
+    price = float(ind["price"])
+
+    prompt = (
+        "You are the Trendy agent — daily trend analyst for GME.\n"
+        "Respond with ONE JSON object only (no markdown, no preamble).\n\n"
+        "LIVE DATA (use these — do not invent):\n"
+        f"  price={price:.2f}  vwap={ind.get('vwap',0):.2f}  "
+        f"ema8={ind.get('ema8',0):.2f}  ema21={ind.get('ema21',0):.2f}  "
+        f"ema50={ind.get('ema50',0):.2f}  rsi14={ind.get('rsi14',0):.1f}  "
+        f"pct_from_vwap={ind.get('pct_from_vwap',0):+.2f}%\n"
+        f"  above_vwap={ind.get('above_vwap')}  above_ema21={ind.get('above_ema21')}  "
+        f"above_ema50={ind.get('above_ema50')}\n"
+        f"  20d lookback: low={support_hint:.2f}  high={resistance_hint:.2f}  "
+        f"latest_close={closes[-1]:.2f}\n\n"
+        "Schema (all fields required):\n"
+        '{"trend_direction": "UP"|"DOWN"|"SIDEWAYS", "confidence": <0.0-1.0>, '
+        '"support_level": <float>, "resistance_level": <float>, '
+        '"reasoning": "<one sentence citing specific indicator values, max 220 chars>", '
+        '"severity": "HIGH"|"MEDIUM"|"LOW"}\n\n'
+        "Rules: UP requires price > VWAP AND price > EMA21. DOWN requires price < VWAP AND price < EMA21. "
+        "Otherwise SIDEWAYS. Confidence ≤ 0.55 if EMAs disagree or RSI in 45-55. "
+        f"Support should be near {support_hint}, resistance near {resistance_hint}. severity=HIGH if confidence>=0.75."
+    )
+
+    ollama_host = os.getenv("OLLAMA_HOST", "http://localhost:11434")
+    r = requests.post(
+        f"{ollama_host}/api/generate",
+        json={"model": "gemma2:9b", "prompt": prompt, "stream": False,
+              "options": {"num_predict": 300, "temperature": 0.2}},
+        timeout=60,
+    )
+    r.raise_for_status()
+    raw = r.json().get("response", "")
+    data = _extract_json(raw)
+    if not data:
+        return None, f"parse error: {raw[:300]}"
+    try:
+        signal = TrendySignal(**data)
+    except Exception as e:
+        return None, f"validation error: {e} | raw={raw[:300]}"
+
+    narrative = (
+        f"{signal.trend_direction} (conf={signal.confidence:.0%}) · "
+        f"S=${signal.support_level:.2f} R=${signal.resistance_level:.2f} · {signal.reasoning[:220]}"
+    )
+    return signal, narrative
+
+
 @active_window_required
 def run_daily_trend():
-    from agents import daily_trend_agent
-    from tasks import daily_trend_task
+    """Every 4h + 8 PM ET — daily trend analysis. Bypasses CrewAI (see feedback memory)."""
     log.info("[Trendy] Running daily trend analysis")
     write_log("Trendy", "Running daily trend analysis", "daily_trend", "running")
     with metrics.cycle("daily_trend"):
         try:
-            crew = Crew(agents=[daily_trend_agent], tasks=[daily_trend_task],
-                        process=Process.sequential, verbose=True)
-            result = safe_kickoff_with_fallback(crew, agent_name="Trendy", timeout_seconds=300, label="trendy")
-            write_log("Trendy", str(result)[:1000], "daily_trend")
-        except CrewTimeout as e:
-            log.error(f"[Trendy] TIMEOUT: {e}")
-            write_log("Trendy", f"TIMEOUT: {e}", "daily_trend", "timeout")
+            signal, narrative = _compute_trendy_signal()
+            if signal is None:
+                write_log("Trendy", narrative, "daily_trend", "error")
+                return
+            write_log("Trendy", narrative, "daily_trend")
+            log.info(f"[Trendy] {narrative}")
+        except requests.Timeout:
+            write_log("Trendy", "Ollama timeout after 60s", "daily_trend", "timeout")
         except Exception as e:
             log.error(f"[Trendy] {e}")
             write_log("Trendy", str(e), "daily_trend", "error")
@@ -520,76 +661,67 @@ def _extract_futurist_prediction(raw_output: str) -> dict:
 
 @active_window_required
 def run_trendy_signal():
-    """Trendy agent trend signal with confidence logging."""
-    from agents import daily_trend_agent
-    from tasks import daily_trend_task
-    from models.agent_outputs import TrendySignal
-
+    """Trendy trend signal + Telegram alert (CrewAI-bypassed — see feedback memory)."""
     log.info("[Trendy] Starting trend signal cycle")
     write_log("Trendy", "Running trend signal cycle", "trend_signal", "running")
 
     with metrics.cycle("trendy_signal"):
         try:
-            crew = Crew(
-                agents=[daily_trend_agent],
-                tasks=[daily_trend_task],
-                process=Process.sequential,
-                verbose=True,
-            )
-            result = safe_kickoff_with_fallback(crew, agent_name="Trendy", timeout_seconds=300, label="trendy_signal")
-
-            # Parse output to TrendySignal
-            signal_data = _extract_json(str(result))
-            if not signal_data:
-                log.warning("[Trendy] Could not parse signal")
-                write_log("Trendy", f"Failed to parse signal:\n{str(result)[:500]}", "trend_signal", "parse_error")
+            signal, narrative = _compute_trendy_signal()
+            if signal is None:
+                log.warning(f"[Trendy] {narrative}")
+                write_log("Trendy", narrative, "trend_signal",
+                          "parse_error" if "parse" in narrative else "validation_error" if "validation" in narrative else "error")
                 return
 
-            try:
-                signal = TrendySignal(**signal_data)
-            except Exception as e:
-                log.error(f"[Trendy] Validation failed: {e}")
-                write_log("Trendy", f"Validation error: {e}", "trend_signal", "validation_error")
+            write_log("Trendy", narrative, "trend_signal", "ok")
+            log.info(f"[Trendy] {narrative}")
+
+            # For UP trend: entry near support (pullback buy), stop below, target at resistance.
+            # For DOWN trend: entry near resistance (bounce short), stop above, target at support.
+            # SIDEWAYS: no actionable signal.
+            if signal.trend_direction == "SIDEWAYS" or signal.confidence < 0.55:
+                metrics.snapshot()
                 return
 
-            write_log("Trendy", str(result)[:1000], "trend_signal", "ok")
+            if signal.trend_direction == "UP":
+                entry_price = signal.support_level
+                stop_loss = round(signal.support_level * 0.97, 2)
+                take_profit = signal.resistance_level
+            else:  # DOWN
+                entry_price = signal.resistance_level
+                stop_loss = round(signal.resistance_level * 1.03, 2)
+                take_profit = signal.support_level
 
-            # Log signal
             manager = SignalManager(DB_PATH)
-            entry_price = signal.support_level if signal.trend_direction == "UP" else signal.resistance_level
             alert_id = manager.log_alert(
                 agent_name="Trendy",
                 signal_type=signal.signal_type,
                 confidence=signal.confidence,
                 severity=signal.severity,
                 entry_price=entry_price,
-                stop_loss=signal.resistance_level if signal.trend_direction == "UP" else signal.support_level,
-                take_profit=signal.resistance_level if signal.trend_direction == "UP" else signal.support_level * 0.97,
-                reasoning=signal.reasoning,
+                stop_loss=stop_loss,
+                take_profit=take_profit,
+                reasoning=signal.reasoning[:500],
             )
-            log.info(f"[Trendy] Signal logged: {alert_id[:8]} | confidence={signal.confidence:.0%}")
-
-            # Send alert
             try:
                 notify_signal_alert(
                     agent_name="Trendy",
                     signal_type=signal.signal_type,
                     confidence=signal.confidence,
                     entry_price=entry_price,
-                    stop_loss=signal.resistance_level if signal.trend_direction == "UP" else signal.support_level,
-                    take_profit=signal.resistance_level if signal.trend_direction == "UP" else signal.support_level * 1.02,
-                    reasoning=f"{signal.trend_direction} trend | Support: ${signal.support_level:.2f}, Resistance: ${signal.resistance_level:.2f}",
+                    stop_loss=stop_loss,
+                    take_profit=take_profit,
+                    reasoning=f"{signal.trend_direction} trend | S=${signal.support_level:.2f}, R=${signal.resistance_level:.2f} — {signal.reasoning[:160]}",
                     alert_id=alert_id,
                 )
-                log.info("[Trendy] Telegram alert sent")
             except Exception as e:
                 log.warning(f"[Trendy] Telegram alert failed (non-critical): {e}")
 
             metrics.snapshot()
 
-        except CrewTimeout as e:
-            log.error(f"[Trendy] TIMEOUT: {e}")
-            write_log("Trendy", f"TIMEOUT: {e}", "trend_signal", "timeout")
+        except requests.Timeout:
+            write_log("Trendy", "Ollama timeout after 60s", "trend_signal", "timeout")
         except Exception as e:
             log.error(f"[Trendy] {e}")
             write_log("Trendy", str(e), "trend_signal", "error")
@@ -667,59 +799,54 @@ def run_synthesis_signal():
 
 @active_window_required
 def run_pattern_signal():
-    """Pattern agent chart pattern signal with confidence logging."""
-    from agents import multiday_trend_agent
-    from tasks import multiday_trend_task
-    from models.agent_outputs import PatternSignal
-
+    """Pattern signal + Telegram alert (CrewAI-bypassed)."""
     log.info("[Pattern] Starting pattern signal cycle")
     write_log("Pattern", "Running pattern signal cycle", "pattern_signal", "running")
 
     with metrics.cycle("pattern_signal"):
         try:
-            crew = Crew(
-                agents=[multiday_trend_agent],
-                tasks=[multiday_trend_task],
-                process=Process.sequential,
-                verbose=True,
-            )
-            result = safe_kickoff_with_fallback(crew, agent_name="Pattern", timeout_seconds=300, label="pattern_signal")
-
-            signal_data = _extract_json(str(result))
-            if not signal_data:
-                log.warning("[Pattern] Could not parse signal")
+            signal, narrative = _compute_pattern_signal()
+            if signal is None:
+                log.warning(f"[Pattern] {narrative}")
+                write_log("Pattern", narrative, "pattern_signal",
+                          "parse_error" if "parse" in narrative else "validation_error" if "validation" in narrative else "error")
                 return
 
-            try:
-                signal = PatternSignal(**signal_data)
-            except Exception as e:
-                log.error(f"[Pattern] Validation failed: {e}")
+            write_log("Pattern", narrative, "pattern_signal", "ok")
+            log.info(f"[Pattern] {narrative}")
+
+            if signal.pattern_type == "none" or signal.confidence < 0.60:
+                metrics.snapshot()
                 return
 
-            write_log("Pattern", str(result)[:1000], "pattern_signal", "ok")
+            entry_price = signal.breakout_level
+            if signal.breakout_direction == "UP":
+                stop_loss = round(signal.breakout_level * 0.96, 2)
+                take_profit = round(signal.breakout_level * 1.06, 2)
+            else:
+                stop_loss = round(signal.breakout_level * 1.04, 2)
+                take_profit = round(signal.breakout_level * 0.94, 2)
 
-            # Log signal
             manager = SignalManager(DB_PATH)
             alert_id = manager.log_alert(
                 agent_name="Pattern",
                 signal_type=signal.signal_type,
                 confidence=signal.confidence,
                 severity=signal.severity,
-                entry_price=signal.breakout_level * 0.99,
-                stop_loss=signal.breakout_level * 0.96 if signal.breakout_direction == "UP" else signal.breakout_level * 1.04,
-                take_profit=signal.breakout_level * 1.04 if signal.breakout_direction == "UP" else signal.breakout_level * 0.96,
-                reasoning=signal.reasoning,
+                entry_price=entry_price,
+                stop_loss=stop_loss,
+                take_profit=take_profit,
+                reasoning=signal.reasoning[:500],
             )
-
             try:
                 notify_signal_alert(
                     agent_name="Pattern",
                     signal_type=signal.signal_type,
                     confidence=signal.confidence,
-                    entry_price=signal.breakout_level,
-                    stop_loss=signal.breakout_level * 0.96,
-                    take_profit=signal.breakout_level * 1.04,
-                    reasoning=f"{signal.pattern_type} | {signal.breakout_direction} breakout at ${signal.breakout_level:.2f}",
+                    entry_price=entry_price,
+                    stop_loss=stop_loss,
+                    take_profit=take_profit,
+                    reasoning=f"{signal.pattern_type} | {signal.breakout_direction} break @ ${signal.breakout_level:.2f} — {signal.reasoning[:160]}",
                     alert_id=alert_id,
                 )
             except Exception as e:
@@ -727,9 +854,8 @@ def run_pattern_signal():
 
             metrics.snapshot()
 
-        except CrewTimeout as e:
-            log.error(f"[Pattern] TIMEOUT: {e}")
-            write_log("Pattern", f"TIMEOUT: {e}", "pattern_signal", "timeout")
+        except requests.Timeout:
+            write_log("Pattern", "Ollama timeout after 60s", "pattern_signal", "timeout")
         except Exception as e:
             log.error(f"[Pattern] {e}")
             write_log("Pattern", str(e), "pattern_signal", "error")
