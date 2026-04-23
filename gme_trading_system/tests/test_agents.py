@@ -14,7 +14,7 @@ class TestAgentInstantiation:
         import agents
         for name in [
             "daily_trend_agent", "multiday_trend_agent", "news_analyst_agent",
-            "futurist_agent", "project_manager_agent", "trader_agent",
+            "futurist_agent", "project_manager_agent",
         ]:
             assert hasattr(agents, name), f"Missing agent: {name}"
 
@@ -23,10 +23,6 @@ class TestAgentInstantiation:
         assert isinstance(daily_trend_agent, ResilientAgent)
         assert isinstance(futurist_agent, ResilientAgent)
         assert "gemma" in daily_trend_agent.llm.model.lower()
-
-    def test_trader_uses_local_model(self):
-        from agents import trader_agent
-        assert "ollama" in trader_agent.llm.model.lower() or "gemma" in trader_agent.llm.model.lower()
 
     def test_manager_allows_delegation(self):
         from agents import project_manager_agent
@@ -38,7 +34,7 @@ class TestTaskDefinitions:
         import tasks
         for name in [
             "daily_trend_task", "multiday_trend_task", "news_task",
-            "futurist_task", "manager_task", "trader_task",
+            "futurist_task", "manager_task",
         ]:
             assert hasattr(tasks, name), f"Missing task: {name}"
 
@@ -50,9 +46,5 @@ class TestTaskDefinitions:
     def test_manager_task_has_full_context(self):
         from tasks import manager_task
         assert len(manager_task.context) >= 4
-
-    def test_trader_task_depends_on_manager(self):
-        from tasks import trader_task, manager_task
-        assert manager_task in trader_task.context
 
 

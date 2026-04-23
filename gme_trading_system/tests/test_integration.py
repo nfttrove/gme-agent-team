@@ -344,15 +344,21 @@ class TestMarketHours:
 
         ET = ZoneInfo("America/New_York")
 
-        # Monday 8 AM — within active window (7:30-18:00)
+        # Active window is 08:30-17:00 ET, Mon-Fri (1h pre/post market buffer).
+
+        # Monday 09:00 — inside window
+        monday_9am = datetime(2024, 1, 8, 9, 0, tzinfo=ET)
+        assert is_active_window(monday_9am) is True
+
+        # Monday 08:00 — before window (pre-8:30)
         monday_8am = datetime(2024, 1, 8, 8, 0, tzinfo=ET)
-        assert is_active_window(monday_8am) is True
+        assert is_active_window(monday_8am) is False
 
-        # Monday 6 AM — before active window
-        early = datetime(2024, 1, 8, 6, 0, tzinfo=ET)
-        assert is_active_window(early) is False
+        # Monday 17:30 — after window
+        monday_1730 = datetime(2024, 1, 8, 17, 30, tzinfo=ET)
+        assert is_active_window(monday_1730) is False
 
-        # Saturday — no active window
+        # Saturday noon — weekend, no active window regardless of time
         saturday = datetime(2024, 1, 6, 12, 0, tzinfo=ET)
         assert is_active_window(saturday) is False
 
