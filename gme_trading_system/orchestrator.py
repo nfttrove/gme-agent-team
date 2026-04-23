@@ -1823,14 +1823,13 @@ class TradingSystemOrchestrator:
         self.scheduler.add_job(run_pattern,      IntervalTrigger(hours=2),    id="pattern")   # was 6h
         self.scheduler.add_job(run_daily_trend,  IntervalTrigger(hours=4),    id="trendy_interval")  # intraday
 
-        # Signal confidence loop agents (NEW)
-        self.scheduler.add_job(run_synthesis_signal, IntervalTrigger(minutes=5),  id="synthesis_signal")
+        # Signal confidence loop agents — bypass pattern (pre-fetched tools, direct Ollama)
         self.scheduler.add_job(run_trendy_signal,    IntervalTrigger(hours=4),    id="trendy_signal")
         self.scheduler.add_job(run_pattern_signal,   IntervalTrigger(hours=2),    id="pattern_signal")
-        self.scheduler.add_job(run_newsie_signal,    IntervalTrigger(minutes=30), id="newsie_signal")
         self.scheduler.add_job(run_futurist_prediction_signal, IntervalTrigger(hours=2), id="futurist_signal")
-
-        self.scheduler.add_job(run_futurist_cycle, IntervalTrigger(hours=2),  id="futurist")
+        # Dropped: run_synthesis_signal, run_newsie_signal, run_futurist_cycle —
+        # CrewAI twins of run_synthesis / run_news / run_futurist_prediction_signal.
+        # Gemma hallucinated without tool output; bypass versions already cover these.
         self.scheduler.add_job(run_georisk,      IntervalTrigger(hours=1),    id="georisk")   # hourly geopolitical scan
 
         # Daily jobs (market-hours aware)
@@ -1897,7 +1896,7 @@ class TradingSystemOrchestrator:
         # Warm up: build shared context before the first full cycle
         run_investor_intel_scan()
         run_synthesis()
-        run_futurist_cycle()
+        run_futurist_prediction_signal()
 
         try:
             while True:
