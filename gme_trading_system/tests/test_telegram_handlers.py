@@ -265,20 +265,20 @@ def test_test_passing(captured_sends, monkeypatch):
     def fake_run(cmd, cwd, capture_output, text, timeout):
         return types.SimpleNamespace(
             returncode=0,
-            stdout="========== 35 passed in 12.3s ==========",
+            stdout="========== 23 passed in 0.13s ==========",
             stderr="",
         )
     monkeypatch.setattr("subprocess.run", fake_run)
     telegram_bot.handle_command("/test")
     joined = "\n".join(captured_sends)
-    assert "ALL TESTS PASSED" in joined
+    assert "ALL COMMAND TESTS PASSED" in joined
 
 
 def test_test_failing(captured_sends, monkeypatch):
     def fake_run(cmd, cwd, capture_output, text, timeout):
         return types.SimpleNamespace(
             returncode=1,
-            stdout="========== 30 passed, 5 failed in 12.3s ==========",
+            stdout="========== 20 passed, 3 failed in 0.15s ==========",
             stderr="",
         )
     monkeypatch.setattr("subprocess.run", fake_run)

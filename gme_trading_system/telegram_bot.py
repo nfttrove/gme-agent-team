@@ -16,7 +16,7 @@ Commands:
                low    = daily summary only
                medium = trades + daily summary (default)
                high   = every agent decision + trades + summary
-  /test        — run Playwright test suite (35 tests: dashboard, feedback, metrics)
+  /test        — run Telegram handler smoke tests (23 tests, ~1 sec)
 
 Interactive chat: send plain text questions for LLM responses with trading context.
 Queries dual curated GameStop research collections via Google Notebook LM first,
@@ -565,59 +565,55 @@ def handle_command(text: str):
             log.error(f"[tgbot] /lessons failed: {e}")
 
     elif cmd == "/test":
-        _send("⏳ Running Playwright test suite (35 tests)…")
+        _send("⏳ Running Telegram handler smoke tests…")
         try:
             import subprocess, sys
             import os as os_module
 
-            # Get repo root
-            repo_root = os_module.path.dirname(os_module.path.dirname(__file__))
+            bot_dir   = os_module.path.dirname(__file__)
+            test_file = os_module.path.join(bot_dir, "tests", "test_telegram_handlers.py")
 
-            # Run pytest
             result = subprocess.run(
-                [sys.executable, "-m", "pytest", "tests/playwright/", "-v", "--tb=short"],
-                cwd=repo_root,
+                [sys.executable, "-m", "pytest", test_file, "-v", "--tb=short"],
+                cwd=bot_dir,
                 capture_output=True,
                 text=True,
-                timeout=300  # 5 minute timeout
+                timeout=60,
             )
 
-            # Parse results
             output = result.stdout + result.stderr
 
-            # Extract test counts
-            if "passed" in output:
+            if "passed" in output or "failed" in output:
                 import re
-                match = re.search(r"(\d+) passed", output)
+                match  = re.search(r"(\d+) passed", output)
                 passed = int(match.group(1)) if match else 0
-                match = re.search(r"(\d+) failed", output)
+                match  = re.search(r"(\d+) failed", output)
                 failed = int(match.group(1)) if match else 0
 
-                if failed == 0:
+                if failed == 0 and passed > 0:
                     _send(
-                        f"✅ <b>ALL TESTS PASSED</b>\n\n"
-                        f"Passed: {passed}/35\n"
+                        f"✅ <b>ALL COMMAND TESTS PASSED</b>\n\n"
+                        f"Passed: {passed}\n"
                         f"Failed: 0\n"
                         f"Status: 🟢 HEALTHY\n\n"
-                        f"Dashboard: ✅ loads, displays signals\n"
-                        f"Feedback: ✅ form works, persists data\n"
-                        f"Metrics: ✅ calculations accurate\n"
-                        f"Edge cases: ✅ handled gracefully\n"
-                        f"API: ✅ robust, concurrent-safe"
+                        "<i>Every /command branch in the bot executed without "
+                        "raising and produced output. Covers /status, /ticks, "
+                        "/agents, /standup, /brief, /update, /trove, /learn, "
+                        "/lessons, /frequency, /supportme, /test, /compare, "
+                        "/help and the unknown-command fallback.</i>"
                     )
                 else:
                     _send(
                         f"⚠️ <b>TEST FAILURES</b>\n\n"
                         f"Passed: {passed}\n"
                         f"Failed: {failed}\n\n"
-                        f"Failed tests (last 20 lines):\n"
-                        f"<code>{output[-1000:]}</code>"
+                        f"Last 20 lines:\n<code>{output[-1000:]}</code>"
                     )
             else:
                 _send(f"❌ Test run error:\n<code>{output[-500:]}</code>")
 
         except subprocess.TimeoutExpired:
-            _send("❌ Tests timed out after 5 minutes")
+            _send("❌ Tests timed out after 60 seconds")
         except Exception as e:
             _send(f"❌ Test runner error: {str(e)[:200]}")
             log.error(f"[tgbot] /test failed: {e}")
@@ -643,7 +639,7 @@ def handle_command(text: str):
             "<b>☕ Support:</b>\n"
             "/supportme — buy-me-a-coffee / PayPal link\n\n"
             "<b>🧪 Testing:</b>\n"
-            "/test — run Playwright tests (dashboard, feedback, metrics)\n\n"
+            "/test — run Telegram handler smoke tests (~1 sec)\n\n"
             "<b>💬 Interactive Chat:</b>\n"
             "Just send any question (no slash) to ask:\n"
             "• Current GME price & analysis\n"
