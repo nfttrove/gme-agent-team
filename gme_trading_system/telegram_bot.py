@@ -419,6 +419,9 @@ def handle_command(text: str):
             price_row = conn.execute(
                 "SELECT close, volume, timestamp FROM price_ticks WHERE symbol='GME' ORDER BY timestamp DESC LIMIT 1"
             ).fetchone()
+            opening_row = conn.execute(
+                "SELECT close FROM price_ticks WHERE symbol='GME' AND date(timestamp)=date('now') ORDER BY timestamp ASC LIMIT 1"
+            ).fetchone()
             agent_logs = conn.execute(
                 "SELECT agent_name, task_type, content, timestamp FROM agent_logs ORDER BY timestamp DESC LIMIT 5"
             ).fetchall()
@@ -428,6 +431,9 @@ def handle_command(text: str):
             conn.close()
 
             price_str = f"${price_row[0]:.2f} (volume: {int(price_row[1] or 0)}, as of {price_row[2][:16]})" if price_row else "unavailable"
+            opening_price = opening_row[0] if opening_row else (price_row[0] if price_row else None)
+            price_change_pct = ((price_row[0] - opening_price) / opening_price * 100) if opening_price and price_row else 0
+            direction_hint = "rising" if price_change_pct > 0.5 else "falling" if price_change_pct < -0.5 else "sideways"
             logs_str = "\n".join(
                 f"  [{r[3][:16]}] {r[0]} ({r[1]}): {str(r[2])[:120]}" for r in agent_logs
             ) if agent_logs else "  No recent agent logs."
@@ -438,6 +444,8 @@ def handle_command(text: str):
                     f"Produce a plain-English strategy briefing for the CEO. No jargon.\n\n"
                     f"LIVE DATA (use this — do not invent numbers):\n"
                     f"Latest GME price: {price_str}\n"
+                    f"Today's opening price: ${opening_price:.2f if opening_price else 'N/A'}\n"
+                    f"Price direction TODAY: {direction_hint} ({price_change_pct:+.2f}%)\n"
                     f"Recent agent logs:\n{logs_str}\n"
                     f"Safety gate: {safety_str}\n\n"
                     "Write EXACTLY this format:\n\n"

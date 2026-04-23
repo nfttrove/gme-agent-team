@@ -177,7 +177,12 @@ def finnhub_webhook():
     conn = sqlite3.connect(DB_PATH)
     for item in items:
         try:
-            ts = datetime.utcfromtimestamp(item.get("datetime", 0)).isoformat() if item.get("datetime") else datetime.now(ET).isoformat()
+            # Finnhub sends Unix timestamps (seconds since epoch, UTC)
+            # Convert to ET-aware ISO format to match all other timestamps
+            if item.get("datetime"):
+                ts = datetime.fromtimestamp(item.get("datetime"), tz=ZoneInfo("UTC")).astimezone(ET).isoformat()
+            else:
+                ts = datetime.now(ET).isoformat()
             conn.execute(
                 "INSERT OR IGNORE INTO news_analysis (timestamp, headline, source, sentiment_score, sentiment_label, relevance_score, summary) VALUES (?,?,?,?,?,?,?)",
                 (ts, item.get("headline", ""), item.get("source", "finnhub"),
