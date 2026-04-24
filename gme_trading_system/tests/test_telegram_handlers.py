@@ -65,6 +65,12 @@ def seeded_db(tmp_path, monkeypatch):
             headline TEXT, sentiment_score REAL, timestamp TEXT
         );
         CREATE TABLE bot_settings (key TEXT PRIMARY KEY, value TEXT);
+        CREATE TABLE performance_scores (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            date TEXT NOT NULL, agent_name TEXT NOT NULL, metric TEXT NOT NULL,
+            value REAL NOT NULL, sample_size INTEGER DEFAULT 0, notes TEXT,
+            UNIQUE(date, agent_name, metric)
+        );
         INSERT INTO price_ticks (symbol, close, volume, timestamp)
             VALUES ('GME', 25.34, 3250, '2026-04-23T15:38:00Z');
         INSERT INTO agent_logs (agent_name, task_type, content, status, timestamp)

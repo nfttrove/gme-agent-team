@@ -1675,6 +1675,29 @@ def run_georisk():
         write_log("GeoRisk", str(e), "georisk", "error")
 
 
+def run_calibration():
+    """Score due predictions against actual price at (made_at + horizon).
+
+    Not active-window-gated — we want to score EOD and overnight predictions
+    as soon as their target time passes, regardless of when that falls.
+    """
+    try:
+        from calibration import run_calibration_cycle
+        summary = run_calibration_cycle(DB_PATH)
+        if summary.get("scored") or summary.get("abandoned"):
+            write_log(
+                "Calibrator",
+                f"scored={summary['scored']} "
+                f"abandoned={summary['abandoned']} "
+                f"metrics_written={summary.get('metrics_rows_written', 0)}",
+                "calibration",
+                "ok",
+            )
+    except Exception as e:
+        log.error(f"[calibration] {e}")
+        write_log("Calibrator", str(e), "calibration", "error")
+
+
 @active_window_required
 def run_periodic_brief():
     """Every 4 hours — send human-readable intelligence digest to Telegram."""
@@ -2140,6 +2163,12 @@ class TradingSystemOrchestrator:
 
         # Periodic intelligence digest — every 4 hours to Telegram
         self.scheduler.add_job(run_periodic_brief, IntervalTrigger(hours=4), id="periodic_brief")
+
+        # Prediction calibration — truth-serum for stated confidence numbers.
+        # Scores predictions against the price at (made_at + horizon), not EOD
+        # close. Runs every 10 min so we catch 1h predictions the moment their
+        # window elapses instead of waiting until 4:30 PM debrief.
+        self.scheduler.add_job(run_calibration, IntervalTrigger(minutes=10), id="calibration")
 
         # Nightly DB maintenance: backup + prune old backups + log cleanup (3 AM ET)
         from db_maintenance import nightly_maintenance

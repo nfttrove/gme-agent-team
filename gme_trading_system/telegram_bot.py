@@ -395,6 +395,19 @@ def handle_command(text: str):
                 "SELECT horizon, predicted_price, confidence FROM predictions ORDER BY timestamp DESC LIMIT 1"
             ).fetchone()
 
+            # Futurist calibration — the truth behind the "confidence" number.
+            # Pull latest performance_scores row for each metric.
+            calib = {}
+            for metric in ("prediction_mae_pct", "direction_hit_rate", "brier_score"):
+                row = conn.execute(
+                    "SELECT value, sample_size, date FROM performance_scores "
+                    "WHERE agent_name='Futurist' AND metric=? "
+                    "ORDER BY date DESC, id DESC LIMIT 1",
+                    (metric,),
+                ).fetchone()
+                if row:
+                    calib[metric] = row
+
             # Recent trade decisions (last 7 days)
             trades = conn.execute("""
                 SELECT action, COUNT(*) as n, AVG(confidence) as avg_conf
@@ -413,7 +426,23 @@ def handle_command(text: str):
 
             if pred:
                 conf_pct = int(pred[2] * 100) if pred[2] else 0
-                lines.append(f"<b>Futurist:</b> {pred[0]} → ${pred[1]:.2f} ({conf_pct}% confidence)\n")
+                lines.append(f"<b>Futurist call:</b> {pred[0]} → ${pred[1]:.2f} <i>(stated {conf_pct}%)</i>")
+
+                # Reality-check the stated confidence against actual track record
+                if calib.get("direction_hit_rate") and calib.get("brier_score"):
+                    hit = calib["direction_hit_rate"][0]
+                    n = calib["direction_hit_rate"][1]
+                    brier = calib["brier_score"][0]
+                    mae = calib.get("prediction_mae_pct", [0])[0] or 0
+                    # Brier < 0.25 beats random; > 0.25 is worse than a coin flip
+                    verdict = "📉 worse than random" if brier > 0.25 else "📈 beats random"
+                    lines.append(
+                        f"<b>Futurist reality (7d, n={n}):</b>\n"
+                        f"  • Hit rate: {hit:.0%}  |  MAE: {mae:.2f}%  |  Brier: {brier:.3f} ({verdict})"
+                    )
+                else:
+                    lines.append("  <i>Calibration: not enough scored predictions yet</i>")
+                lines.append("")
 
             if activity:
                 lines.append("<b>Agent Runs:</b>")
