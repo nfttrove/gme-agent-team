@@ -102,6 +102,31 @@ def _set_frequency(level: str):
         log.error(f"[tgbot] set_frequency failed: {e}")
 
 
+def _human_delta(earlier_iso: str, later_iso: str) -> str:
+    """Render the gap between two ISO timestamps as '23m' / '1h 5m' / '3d 4h'."""
+    from datetime import datetime
+    try:
+        a = datetime.fromisoformat(earlier_iso.replace("Z", "+00:00"))
+        b = datetime.fromisoformat(later_iso.replace("Z", "+00:00"))
+        if a.tzinfo is None and b.tzinfo is not None:
+            a = a.replace(tzinfo=b.tzinfo)
+        elif b.tzinfo is None and a.tzinfo is not None:
+            b = b.replace(tzinfo=a.tzinfo)
+        secs = max(0, int((b - a).total_seconds()))
+    except Exception:
+        return "?"
+    if secs < 60:
+        return f"{secs}s"
+    m, s = divmod(secs, 60)
+    if m < 60:
+        return f"{m}m"
+    h, m = divmod(m, 60)
+    if h < 24:
+        return f"{h}h {m}m" if m else f"{h}h"
+    d, h = divmod(h, 24)
+    return f"{d}d {h}h" if h else f"{d}d"
+
+
 def _ensure_settings_table():
     try:
         conn = sqlite3.connect(DB_PATH)
@@ -618,6 +643,24 @@ def handle_command(text: str):
         else:
             key = args[0].lower()
             func_name, label = agent_map[key]
+
+            # Snapshot the most recent prior run BEFORE we trigger a new one,
+            # so we can show "previous run was X ago" in the reply.
+            prev_ts = None
+            try:
+                conn = sqlite3.connect(DB_PATH)
+                prev_row = conn.execute(
+                    "SELECT timestamp FROM agent_logs "
+                    "WHERE lower(agent_name) = ? AND status='ok' "
+                    "ORDER BY timestamp DESC LIMIT 1",
+                    (key,),
+                ).fetchone()
+                conn.close()
+                if prev_row:
+                    prev_ts = prev_row[0]
+            except Exception:
+                pass
+
             _send(f"⏳ Forcing {label}…")
             try:
                 import orchestrator
@@ -634,12 +677,143 @@ def handle_command(text: str):
                 if row:
                     content, status, ts = row
                     icon = "✅" if status == "ok" else "⚠️"
-                    _send(f"{icon} <b>{label}</b> [{status}]\n\n<i>{content[:1500]}</i>")
+                    header = f"{icon} <b>{label}</b> [{status}]"
+                    ts_short = ts[:19].replace("T", " ") if ts else "?"
+                    lines = [header, f"Ran: {ts_short}"]
+                    if prev_ts and prev_ts != ts:
+                        prev_short = prev_ts[:19].replace("T", " ")
+                        delta = _human_delta(prev_ts, ts)
+                        lines.append(f"Previous: {prev_short} ({delta} ago)")
+                    elif not prev_ts:
+                        lines.append("Previous: never (first run on record)")
+                    lines.append("")
+                    lines.append(f"<i>{content[:1400]}</i>")
+                    _send("\n".join(lines))
                 else:
                     _send(f"✅ {label} ran — no new log row (check /status)")
             except Exception as e:
                 log.error(f"[tgbot] /force {key} failed: {e}")
                 _send(f"❌ /force {key} failed: {str(e)[:400]}")
+
+    elif cmd == "/swot":
+        _send("⏳ Building SWOT — aggregating agent intel (~20s)…")
+        try:
+            from market_state import get_market_fact
+            import requests as _req
+
+            fact = get_market_fact("GME", DB_PATH)
+
+            conn = sqlite3.connect(DB_PATH)
+            conn.row_factory = sqlite3.Row
+
+            agents = ("Valerie", "Chatty", "Newsie", "Pattern", "Trendy",
+                      "Futurist", "GeoRisk", "Synthesis", "CTO")
+            agent_lines = []
+            for name in agents:
+                row = conn.execute(
+                    "SELECT content, timestamp FROM agent_logs "
+                    "WHERE agent_name=? AND status='ok' "
+                    "AND timestamp > datetime('now','-24 hours') "
+                    "ORDER BY timestamp DESC LIMIT 1",
+                    (name,),
+                ).fetchone()
+                if row and row["content"]:
+                    snippet = row["content"][:220].replace("\n", " ").strip()
+                    agent_lines.append(f"  {name}: {snippet}")
+
+            # News sentiment tally (last 24h)
+            news_rows = conn.execute(
+                "SELECT sentiment_label, COUNT(*) FROM news_analysis "
+                "WHERE timestamp > datetime('now','-24 hours') "
+                "GROUP BY sentiment_label"
+            ).fetchall()
+            news_tally = ", ".join(f"{r[0]}: {r[1]}" for r in news_rows) or "no recent news"
+            top_headline = conn.execute(
+                "SELECT headline, sentiment_label FROM news_analysis "
+                "WHERE timestamp > datetime('now','-24 hours') "
+                "ORDER BY timestamp DESC LIMIT 1"
+            ).fetchone()
+
+            # Latest prediction
+            pred = conn.execute(
+                "SELECT horizon, predicted_price, confidence, reasoning "
+                "FROM predictions ORDER BY timestamp DESC LIMIT 1"
+            ).fetchone()
+            pred_line = (
+                f"{pred['horizon']} target ${pred['predicted_price']:.2f} "
+                f"({pred['confidence']:.0%}) — {pred['reasoning'][:120]}"
+                if pred else "no active prediction"
+            )
+
+            # Latest options snapshot
+            opts = conn.execute(
+                "SELECT max_pain_strike, put_call_ratio, net_oi_bias, expiration "
+                "FROM options_snapshots ORDER BY timestamp DESC LIMIT 1"
+            ).fetchone()
+            opts_line = (
+                f"max-pain ${opts['max_pain_strike']:.2f} for {opts['expiration']}, "
+                f"P/C {opts['put_call_ratio']:.2f}, bias {opts['net_oi_bias']}"
+                if opts else "no options snapshot"
+            )
+            conn.close()
+
+            headline_line = (
+                f"{top_headline['sentiment_label']}: {top_headline['headline'][:160]}"
+                if top_headline else "n/a"
+            )
+            agent_block = "\n".join(agent_lines) if agent_lines else "  (no recent agent logs)"
+
+            prompt = (
+                "You are the SWOT synthesizer. Produce a plain-English SWOT for GME based ONLY on "
+                "the verified data below. Do NOT invent dates, filings, insider trades, or price "
+                "levels outside the ranges given. If a quadrant has nothing genuine to say, write "
+                "one honest line (e.g. 'No specific threats surfaced in last 24h').\n\n"
+                "OUTPUT FORMAT (EXACTLY this, keep emoji + labels):\n"
+                "💪 STRENGTHS\n"
+                "  • [bullet citing a specific data point]\n"
+                "  • [bullet]\n"
+                "⚠️ WEAKNESSES\n"
+                "  • [bullet]\n"
+                "  • [bullet]\n"
+                "🎯 OPPORTUNITIES\n"
+                "  • [bullet — cite a price level INSIDE the 5-day range]\n"
+                "  • [bullet]\n"
+                "☠️ THREATS\n"
+                "  • [bullet]\n"
+                "  • [bullet]\n\n"
+                f"{fact['prompt_line']}\n\n"
+                f"News sentiment (24h): {news_tally}\n"
+                f"Top headline: {headline_line}\n"
+                f"Latest prediction: {pred_line}\n"
+                f"Options: {opts_line}\n\n"
+                f"Recent agent outputs (24h):\n{agent_block}\n\n"
+                "Rules: no markdown headers, no preamble. Max 2 bullets per quadrant, "
+                "each under 140 chars. Cite specific numbers/sources where possible."
+            )
+
+            ollama_host = os.getenv("OLLAMA_HOST", "http://localhost:11434")
+            r = _req.post(
+                f"{ollama_host}/api/generate",
+                json={"model": "gemma2:9b", "prompt": prompt, "stream": False,
+                      "options": {"num_predict": 700, "temperature": 0.3}},
+                timeout=90,
+            )
+            r.raise_for_status()
+            swot = r.json().get("response", "").strip()
+
+            from market_state import enforce_levels
+            swot = enforce_levels(swot, fact)
+
+            price = fact.get("price") or 0.0
+            pct = fact.get("pct_change") or 0.0
+            header = (
+                f"<b>📊 GME SWOT</b>  ${price:.2f} ({pct:+.2f}%)\n"
+                f"<i>{fact.get('timestamp','')[:19].replace('T',' ')}</i>\n\n"
+            )
+            _send(header + swot[:3500])
+        except Exception as e:
+            log.error(f"[tgbot] /swot failed: {e}")
+            _send(f"❌ /swot failed: {str(e)[:400]}")
 
     elif cmd == "/test":
         _send("⏳ Running Telegram handler smoke tests…")
@@ -706,6 +880,7 @@ def handle_command(text: str):
             "/freshness — verify agents are reading current data\n\n"
             "<b>Research & Intel:</b>\n"
             "/brief — today's strategy brief from synthesis agent\n"
+            "/swot — SWOT synthesis (strengths/weaknesses/opps/threats)\n"
             "/update — force sync local data to Supabase now\n"
             "/trove [TICKERS] — deep-value Trove Score screen (default watchlist if no tickers)\n\n"
             "<b>🧠 Agent Learning:</b>\n"
@@ -780,6 +955,7 @@ Keep responses brief (1 paragraph max). Think: Bloomberg meets a knowledgeable f
             "/freshness — verify data freshness\n"
             "/agents — last agent activity\n"
             "/brief — today's strategy in plain English\n"
+            "/swot — SWOT synthesis\n"
             "/update — sync data to Supabase now\n"
             "/trove [TICKERS] — deep-value score screen\n"
             "/test — run Telegram handler smoke tests\n"
@@ -972,6 +1148,7 @@ def _register_commands():
         return
     commands = [
         {"command": "brief",     "description": "Strategy brief — price, direction, agent signals"},
+        {"command": "swot",      "description": "SWOT — strengths, weaknesses, opportunities, threats"},
         {"command": "status",    "description": "System heartbeat — ticks, agents, last activity"},
         {"command": "standup",   "description": "Agent scorecard — signals, win rates, OK %"},
         {"command": "agents",    "description": "Last-run timestamp for every agent"},

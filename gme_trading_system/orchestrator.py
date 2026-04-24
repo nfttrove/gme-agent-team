@@ -1620,7 +1620,10 @@ def _compute_georisk():
         if is_geo(a.get("headline", "")) or is_geo(a.get("summary", ""))
     ]
     if not geo_hits:
-        return "LOW", "LOW - No geopolitical or supply-chain signals detected in the last news scan."
+        return "LOW", (
+            f"LOW - Scanned {len(articles)} recent headlines, 0 tagged geopolitical/supply-chain. "
+            f"No disruption signals."
+        )
 
     lines = "\n".join(
         f"  - [{(a.get('sentiment') or 'neutral')[:4]}] {a.get('source','?')}: "
