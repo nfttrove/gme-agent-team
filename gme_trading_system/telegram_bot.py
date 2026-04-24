@@ -444,6 +444,54 @@ def handle_command(text: str):
                     lines.append("  <i>Calibration: not enough scored predictions yet</i>")
                 lines.append("")
 
+            # Signal-based calibration for Pattern / Trendy (and Futurist's
+            # signal_alerts row, which is scored by the 4h first-touch
+            # framework rather than horizon price-regression). These come
+            # from signal_scores → performance_scores, one row per metric.
+            sig_conn = sqlite3.connect(DB_PATH)
+            sig_rows = sig_conn.execute(
+                """
+                SELECT agent_name, metric, value, sample_size, date
+                FROM performance_scores
+                WHERE metric IN ('direction_hit_rate','brier_score','tp_hit_rate')
+                  AND agent_name IN ('Pattern','Trendy')
+                  AND notes LIKE 'source=signal_alerts%'
+                  AND date >= date('now','-7 days')
+                ORDER BY agent_name, date DESC, id DESC
+                """
+            ).fetchall()
+            sig_conn.close()
+            # Collapse to the most recent row per (agent, metric)
+            sig_by_agent: dict[str, dict] = {}
+            for agent, metric, value, n, _date in sig_rows:
+                bucket = sig_by_agent.setdefault(agent, {})
+                if metric not in bucket:
+                    bucket[metric] = (value, n)
+            if sig_by_agent:
+                lines.append("<b>Signal agents reality (7d, first-touch 4h):</b>")
+                for agent in ("Pattern", "Trendy"):
+                    m = sig_by_agent.get(agent)
+                    if not m:
+                        continue
+                    hit = m.get("direction_hit_rate", (None, 0))
+                    tp  = m.get("tp_hit_rate",       (None, 0))
+                    br  = m.get("brier_score",       (None, 0))
+                    n   = hit[1] or tp[1] or br[1] or 0
+                    if n == 0:
+                        continue
+                    verdict = ""
+                    if br[0] is not None:
+                        verdict = " 📉 worse than random" if br[0] > 0.25 else " 📈 beats random"
+                    parts = [f"<b>{agent}</b> (n={n}):"]
+                    if hit[0] is not None:
+                        parts.append(f"hit {hit[0]:.0%}")
+                    if tp[0] is not None:
+                        parts.append(f"TP {tp[0]:.0%}")
+                    if br[0] is not None:
+                        parts.append(f"Brier {br[0]:.2f}{verdict}")
+                    lines.append("  • " + "  |  ".join(parts))
+                lines.append("")
+
             if activity:
                 lines.append("<b>Agent Runs:</b>")
                 for name, runs, ok in activity:

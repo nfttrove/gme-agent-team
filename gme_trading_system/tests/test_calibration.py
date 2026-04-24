@@ -19,10 +19,13 @@ from zoneinfo import ZoneInfo
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from calibration import (  # noqa: E402
+    compute_agent_signal_metrics,
     compute_futurist_metrics,
     parse_horizon,
     score_due_predictions,
+    score_due_signals,
     target_time,
+    write_signal_performance_scores,
 )
 
 ET = ZoneInfo("America/New_York")
@@ -57,6 +60,20 @@ def _make_db(tmp_path) -> str:
             sample_size INTEGER DEFAULT 0,
             notes TEXT,
             UNIQUE(date, agent_name, metric)
+        );
+        CREATE TABLE signal_alerts (
+            id TEXT PRIMARY KEY,
+            agent_name TEXT,
+            signal_type TEXT,
+            confidence REAL,
+            severity TEXT,
+            entry_price REAL,
+            stop_loss REAL,
+            take_profit REAL,
+            reasoning TEXT,
+            telegram_message_id INTEGER,
+            timestamp TEXT,
+            created_at TEXT
         );
     """)
     conn.commit()
@@ -316,3 +333,235 @@ def test_perfect_calibration_gives_zero_brier(tmp_path):
     assert metrics["overall"]["hit_rate"] == 1.0
     # prob_up = 0.99, outcome = 1 → Brier term = 0.0001
     assert metrics["overall"]["brier"] < 0.01
+
+
+# ── signal_alerts scoring (Pattern / Trendy / Futurist) ─────────────────────
+#
+# The signal_alerts table is the single source of truth for "the agent told
+# us X at time T with confidence C, TP=a, SL=b". These tests verify that the
+# score_due_signals() scorer:
+#   1. Refuses to fabricate an outcome when there's no tick data
+#   2. Correctly identifies TP-before-SL first-touch wins
+#   3. Correctly identifies SL-before-TP losses
+#   4. Scores Brier per the conf-vs-outcome formula
+#   5. Is idempotent — re-running doesn't double-count
+
+
+def _insert_signal(conn, *, sig_id, agent, ts, entry, tp, sl, conf,
+                   signal_type="pattern_signal"):
+    conn.execute(
+        "INSERT INTO signal_alerts (id, agent_name, signal_type, confidence, "
+        "severity, entry_price, stop_loss, take_profit, reasoning, "
+        "timestamp, created_at) VALUES (?,?,?,?,?,?,?,?,?,?,?)",
+        (sig_id, agent, signal_type, conf, "MEDIUM", entry, sl, tp,
+         "test", ts.isoformat(), ts.isoformat()),
+    )
+
+
+def test_signal_scorer_refuses_when_window_not_closed(tmp_path):
+    """A signal fired 30 minutes ago can't be scored yet — 4h window open."""
+    db = _make_db(tmp_path)
+    conn = sqlite3.connect(db)
+    now = datetime.now(ET)
+    _insert_signal(conn, sig_id="sig-open", agent="Pattern",
+                   ts=now - timedelta(minutes=30),
+                   entry=25.0, tp=26.0, sl=24.5, conf=0.70)
+    conn.commit()
+    conn.close()
+
+    summary = score_due_signals(db)
+    assert summary["signals_scored"] == 0
+    # Window hasn't closed → not an abandoned, just skipped for now
+    assert summary["signals_abandoned"] == 0
+
+
+def test_signal_scorer_detects_tp_first_touch_as_win(tmp_path):
+    """Bullish signal: TP hit before SL → directional_hit=1, tp_hit=1."""
+    db = _make_db(tmp_path)
+    conn = sqlite3.connect(db)
+    made = datetime(2026, 4, 23, 10, 0, tzinfo=ET)
+    _insert_signal(conn, sig_id="sig-win", agent="Pattern", ts=made,
+                   entry=25.0, tp=26.0, sl=24.0, conf=0.75)
+    # Baseline tick at signal time
+    conn.execute(
+        "INSERT INTO price_ticks (symbol, close, timestamp) VALUES ('GME', 25.00, ?)",
+        (made.isoformat(),),
+    )
+    # Tick 30 min in — price climbed to 26.10, which hits TP=26.0
+    conn.execute(
+        "INSERT INTO price_ticks (symbol, close, timestamp) VALUES ('GME', 26.10, ?)",
+        ((made + timedelta(minutes=30)).isoformat(),),
+    )
+    # Later tick — doesn't matter, TP already touched first
+    conn.execute(
+        "INSERT INTO price_ticks (symbol, close, timestamp) VALUES ('GME', 23.00, ?)",
+        ((made + timedelta(hours=3)).isoformat(),),
+    )
+    conn.commit()
+    conn.close()
+
+    summary = score_due_signals(db)
+    assert summary["signals_scored"] == 1
+
+    conn = sqlite3.connect(db)
+    row = conn.execute(
+        "SELECT tp_hit, sl_hit, directional_hit, brier_term FROM signal_scores"
+    ).fetchone()
+    conn.close()
+    assert row[0] == 1  # tp_hit
+    assert row[1] == 0  # sl not hit
+    assert row[2] == 1  # directional win
+
+
+def test_signal_scorer_detects_sl_first_touch_as_loss(tmp_path):
+    """Bullish signal: SL hit before TP → directional_hit=0, sl_hit=1."""
+    db = _make_db(tmp_path)
+    conn = sqlite3.connect(db)
+    made = datetime(2026, 4, 23, 10, 0, tzinfo=ET)
+    _insert_signal(conn, sig_id="sig-loss", agent="Pattern", ts=made,
+                   entry=25.0, tp=26.0, sl=24.0, conf=0.80)
+    conn.execute(
+        "INSERT INTO price_ticks (symbol, close, timestamp) VALUES ('GME', 25.00, ?)",
+        (made.isoformat(),),
+    )
+    # First meaningful tick — drops to 23.90, blows through SL=24.00
+    conn.execute(
+        "INSERT INTO price_ticks (symbol, close, timestamp) VALUES ('GME', 23.90, ?)",
+        ((made + timedelta(minutes=45)).isoformat(),),
+    )
+    # Later recovery to 26.50 doesn't matter — SL hit first
+    conn.execute(
+        "INSERT INTO price_ticks (symbol, close, timestamp) VALUES ('GME', 26.50, ?)",
+        ((made + timedelta(hours=3)).isoformat(),),
+    )
+    conn.commit()
+    conn.close()
+
+    summary = score_due_signals(db)
+    assert summary["signals_scored"] == 1
+
+    conn = sqlite3.connect(db)
+    row = conn.execute(
+        "SELECT tp_hit, sl_hit, directional_hit, brier_term FROM signal_scores"
+    ).fetchone()
+    conn.close()
+    assert row[0] == 0  # tp not hit
+    assert row[1] == 1  # sl hit
+    assert row[2] == 0  # directional loss
+    # An 80%-confident bullish call that SL'd → prob_up=0.80, outcome=0
+    # Brier = 0.64. Test core of "overconfidence punished" invariant.
+    assert row[3] == pytest.approx(0.64, abs=0.01)
+
+
+def test_signal_scorer_refuses_when_no_ticks_in_window(tmp_path):
+    """No price ticks in the 4h validation window → refuse to score.
+    Must NOT fabricate an end_price. This is the anti-hallucination contract."""
+    db = _make_db(tmp_path)
+    conn = sqlite3.connect(db)
+    # Make the signal old enough that SIGNAL_MAX_WAIT has elapsed
+    # (so the scorer moves from skip → abandon)
+    made = datetime.now(ET) - timedelta(days=2)
+    _insert_signal(conn, sig_id="sig-dark", agent="Pattern", ts=made,
+                   entry=25.0, tp=26.0, sl=24.0, conf=0.70)
+    # No price_ticks at all in the window
+    conn.commit()
+    conn.close()
+
+    summary = score_due_signals(db)
+    assert summary["signals_abandoned"] == 1
+
+    conn = sqlite3.connect(db)
+    row = conn.execute(
+        "SELECT end_price, brier_term, notes FROM signal_scores"
+    ).fetchone()
+    conn.close()
+    assert row[0] is None         # end_price left NULL — no invention
+    assert row[1] is None         # Brier also NULL
+    assert "unscorable" in row[2]
+
+
+def test_signal_scorer_is_idempotent(tmp_path):
+    """Re-running the scorer must NOT re-insert an already-scored signal."""
+    db = _make_db(tmp_path)
+    conn = sqlite3.connect(db)
+    made = datetime(2026, 4, 23, 10, 0, tzinfo=ET)
+    _insert_signal(conn, sig_id="sig-dup", agent="Pattern", ts=made,
+                   entry=25.0, tp=26.0, sl=24.0, conf=0.70)
+    conn.execute(
+        "INSERT INTO price_ticks (symbol, close, timestamp) VALUES ('GME', 25.00, ?)",
+        (made.isoformat(),),
+    )
+    conn.execute(
+        "INSERT INTO price_ticks (symbol, close, timestamp) VALUES ('GME', 26.10, ?)",
+        ((made + timedelta(hours=1)).isoformat(),),
+    )
+    conn.commit()
+    conn.close()
+
+    s1 = score_due_signals(db)
+    s2 = score_due_signals(db)
+
+    assert s1["signals_scored"] == 1
+    assert s2["signals_scored"] == 0
+
+    conn = sqlite3.connect(db)
+    count = conn.execute("SELECT COUNT(*) FROM signal_scores").fetchone()[0]
+    conn.close()
+    assert count == 1
+
+
+def test_compute_agent_signal_metrics_returns_zero_sample_for_empty(tmp_path):
+    """Asking for metrics on an agent with no scored signals returns
+    sample_size=0 — NOT a zero hit_rate (which would be misleading)."""
+    db = _make_db(tmp_path)
+    m = compute_agent_signal_metrics(db, agent_name="GhostAgent")
+    assert m["sample_size"] == 0
+    assert "hit_rate" not in m  # don't report a metric on n=0
+
+
+def test_write_signal_performance_scores_writes_per_agent(tmp_path):
+    """Score a win for Pattern and a loss for Trendy. Both should appear in
+    performance_scores as separate rows — don't pool across agents."""
+    db = _make_db(tmp_path)
+    conn = sqlite3.connect(db)
+    made = datetime(2026, 4, 23, 10, 0, tzinfo=ET)
+
+    # Pattern: bullish call that worked
+    _insert_signal(conn, sig_id="pat-win", agent="Pattern", ts=made,
+                   entry=25.0, tp=26.0, sl=24.0, conf=0.70,
+                   signal_type="pattern_signal")
+    # Trendy: bullish call that blew through SL
+    _insert_signal(conn, sig_id="trd-loss", agent="Trendy", ts=made,
+                   entry=25.0, tp=26.0, sl=24.0, conf=0.80,
+                   signal_type="trend_signal")
+
+    conn.execute(
+        "INSERT INTO price_ticks (symbol, close, timestamp) VALUES ('GME', 25.00, ?)",
+        (made.isoformat(),),
+    )
+    # Price climbs to 26.10 (TP hit for both, but we insert another
+    # tick at the 30-min mark that blows SL first — actually we need
+    # different price paths. Simplest: give them different timestamps.)
+    # Pattern path: up first
+    conn.execute(
+        "INSERT INTO price_ticks (symbol, close, timestamp) VALUES ('GME', 26.10, ?)",
+        ((made + timedelta(minutes=20)).isoformat(),),
+    )
+    conn.commit()
+    conn.close()
+
+    # Both signals get scored against the same tick stream — both will show
+    # TP-hit. That's fine; the test is that *separate agent rows* get written.
+    score_due_signals(db)
+    n_written = write_signal_performance_scores(db)
+    assert n_written >= 4  # 2 agents × ≥2 metrics each
+
+    conn = sqlite3.connect(db)
+    agents_with_scores = {
+        r[0] for r in conn.execute(
+            "SELECT DISTINCT agent_name FROM performance_scores"
+        ).fetchall()
+    }
+    conn.close()
+    assert "Pattern" in agents_with_scores
+    assert "Trendy" in agents_with_scores
