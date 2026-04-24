@@ -423,74 +423,125 @@ def run_news():
 
 
 def _compute_pattern_signal():
-    """Shared helper: chart pattern detection from 30-day candles. CrewAI bypass.
+    """Deterministic pattern detection — no LLM in the decision loop.
 
-    Returns (signal: PatternSignal, narrative: str) or (None, reason: str) on failure.
+    The old version handed raw OHLCV to Gemma and asked "what pattern is this?"
+    That was theatre: Gemma copied its previous logs and produced the same
+    "ascending_triangle @ $26.40 (conf=68%)" every 2 hours, unchanged.
+
+    Now: `pattern_detector.detect_patterns()` does the math (RSI, MACD,
+    Bollinger, ATR, swing highs/lows, linear regression for triangles).
+    Confidence = number of independent confirming signals, capped at 0.85.
+    Gemma is asked *only* to turn the structured output into a plain-English
+    sentence — something it's actually good at — and the narration is
+    cosmetic. If Gemma fails, we still have the honest structured verdict.
     """
-    from tools import IndicatorTool, PriceDataTool
+    from tools import PriceDataTool
     from models.agent_outputs import PatternSignal
+    from pattern_detector import detect_patterns
 
-    ind = IndicatorTool()._run(lookback_days=30)
-    if not ind or not ind.get("price"):
-        return None, "no indicator data available"
     candles = PriceDataTool()._run(lookback_days=30)
-    if not candles or len(candles) < 10:
-        return None, "insufficient candles (<10)"
+    if not candles or len(candles) < 15:
+        return None, "insufficient candles (<15)"
 
-    # Build a compact recent-history string — last 15 days, oldest first
-    tail = candles[-15:]
-    history = "\n".join(
-        f"    {c.get('date','')[:10]}  "
-        f"O={float(c.get('open',0) or 0):.2f} H={float(c.get('high',0) or 0):.2f} "
-        f"L={float(c.get('low',0) or 0):.2f} C={float(c.get('close',0) or 0):.2f} "
-        f"V={int(c.get('volume',0) or 0):,}"
-        for c in tail
-    )
-    recent_high = max(float(c.get("high", 0) or 0) for c in tail)
-    recent_low = min(float(c.get("low", 0) or 0) for c in tail if (c.get("low") or 0) > 0)
-    price = float(ind["price"])
+    report = detect_patterns(candles)
+    if report is None:
+        return None, "pattern_detector returned no report (data quality)"
 
-    prompt = (
-        "You are the Pattern agent — multi-day chart pattern analyst for GME.\n"
-        "Respond with ONE JSON object only (no markdown, no preamble).\n\n"
-        f"LIVE DATA:\n"
-        f"  price={price:.2f}  vwap={ind.get('vwap',0):.2f}  ema21={ind.get('ema21',0):.2f}  "
-        f"ema50={ind.get('ema50',0):.2f}  rsi14={ind.get('rsi14',0):.1f}\n"
-        f"  15d high={recent_high:.2f}  15d low={recent_low:.2f}\n"
-        f"  Recent OHLCV (oldest → newest):\n{history}\n\n"
-        "Schema (all fields required):\n"
-        '{"pattern_type": "<ascending_triangle|descending_triangle|flag|wedge|breakout|breakdown|channel|consolidation|none>", '
-        '"confidence": <0.0-1.0>, "breakout_level": <float>, '
-        '"breakout_direction": "UP"|"DOWN", '
-        '"reasoning": "<one sentence citing specific dates/levels from the data, max 220 chars>", '
-        '"severity": "HIGH"|"MEDIUM"|"LOW"}\n\n'
-        "Rules: breakout_level must be within the observed 15d range. "
-        "Use 'none' pattern_type and confidence ≤ 0.40 if no clear structure. "
-        "severity=HIGH only if confidence >= 0.75 AND price is within 2% of breakout_level."
-    )
+    # Narration: let Gemma write a plain-English sentence FROM the structured
+    # output. Fails-open — if Gemma is down or slow, we use a default sentence
+    # built from the cues so the signal still flows.
+    #
+    # NOTE: if the detector returned pattern_type="none", we skip Gemma entirely.
+    # Asking it to narrate a non-pattern was producing sentences like "could
+    # potentially break out above $26.40" — which contradicts the detector's
+    # verdict. When there's no pattern, say exactly that.
+    default_sentence = _default_pattern_sentence(report)
+    sentence = default_sentence
+    if report.pattern_type != "none":
+        try:
+            prompt = (
+                "You are a chart-pattern narrator. Write ONE short plain-English "
+                "sentence (max 160 chars, no markdown, no quotes) describing the "
+                "verified pattern below. Cite specific numbers from the data. "
+                "Do NOT invent patterns, levels, or direction — use only what's "
+                "stated.\n\n"
+                f"Pattern: {report.pattern_type}\n"
+                f"Direction: {report.breakout_direction}\n"
+                f"Breakout level: ${report.breakout_level:.2f}\n"
+                f"Current price: ${report.indicators.get('price', 0):.2f}\n"
+                f"Confidence: {report.confidence:.0%} ({report.severity.lower()} severity)\n"
+                f"RSI14: {report.indicators.get('rsi14','n/a')}\n"
+                f"MACD hist: {report.indicators.get('macd_hist','n/a')}\n"
+                f"Supporting cues: {report.reasoning}\n"
+            )
+            ollama_host = os.getenv("OLLAMA_HOST", "http://localhost:11434")
+            r = requests.post(
+                f"{ollama_host}/api/generate",
+                json={"model": "gemma2:9b", "prompt": prompt, "stream": False,
+                      "options": {"num_predict": 120, "temperature": 0.2}},
+                timeout=30,
+            )
+            r.raise_for_status()
+            candidate = r.json().get("response", "").strip().strip('"').strip("'")
+            candidate = candidate.split("\n")[0].strip()
+            if 20 < len(candidate) < 300:
+                sentence = candidate[:220]
+        except Exception as e:
+            log.warning(f"[Pattern] narration fallback — Gemma error: {e}")
 
-    ollama_host = os.getenv("OLLAMA_HOST", "http://localhost:11434")
-    r = requests.post(
-        f"{ollama_host}/api/generate",
-        json={"model": "gemma2:9b", "prompt": prompt, "stream": False,
-              "options": {"num_predict": 320, "temperature": 0.3}},
-        timeout=60,
-    )
-    r.raise_for_status()
-    raw = r.json().get("response", "")
-    data = _extract_json(raw)
-    if not data:
-        return None, f"parse error: {raw[:300]}"
+    # Build PatternSignal from the detector output (authoritative) plus the
+    # narration (cosmetic). PatternSignal validators will reject anything
+    # inconsistent.
     try:
-        signal = PatternSignal(**data)
+        signal = PatternSignal(
+            pattern_type=report.pattern_type,
+            confidence=report.confidence,
+            breakout_level=report.breakout_level,
+            breakout_direction=report.breakout_direction,
+            reasoning=sentence[:220],
+            severity=report.severity,
+        )
     except Exception as e:
-        return None, f"validation error: {e} | raw={raw[:300]}"
+        return None, f"validation error: {e} | report={report.as_dict()}"
 
-    narrative = (
-        f"{signal.pattern_type} · {signal.breakout_direction} break @ ${signal.breakout_level:.2f} "
-        f"(conf={signal.confidence:.0%}) · {signal.reasoning[:220]}"
-    )
+    # Build the log-line header. When pattern=none, don't print a spurious
+    # "UP break @ $X" — there is no break to watch. Use the prose sentence alone.
+    if signal.pattern_type == "none":
+        narrative = signal.reasoning[:220]
+    else:
+        narrative = (
+            f"{signal.pattern_type} · {signal.breakout_direction} break @ ${signal.breakout_level:.2f} "
+            f"(conf={signal.confidence:.0%}) · {signal.reasoning[:220]}"
+        )
     return signal, narrative
+
+
+def _default_pattern_sentence(report) -> str:
+    """Fallback narration if Gemma is unavailable — no invention, just cues.
+    Guards against NaN/None indicators (the `ta` library emits NaN before it
+    has enough bars, and the detector honestly reports that as None)."""
+    import math
+    ind = report.indicators or {}
+    rsi = ind.get("rsi14")
+    macd_hist = ind.get("macd_hist")
+    price = ind.get("price", 0)
+
+    def _finite(x):
+        return x is not None and isinstance(x, (int, float)) and not math.isnan(x)
+
+    rsi_str = f" RSI {rsi:.0f}" if _finite(rsi) else ""
+    macd_str = (
+        f", MACD {'+' if macd_hist >= 0 else ''}{macd_hist:.2f}"
+        if _finite(macd_hist) else ""
+    )
+    if report.pattern_type == "none":
+        return f"No clean pattern on 30d chart — price ${price:.2f}{rsi_str}{macd_str}."
+    return (
+        f"{report.pattern_type.replace('_',' ')} detected; watching "
+        f"${report.breakout_level:.2f} for {report.breakout_direction.lower()} break"
+        f"{rsi_str}{macd_str}."
+    )
 
 
 @market_hours_required
