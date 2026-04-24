@@ -127,6 +127,118 @@ def _human_delta(earlier_iso: str, later_iso: str) -> str:
     return f"{d}d {h}h" if h else f"{d}d"
 
 
+def _ensure_signal_feedback_table():
+    """signal_feedback exists in prod but not in every test fixture — create it
+    defensively so the /executed /ignored /missed handlers never crash on a
+    fresh DB."""
+    try:
+        conn = sqlite3.connect(DB_PATH)
+        conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS signal_feedback (
+                id TEXT PRIMARY KEY,
+                alert_id TEXT NOT NULL,
+                action_taken TEXT NOT NULL,
+                execution_timestamp TEXT,
+                entry_price REAL,
+                exit_price REAL,
+                quantity REAL,
+                pnl REAL,
+                pnl_pct REAL,
+                team_member TEXT,
+                team_notes TEXT,
+                created_at TEXT DEFAULT (datetime('now')),
+                updated_at TEXT
+            )
+            """
+        )
+        # Speed up the dominant lookup: feedback-for-signal.
+        conn.execute(
+            "CREATE INDEX IF NOT EXISTS idx_signal_feedback_alert "
+            "ON signal_feedback(alert_id)"
+        )
+        conn.commit()
+        conn.close()
+    except Exception as e:
+        log.warning(f"[tgbot] signal_feedback setup failed: {e}")
+
+
+def _resolve_signal_short_id(short: str) -> dict | None:
+    """Resolve a short UUID prefix (6+ hex chars) to a signal_alerts row.
+
+    Returns:
+      None                              — no match
+      {'ambiguous': True, 'matches': …} — prefix is too short, multiple hits
+      {'ambiguous': False, 'row': …}    — unique match
+    """
+    short = (short or "").strip().lower().lstrip("#")
+    if len(short) < 6:
+        return None
+    try:
+        conn = sqlite3.connect(DB_PATH)
+        conn.row_factory = sqlite3.Row
+        rows = conn.execute(
+            "SELECT id, agent_name, signal_type, confidence, entry_price, "
+            "       stop_loss, take_profit, reasoning, timestamp "
+            "FROM signal_alerts WHERE lower(id) LIKE ? LIMIT 5",
+            (short + "%",),
+        ).fetchall()
+        conn.close()
+    except Exception as e:
+        log.warning(f"[tgbot] signal lookup failed: {e}")
+        return None
+    if not rows:
+        return None
+    if len(rows) > 1:
+        return {"ambiguous": True, "matches": [dict(r) for r in rows]}
+    return {"ambiguous": False, "row": dict(rows[0])}
+
+
+def _record_signal_feedback(signal_id: str, action: str, notes: str,
+                            team_member: str) -> dict | None:
+    """Upsert a signal_feedback row, keyed by (alert_id, action_taken).
+
+    Idempotent on that key — running /executed twice on the same signal
+    updates team_notes/team_member, doesn't create a duplicate. Different
+    actions on the same signal (e.g., /executed then /ignored) create
+    separate rows so the history of the decision-change is visible.
+    """
+    import uuid
+    _ensure_signal_feedback_table()
+    now = datetime.now(ET).isoformat()
+    try:
+        conn = sqlite3.connect(DB_PATH)
+        conn.row_factory = sqlite3.Row
+        existing = conn.execute(
+            "SELECT id FROM signal_feedback "
+            "WHERE alert_id=? AND action_taken=? LIMIT 1",
+            (signal_id, action),
+        ).fetchone()
+        if existing:
+            conn.execute(
+                "UPDATE signal_feedback SET team_notes=?, team_member=?, "
+                "updated_at=? WHERE id=?",
+                (notes, team_member, now, existing["id"]),
+            )
+            fb_id = existing["id"]
+        else:
+            fb_id = str(uuid.uuid4())
+            conn.execute(
+                "INSERT INTO signal_feedback "
+                "(id, alert_id, action_taken, execution_timestamp, "
+                " team_member, team_notes, created_at, updated_at) "
+                "VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+                (fb_id, signal_id, action, now, team_member, notes, now, now),
+            )
+        conn.commit()
+        conn.close()
+        return {"id": fb_id, "alert_id": signal_id, "action": action,
+                "team_notes": notes, "team_member": team_member}
+    except Exception as e:
+        log.error(f"[tgbot] feedback insert failed: {e}")
+        return None
+
+
 def _ensure_settings_table():
     try:
         conn = sqlite3.connect(DB_PATH)
@@ -254,7 +366,11 @@ def _run_agent_refresh():
     return results
 
 
-def handle_command(text: str):
+def handle_command(text: str, user: str = "team"):
+    """Dispatch a slash-command. `user` is the Telegram username (or
+    first_name) captured at poll time — logged against /executed, /ignored,
+    /missed so we know who made the call. Defaults to 'team' for tests and
+    for messages where Telegram didn't include a from_user field."""
     cmd = text.strip().lower().split()[0]
     args = text.strip().split()[1:] if len(text.strip().split()) > 1 else []
 
@@ -511,6 +627,114 @@ def handle_command(text: str):
         except Exception as e:
             _send(f"Standup error: {e}")
             log.error(f"[tgbot] /standup failed: {e}")
+
+    elif cmd == "/signals":
+        # List recent signals with their short IDs so the team can
+        # reference them in /executed /ignored /missed.
+        try:
+            _ensure_signal_feedback_table()
+            n = 10
+            if args and args[0].isdigit():
+                n = max(1, min(25, int(args[0])))
+            conn = sqlite3.connect(DB_PATH)
+            # Tables may not exist in a fresh environment — guard with a
+            # schema check before querying so we fail explanatorily.
+            has_table = conn.execute(
+                "SELECT 1 FROM sqlite_master WHERE type='table' AND name='signal_alerts'"
+            ).fetchone()
+            if not has_table:
+                conn.close()
+                _send("No signal_alerts table yet — run a signal cycle first.")
+                return
+            rows = conn.execute(
+                f"""
+                SELECT s.id, s.agent_name, s.signal_type, s.confidence,
+                       s.entry_price, s.take_profit, s.stop_loss, s.timestamp,
+                       (SELECT group_concat(action_taken, ',')
+                          FROM signal_feedback WHERE alert_id = s.id) AS feedback
+                FROM signal_alerts s
+                ORDER BY s.timestamp DESC
+                LIMIT {n}
+                """
+            ).fetchall()
+            conn.close()
+            if not rows:
+                _send("No signals in the log yet.")
+                return
+            lines = [
+                f"<b>📋 RECENT SIGNALS (last {len(rows)})</b>",
+                "<i>Copy short ID, then /executed &lt;id&gt; · /ignored &lt;id&gt; "
+                "[reason] · /missed &lt;id&gt; [note]</i>\n",
+            ]
+            for (sig_id, agent, stype, conf, entry, tp, sl, ts, fb) in rows:
+                short = (sig_id or "")[:8]
+                entry_v = entry or 0.0
+                tp_v = tp or 0.0
+                sl_v = sl or 0.0
+                direction = "🟢" if tp_v > entry_v else "🔴" if tp_v < entry_v else "⚪"
+                time_str = (ts or "")[:16].replace("T", " ")
+                conf_pct = int((conf or 0) * 100)
+                fb_tag = f"  ✅ {fb}" if fb else ""
+                lines.append(
+                    f"<code>{short}</code> {direction} <b>{agent}</b> "
+                    f"conf={conf_pct}% · ${entry_v:.2f} → TP ${tp_v:.2f} / "
+                    f"SL ${sl_v:.2f}  <i>{time_str}</i>{fb_tag}"
+                )
+            _send("\n".join(lines))
+        except Exception as e:
+            _send(f"Signals error: {str(e)[:200]}")
+            log.error(f"[tgbot] /signals failed: {e}")
+
+    elif cmd in ("/executed", "/ignored", "/missed"):
+        # Close the feedback loop — team logs what they did with a signal.
+        # This populates signal_feedback so the calibrator can later compute
+        # real team-ROI (execute/ignore rate per agent, PnL on executed).
+        action_map = {"/executed": "executed",
+                      "/ignored":  "ignored",
+                      "/missed":   "missed"}
+        action = action_map[cmd]
+        if not args:
+            _send(
+                f"<b>Usage:</b> <code>{cmd} &lt;short_id&gt; [note/reason]</code>\n"
+                f"See /signals for IDs."
+            )
+            return
+        short_id = args[0]
+        notes = " ".join(args[1:]) if len(args) > 1 else ""
+        match = _resolve_signal_short_id(short_id)
+        if match is None:
+            _send(
+                f"⚠️ No signal matching <code>{short_id}</code>. "
+                f"Use /signals to list recent IDs."
+            )
+            return
+        if match.get("ambiguous"):
+            cand = "\n".join(
+                f"  <code>{m['id'][:12]}</code> — {m['agent_name']} "
+                f"({m.get('signal_type','?')}) at {(m.get('timestamp','') or '')[:16]}"
+                for m in match["matches"]
+            )
+            _send(
+                f"⚠️ <code>{short_id}</code> matches multiple signals:\n{cand}\n"
+                f"<i>Add more characters to disambiguate.</i>"
+            )
+            return
+        row = match["row"]
+        fb = _record_signal_feedback(row["id"], action, notes, user)
+        if not fb:
+            _send("❌ Failed to record feedback (DB write error). Check logs.")
+            return
+        direction = "🟢" if (row.get("take_profit") or 0) > (row.get("entry_price") or 0) else "🔴"
+        entry_v = row.get("entry_price") or 0.0
+        tp_v = row.get("take_profit") or 0.0
+        conf_pct = int((row.get("confidence") or 0) * 100)
+        note_line = f"\n<b>Notes:</b> {notes}" if notes else ""
+        _send(
+            f"✅ <b>{action.upper()}</b> recorded by <b>{user}</b>\n"
+            f"{direction} <b>{row['agent_name']}</b> · conf {conf_pct}% · "
+            f"entry ${entry_v:.2f} → TP ${tp_v:.2f}\n"
+            f"<code>{row['id'][:8]}</code>{note_line}"
+        )
 
     elif cmd in ("/supportme", "/buymeacoffee"):
         _send(
@@ -952,6 +1176,10 @@ def handle_command(text: str):
             "<b>System Commands:</b>\n"
             "/status — system health, tick count, last agent activity\n"
             "/standup — agent daily standup (signals, win rates, team ROI)\n"
+            "/signals [N] — list recent signals with short IDs\n"
+            "/executed &lt;id&gt; [note] — log that the team acted on a signal\n"
+            "/ignored &lt;id&gt; [reason] — log that the team passed on a signal\n"
+            "/missed &lt;id&gt; [note] — log that the team wanted to act but missed it\n"
             "/agents — last run time for each agent\n"
             "/ticks — price data received today\n"
             "/freshness — verify agents are reading current data\n\n"
@@ -1228,6 +1456,10 @@ def _register_commands():
         {"command": "swot",      "description": "SWOT — strengths, weaknesses, opportunities, threats"},
         {"command": "status",    "description": "System heartbeat — ticks, agents, last activity"},
         {"command": "standup",   "description": "Agent scorecard — signals, win rates, OK %"},
+        {"command": "signals",   "description": "List recent signals with short IDs"},
+        {"command": "executed",  "description": "Log a signal as executed — /executed <id> [note]"},
+        {"command": "ignored",   "description": "Log a signal as ignored — /ignored <id> [reason]"},
+        {"command": "missed",    "description": "Log a signal as missed — /missed <id> [note]"},
         {"command": "agents",    "description": "Last-run timestamp for every agent"},
         {"command": "freshness", "description": "Are agents reading fresh data? (staleness check)"},
         {"command": "ticks",     "description": "Price ticks received today"},
@@ -1274,7 +1506,11 @@ def run_bot():
 
                 if text.startswith("/"):
                     log.info(f"[tgbot] Command: {text}")
-                    handle_command(text)
+                    from_info = msg.get("from") or {}
+                    user = (from_info.get("username")
+                            or from_info.get("first_name")
+                            or "team")
+                    handle_command(text, user=user)
                 elif text:
                     log.info(f"[tgbot] Chat: {text[:50]}")
                     _handle_chat(text)
