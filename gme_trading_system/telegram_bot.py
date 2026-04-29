@@ -435,7 +435,7 @@ def handle_command(text: str, user: str = "team"):
     if cmd == "/update":
         _send("⏳ Running system refresh — agents updating...")
         try:
-            import sys, os
+            import sys
             sys.path.insert(0, os.path.dirname(__file__))
 
             # Run agent refresh
@@ -962,7 +962,7 @@ def handle_command(text: str, user: str = "team"):
     elif cmd == "/brief":
         _send("⏳ Generating strategy brief — takes ~30 seconds...")
         try:
-            import sys, os
+            import sys
             sys.path.insert(0, os.path.dirname(__file__))
             from crewai import Crew, Process, Task
             from agents import briefing_agent
