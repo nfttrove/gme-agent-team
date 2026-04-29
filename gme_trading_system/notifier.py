@@ -269,7 +269,20 @@ def notify_signal_alert(agent_name: str, signal_type: str, confidence: float,
         )
         return _send(warn)
 
-    # Determine severity based on confidence
+    # Calibrate stated confidence against this agent's actual hit-rate.
+    # signal_scores has been quietly recording outcomes for weeks; nothing
+    # was reading it back at emit time. Severity is driven by *effective*
+    # confidence — a chronically over-confident agent gets dampened, an
+    # under-confident one gets boosted, until cold-start ends.
+    stated_conf = confidence
+    try:
+        from confidence_calibration import apply_to_confidence
+        confidence, cal_meta = apply_to_confidence(stated_conf, agent_name)
+    except Exception as e:
+        log.warning(f"[notify] calibration lookup failed, using stated conf: {e}")
+        cal_meta = {"cold_start": True, "sample_size": 0, "multiplier": 1.0}
+
+    # Determine severity based on calibrated confidence
     if confidence >= 0.80:
         severity = "🔴 HIGH"
         emoji = "⚡"
@@ -282,7 +295,12 @@ def notify_signal_alert(agent_name: str, signal_type: str, confidence: float,
 
     msg = f"{emoji} <b>SIGNAL ALERT</b> — {agent_name}\n\n"
     msg += f"<b>{signal_type.upper().replace('_', ' ')}</b>\n"
-    msg += f"Confidence: <b>{confidence:.0%}</b> {severity}\n\n"
+    if cal_meta.get("cold_start") or abs(stated_conf - confidence) < 0.005:
+        msg += f"Confidence: <b>{confidence:.0%}</b> {severity}\n\n"
+    else:
+        msg += (f"Confidence: <b>{confidence:.0%}</b> {severity} "
+                f"<i>(stated {stated_conf:.0%}, ×{cal_meta['multiplier']:.2f} "
+                f"cal on n={cal_meta['sample_size']})</i>\n\n")
 
     # Risk/reward setup
     if entry_price and stop_loss and take_profit:

@@ -900,7 +900,32 @@ def handle_command(text: str, user: str = "team"):
         if entry_price is None:
             _send(f"❌ No entry price found for <code>{short_id[:8]}</code>. Log with /executed first.")
             return
-        is_bullish = (row.get("take_profit") or 0) > (row.get("entry_price") or 0)
+        # Direction inference: prefer the corroboration of TP-vs-entry AND
+        # stop-vs-entry. The old check (TP > entry) silently defaulted to
+        # BEARISH when either field was 0/NULL, so a signal missing one leg
+        # produced flipped P&L.
+        sa_entry = row.get("entry_price") or 0
+        sa_tp    = row.get("take_profit")
+        sa_stop  = row.get("stop_loss")
+        tp_above = sa_tp   is not None and sa_tp   > sa_entry
+        sl_below = sa_stop is not None and sa_stop < sa_entry
+        tp_below = sa_tp   is not None and sa_tp   < sa_entry
+        sl_above = sa_stop is not None and sa_stop > sa_entry
+        if tp_above and sl_below:
+            is_bullish = True
+        elif tp_below and sl_above:
+            is_bullish = False
+        elif tp_above or sl_below:
+            is_bullish = True
+        elif tp_below or sl_above:
+            is_bullish = False
+        else:
+            log.warning(
+                f"[tgbot] /close {row['id'][:8]}: cannot infer direction "
+                f"(entry={sa_entry}, TP={sa_tp}, stop={sa_stop}); "
+                f"defaulting to BULLISH"
+            )
+            is_bullish = True
         price_diff = exit_price - entry_price
         signed_diff = price_diff if is_bullish else -price_diff
         # Precedence: explicit /close qty > qty captured at /executed > 1.0
