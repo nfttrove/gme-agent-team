@@ -1338,6 +1338,45 @@ def handle_command(text: str, user: str = "team"):
             log.error(f"[tgbot] /swot failed: {e}")
             _send(f"❌ /swot failed: {str(e)[:400]}")
 
+    elif cmd == "/calibration":
+        try:
+            from confidence_calibration import (
+                get_agent_calibration, FACTOR_MIN, FACTOR_MAX, MIN_SAMPLE,
+            )
+            agents = ("Futurist", "Trendy", "Pattern", "Newsie", "Synthesis",
+                      "Chatty", "GeoRisk", "Valerie", "CTO")
+            warm, cold = [], []
+            for name in agents:
+                c = get_agent_calibration(name)
+                if c["cold_start"]:
+                    cold.append((name, c["sample_size"]))
+                    continue
+                m = c["multiplier"]
+                tag = ("⚠️ floor" if m <= FACTOR_MIN + 1e-6
+                       else "🚀 ceiling" if m >= FACTOR_MAX - 1e-6
+                       else "✓")
+                warm.append(
+                    f"  <b>{name}</b>: ×{m:.2f} {tag}\n"
+                    f"     hit {c['hit_rate']:.0%} on stated {c['mean_stated_conf']:.0%} "
+                    f"(n={c['sample_size']})"
+                )
+            msg = "<b>📐 Confidence Calibration</b>\n\n"
+            if warm:
+                msg += "<b>Active</b> (multiplier applied to alerts):\n"
+                msg += "\n".join(warm) + "\n\n"
+            if cold:
+                msg += f"<b>Cold-start</b> (need n≥{MIN_SAMPLE} resolved signals):\n"
+                msg += ", ".join(f"{n} (n={s})" for n, s in cold) + "\n\n"
+            msg += (
+                f"<i>Bounds: ×{FACTOR_MIN:.1f}…×{FACTOR_MAX:.1f}, "
+                f"30-day lookback. Floor means stated conf is halved; "
+                f"ceiling means it's boosted 1.5×.</i>"
+            )
+            _send(msg)
+        except Exception as e:
+            log.error(f"[tgbot] /calibration failed: {e}")
+            _send(f"❌ /calibration failed: {str(e)[:400]}")
+
     elif cmd == "/test":
         _send("⏳ Running Telegram handler smoke tests…")
         try:
@@ -1405,7 +1444,8 @@ def handle_command(text: str, user: str = "team"):
             "/close &lt;id&gt; @&lt;exit_price&gt; [qty] [note] — close a trade, compute P&amp;L\n"
             "/agents — last run time for each agent\n"
             "/ticks — price data received today\n"
-            "/freshness — verify agents are reading current data\n\n"
+            "/freshness — verify agents are reading current data\n"
+            "/calibration — per-agent confidence multipliers (hit rate vs stated)\n\n"
             "<b>Research & Intel:</b>\n"
             "/brief — today's strategy brief from synthesis agent\n"
             "/swot — SWOT synthesis (strengths/weaknesses/opps/threats)\n"
@@ -1686,6 +1726,7 @@ def _register_commands():
         {"command": "close",     "description": "Close a trade and record P&L — /close <id> @<exit_price> [qty]"},
         {"command": "agents",    "description": "Last-run timestamp for every agent"},
         {"command": "freshness", "description": "Are agents reading fresh data? (staleness check)"},
+        {"command": "calibration","description": "Per-agent confidence calibration table"},
         {"command": "ticks",     "description": "Price ticks received today"},
         {"command": "force",     "description": "Run an agent on demand — /force valerie|newsie|futurist|…"},
         {"command": "compare",   "description": "Gemma vs DeepSeek side-by-side — /compare <question>"},
