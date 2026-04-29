@@ -62,15 +62,39 @@ def check(db_path: str = DB_PATH, today: str | None = None) -> list[tuple[str, b
         if candle_ok else f"no daily_candles row for {today} — agents reading this table see yesterday",
     ))
 
-    # 3. If both exist, candle must bracket the live range
+    # 3. If both exist, candle must bracket the live range — but only ticks
+    # the aggregator has had time to process. Intraday aggregation runs every
+    # ~5 min (orchestrator.py: aggregator_intraday), so the most recent ticks
+    # legitimately sit outside the candle until the next run. Compare against
+    # ticks older than AGG_LAG_S to avoid flapping during the lag window;
+    # otherwise a single low/high tick suppresses every signal for 5 minutes.
+    AGG_LAG_S = 360  # 5 min interval + 1 min buffer
     if ticks_ok and candle_ok:
-        agrees = candle["high"] >= tick["hi"] and candle["low"] <= tick["lo"]
-        out.append((
-            "candle_matches_ticks",
-            agrees,
-            f"candle [{candle['low']}, {candle['high']}] vs ticks [{tick['lo']}, {tick['hi']}]"
-            if not agrees else "candle envelopes live tick range",
-        ))
+        # tick timestamps are stored as ISO-8601 UTC ('2026-04-29T14:08:15Z'),
+        # which doesn't lex-compare cleanly with sqlite's datetime() output —
+        # build the cutoff in the same format and rely on string ordering.
+        from datetime import datetime as _dt, timezone as _tz, timedelta as _td
+        cutoff = (_dt.now(_tz.utc) - _td(seconds=AGG_LAG_S)).strftime("%Y-%m-%dT%H:%M:%SZ")
+        settled = conn.execute(
+            "SELECT MIN(low) lo, MAX(high) hi FROM price_ticks "
+            "WHERE symbol=? AND timestamp LIKE ? AND timestamp < ?",
+            (SYMBOL, f"{today}%", cutoff),
+        ).fetchone()
+        s_lo, s_hi = settled["lo"], settled["hi"]
+        if s_lo is None or s_hi is None:
+            out.append((
+                "candle_matches_ticks",
+                True,
+                "no settled ticks yet — skipping comparison",
+            ))
+        else:
+            agrees = candle["high"] >= s_hi and candle["low"] <= s_lo
+            out.append((
+                "candle_matches_ticks",
+                agrees,
+                f"candle [{candle['low']}, {candle['high']}] vs settled ticks [{s_lo}, {s_hi}]"
+                if not agrees else "candle envelopes settled tick range",
+            ))
 
     # 4. Critical agents have recent runs today.
     # Accept any non-error terminal status: 'ok' means clean, 'degraded' means
