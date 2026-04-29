@@ -72,18 +72,23 @@ def check(db_path: str = DB_PATH, today: str | None = None) -> list[tuple[str, b
             if not agrees else "candle envelopes live tick range",
         ))
 
-    # 4. Critical agents have recent successful runs today
+    # 4. Critical agents have recent runs today.
+    # Accept any non-error terminal status: 'ok' means clean, 'degraded' means
+    # the agent ran and reported data gaps (Valerie's normal verdict during
+    # low-volume periods). Tick/candle staleness is already covered by checks
+    # 1-3; this check only asks "did the job execute today?"
     for agent in ("Valerie", "Chatty", "Synthesis", "Trendy"):
         row = conn.execute(
             "SELECT MAX(timestamp) last_ok FROM agent_logs "
-            "WHERE agent_name=? AND status='ok' AND substr(timestamp,1,10)=?",
+            "WHERE agent_name=? AND status IN ('ok','degraded') "
+            "AND substr(timestamp,1,10)=?",
             (agent, today),
         ).fetchone()
         last = row["last_ok"]
         out.append((
             f"agent_{agent.lower()}_ran_today",
             last is not None,
-            f"last ok run: {last}" if last else f"no successful {agent} run today",
+            f"last run: {last}" if last else f"no successful {agent} run today",
         ))
 
     conn.close()
