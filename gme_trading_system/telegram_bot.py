@@ -966,7 +966,14 @@ def handle_command(text: str, user: str = "team"):
             try:
                 import orchestrator
                 func = getattr(orchestrator, func_name)
-                func()
+                # /force is explicitly user-initiated — bypass any
+                # @market_hours_required / @active_window_required gates so
+                # it works overnight, on weekends, etc. Fully unwrap because
+                # some run_* are stacked with both decorators.
+                inner = func
+                while hasattr(inner, "__wrapped__"):
+                    inner = inner.__wrapped__
+                inner()
                 # Report the log line the agent just wrote
                 conn = sqlite3.connect(DB_PATH)
                 row = conn.execute(

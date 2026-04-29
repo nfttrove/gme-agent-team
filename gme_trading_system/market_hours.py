@@ -102,10 +102,17 @@ def is_active_window(dt: datetime | None = None) -> bool:
 
 
 def market_hours_required(func):
-    """Decorator: skip function and log if outside market hours."""
+    """Decorator: skip function and log if outside market hours.
+
+    The undecorated function is exposed as `wrapper.__wrapped__` so callers
+    that legitimately need to bypass the gate (e.g. /force from telegram)
+    can invoke it directly.
+    """
+    import functools
     import logging
     log = logging.getLogger(__name__)
 
+    @functools.wraps(func)
     def wrapper(*args, **kwargs):
         if not is_market_open():
             now_et = datetime.now(ET).strftime("%H:%M ET %a")
@@ -120,10 +127,16 @@ def active_window_required(func):
 
     Looser than market_hours_required — allows light pre-market analysis (08:30-09:30)
     and 1h post-market wrap-up (16:00-17:00). Blocks overnight, weekend, and holiday runs.
+
+    The undecorated function is exposed as `wrapper.__wrapped__` so callers
+    that legitimately need to bypass the gate (e.g. /force from telegram)
+    can invoke it directly.
     """
+    import functools
     import logging
     log = logging.getLogger(__name__)
 
+    @functools.wraps(func)
     def wrapper(*args, **kwargs):
         if not is_active_window():
             now_et = datetime.now(ET).strftime("%H:%M ET %a")
