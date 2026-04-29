@@ -57,23 +57,16 @@ learner = AgentLearner()
 # ── Learning helpers ──────────────────────────────────────────────────────────
 
 def recall_lessons(intent: str) -> str:
-    """Call .agent/tools/recall.py to surface relevant lessons before agent cycles."""
+    """Surface graduated lessons relevant to `intent`, formatted for direct
+    injection into a Task description. Returns "" if no lessons match.
+
+    Was a subprocess call to .agent/tools/recall.py — that script filtered by
+    a `status` field that the seeded lessons don't carry, so it always
+    returned nothing. Now reads lessons.jsonl directly via learning.py.
+    """
     try:
-        agent_dir = os.path.dirname(__file__)
-        recall_script = os.path.join(agent_dir, "..", ".agent", "tools", "recall.py")
-
-        if not os.path.exists(recall_script):
-            return ""  # Silent fallback if .agent not set up yet
-
-        result = subprocess.run(
-            [sys.executable, recall_script, intent],
-            capture_output=True, text=True, timeout=5, cwd=agent_dir
-        )
-
-        if result.returncode == 0:
-            return result.stdout
-        else:
-            return ""
+        from learning import recall_relevant_lessons
+        return recall_relevant_lessons(intent)
     except Exception as e:
         log.warning(f"[recall] Failed to surface lessons: {e}")
         return ""
@@ -1111,11 +1104,24 @@ def run_futurist_cycle():
     log.info("[Futurist] Starting full strategic cycle")
     write_log("Futurist", "Starting strategic cycle — gate check", "full_cycle", "running")
 
-    # Recall relevant lessons before strategic cycle
+    # Recall relevant lessons and INJECT them into the futurist_task prompt.
+    # Previously this was logged-and-discarded — agents never saw the lessons.
+    # We mutate the imported task's description in place; original is captured
+    # on first cycle (_orig_description) so re-injection doesn't accumulate.
     lessons = recall_lessons("GME trading strategy, market conditions, IV management, risk rules")
-    if lessons:
-        log.info(f"[Futurist] Recalled lessons:\n{lessons}")
-        write_log("Futurist", f"Recalled lessons context:\n{lessons[:500]}", "recall")
+    try:
+        from tasks import futurist_task as _ft
+        if not hasattr(_ft, "_orig_description"):
+            _ft._orig_description = _ft.description
+        _ft.description = (f"{lessons}\n\n{_ft._orig_description}"
+                           if lessons else _ft._orig_description)
+        if lessons:
+            log.info(f"[Futurist] Injected lessons into task ({len(lessons)} chars)")
+            write_log("Futurist", f"Recalled & injected lessons:\n{lessons[:500]}", "recall")
+        else:
+            log.info("[Futurist] No matching lessons for this cycle")
+    except Exception as e:
+        log.warning(f"[Futurist] lesson injection failed (non-fatal): {e}")
 
     gate = run_gate_check()
     log.info(gate.report())

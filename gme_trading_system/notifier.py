@@ -195,7 +195,8 @@ def notify_daily_summary(pnl: float, win_rate: float, trades: int,
         f"{pnl_emoji} P&L (paper): <b>${pnl:+.2f}</b>\n"
         f"Win Rate: {win_rate:.0%}  |  Trades: {trades}\n"
         f"Prediction error: ±{pred_error_pct:.2f}%\n\n"
-        f"<i>Learner debrief complete. Strategy adapts overnight.</i>"
+        f"<i>Learner debrief complete — predictions scored, calibration updated. "
+        f"Graduated lessons recalled at next strategic cycle.</i>"
     )
     return _send(msg)
 

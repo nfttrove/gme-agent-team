@@ -60,9 +60,14 @@ news_task = Task(
     agent=news_analyst_agent,
 )
 
-def make_futurist_task(agent, price_str: str, futurist_logs_str: str, synthesis_str: str, context_tasks=None) -> Task:
+def make_futurist_task(agent, price_str: str, futurist_logs_str: str, synthesis_str: str, context_tasks=None, lessons_str: str = "") -> Task:
+    # Lessons block goes at the very top so it primes Futurist's reasoning
+    # before the live data and self-reflection sections. Empty string when
+    # no lessons match the intent — keeps the prompt tight in that case.
+    lessons_block = f"{lessons_str}\n\n" if lessons_str else ""
     return Task(
         description=(
+            f"{lessons_block}"
             "Using the trend analysis and news sentiment from previous tasks, "
             "predict GME price for the next 1h, 4h, and 24h.\n\n"
             f"LIVE DATA (do not invent — use these exact values):\n"
