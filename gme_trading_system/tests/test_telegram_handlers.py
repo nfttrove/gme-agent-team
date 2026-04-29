@@ -466,15 +466,17 @@ def test_executed_without_id_prints_usage(captured_sends):
 
 
 def test_executed_records_feedback_row(seeded_db, captured_sends):
-    telegram_bot.handle_command("/executed abc12345 bought 50 shares at 25.10",
+    # Bare integer (50) is parsed as quantity, '@25.10' as entry_price; the
+    # remaining tokens form the note. See _parse_price_qty_note.
+    telegram_bot.handle_command("/executed abc12345 bought @25.10 50 swing trade",
                                 user="alice")
     body = captured_sends[0]
     assert "EXECUTED" in body
     assert "alice" in body
-    # Verify DB row
     conn = sqlite3.connect(seeded_db)
     row = conn.execute(
-        "SELECT alert_id, action_taken, team_member, team_notes "
+        "SELECT alert_id, action_taken, team_member, team_notes, "
+        "       entry_price, quantity "
         "FROM signal_feedback"
     ).fetchone()
     conn.close()
@@ -482,7 +484,9 @@ def test_executed_records_feedback_row(seeded_db, captured_sends):
     assert row[0].startswith("abc12345")
     assert row[1] == "executed"
     assert row[2] == "alice"
-    assert "50 shares" in row[3]
+    assert "swing trade" in row[3]
+    assert row[4] == 25.10
+    assert row[5] == 50.0
 
 
 def test_ignored_records_reason(seeded_db, captured_sends):
@@ -514,7 +518,7 @@ def test_feedback_is_idempotent_per_action(seeded_db, captured_sends):
     """Running /executed twice on the same signal must UPDATE, not insert a
     duplicate. The team's latest note should win."""
     telegram_bot.handle_command("/executed abc12345 first try", user="alice")
-    telegram_bot.handle_command("/executed abc12345 corrected: 100 shares",
+    telegram_bot.handle_command("/executed abc12345 corrected note",
                                 user="alice")
     conn = sqlite3.connect(seeded_db)
     rows = conn.execute(
@@ -522,7 +526,7 @@ def test_feedback_is_idempotent_per_action(seeded_db, captured_sends):
     ).fetchall()
     conn.close()
     assert len(rows) == 1, f"duplicate feedback rows: {rows}"
-    assert "100 shares" in rows[0][0]
+    assert "corrected note" in rows[0][0]
 
 
 def test_feedback_allows_action_changes(seeded_db, captured_sends):

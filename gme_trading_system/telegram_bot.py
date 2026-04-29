@@ -195,13 +195,23 @@ def _resolve_signal_short_id(short: str) -> dict | None:
 
 
 def _record_signal_feedback(signal_id: str, action: str, notes: str,
-                            team_member: str) -> dict | None:
+                            team_member: str,
+                            entry_price: float | None = None,
+                            exit_price: float | None = None,
+                            quantity: float | None = None,
+                            pnl: float | None = None,
+                            pnl_pct: float | None = None) -> dict | None:
     """Upsert a signal_feedback row, keyed by (alert_id, action_taken).
 
     Idempotent on that key — running /executed twice on the same signal
-    updates team_notes/team_member, doesn't create a duplicate. Different
-    actions on the same signal (e.g., /executed then /ignored) create
-    separate rows so the history of the decision-change is visible.
+    updates team_notes/team_member and any new price/qty fields but does not
+    create a duplicate. Different actions on the same signal (e.g.,
+    /executed then /ignored, or /executed then /close) create separate rows
+    so the history of the decision-change is visible.
+
+    Price/qty/pnl fields are only overwritten when a non-None value is
+    supplied, so partial updates (just updating a note) don't nuke PnL
+    previously captured by /close.
     """
     import uuid
     _ensure_signal_feedback_table()
@@ -210,15 +220,27 @@ def _record_signal_feedback(signal_id: str, action: str, notes: str,
         conn = sqlite3.connect(DB_PATH)
         conn.row_factory = sqlite3.Row
         existing = conn.execute(
-            "SELECT id FROM signal_feedback "
+            "SELECT id, entry_price, exit_price, quantity, pnl, pnl_pct "
+            "FROM signal_feedback "
             "WHERE alert_id=? AND action_taken=? LIMIT 1",
             (signal_id, action),
         ).fetchone()
+        # Merge: new values win when non-None, else keep existing.
+        def _pick(new, old):
+            return new if new is not None else old
         if existing:
             conn.execute(
-                "UPDATE signal_feedback SET team_notes=?, team_member=?, "
-                "updated_at=? WHERE id=?",
-                (notes, team_member, now, existing["id"]),
+                "UPDATE signal_feedback SET "
+                "  team_notes=?, team_member=?, updated_at=?, "
+                "  entry_price=?, exit_price=?, quantity=?, pnl=?, pnl_pct=? "
+                "WHERE id=?",
+                (notes, team_member, now,
+                 _pick(entry_price, existing["entry_price"]),
+                 _pick(exit_price,  existing["exit_price"]),
+                 _pick(quantity,    existing["quantity"]),
+                 _pick(pnl,         existing["pnl"]),
+                 _pick(pnl_pct,     existing["pnl_pct"]),
+                 existing["id"]),
             )
             fb_id = existing["id"]
         else:
@@ -226,17 +248,53 @@ def _record_signal_feedback(signal_id: str, action: str, notes: str,
             conn.execute(
                 "INSERT INTO signal_feedback "
                 "(id, alert_id, action_taken, execution_timestamp, "
-                " team_member, team_notes, created_at, updated_at) "
-                "VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
-                (fb_id, signal_id, action, now, team_member, notes, now, now),
+                " team_member, team_notes, entry_price, exit_price, "
+                " quantity, pnl, pnl_pct, created_at, updated_at) "
+                "VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)",
+                (fb_id, signal_id, action, now, team_member, notes,
+                 entry_price, exit_price, quantity, pnl, pnl_pct, now, now),
             )
         conn.commit()
         conn.close()
         return {"id": fb_id, "alert_id": signal_id, "action": action,
-                "team_notes": notes, "team_member": team_member}
+                "team_notes": notes, "team_member": team_member,
+                "entry_price": entry_price, "exit_price": exit_price,
+                "quantity": quantity, "pnl": pnl, "pnl_pct": pnl_pct}
     except Exception as e:
         log.error(f"[tgbot] feedback insert failed: {e}")
         return None
+
+
+def _parse_price_qty_note(tokens: list[str]) -> tuple[float | None, float | None, str]:
+    """Parse trailing tokens of an /executed or /close command.
+
+    Tokens beginning with '@' are treated as prices (e.g. '@25.10'). Bare
+    numbers are treated as quantities. Everything else forms a free-text note
+    (joined with spaces). The first '@price' wins; first bare-number wins.
+    """
+    price: float | None = None
+    qty: float | None = None
+    note_parts: list[str] = []
+    for t in tokens:
+        if t.startswith("@") and price is None:
+            try:
+                price = float(t[1:].replace(",", ""))
+                continue
+            except ValueError:
+                pass
+        if qty is None:
+            try:
+                v = float(t.replace(",", ""))
+                # Looks like a quantity — but guard against someone saying
+                # "at 25.10" without an @. Treat tokens with a decimal as
+                # ambiguous → push to notes; only accept integers as qty.
+                if "." not in t:
+                    qty = v
+                    continue
+            except ValueError:
+                pass
+        note_parts.append(t)
+    return price, qty, " ".join(note_parts)
 
 
 def _ensure_settings_table():
@@ -623,6 +681,35 @@ def handle_command(text: str, user: str = "team"):
                     conf_pct = int(avg_conf * 100) if avg_conf else 0
                     lines.append(f"  {action.upper()}: {n}x @ {conf_pct}% avg confidence")
 
+            # Execution-rate roll-up from signal_feedback
+            try:
+                fb_conn = sqlite3.connect(DB_PATH)
+                fb_rows = fb_conn.execute(
+                    """
+                    SELECT a.agent_name,
+                           SUM(CASE WHEN f.action_taken='executed' THEN 1 ELSE 0 END),
+                           SUM(CASE WHEN f.action_taken='ignored'  THEN 1 ELSE 0 END),
+                           SUM(CASE WHEN f.action_taken='missed'   THEN 1 ELSE 0 END),
+                           SUM(CASE WHEN f.action_taken='closed'   THEN 1 ELSE 0 END),
+                           AVG(CASE WHEN f.action_taken='closed' THEN f.pnl_pct END)
+                    FROM signal_feedback f
+                    JOIN signal_alerts a ON f.alert_id = a.id
+                    GROUP BY a.agent_name
+                    ORDER BY a.agent_name
+                    """
+                ).fetchall()
+                fb_conn.close()
+                if fb_rows:
+                    lines.append("\n<b>⚙️ EXECUTION-RATE</b>")
+                    for agent, executed, ignored, missed, closed, avg_pct in fb_rows:
+                        pct_str = f"{avg_pct:+.1f}%" if avg_pct is not None else "—"
+                        lines.append(
+                            f"  • <b>{agent}</b>: {executed} exec, {ignored} ign, "
+                            f"{missed} miss, {closed} closed (avg PnL {pct_str})"
+                        )
+            except Exception:
+                pass
+
             _send("\n".join(lines))
         except Exception as e:
             _send(f"Standup error: {e}")
@@ -700,7 +787,7 @@ def handle_command(text: str, user: str = "team"):
             )
             return
         short_id = args[0]
-        notes = " ".join(args[1:]) if len(args) > 1 else ""
+        trailing = args[1:] if len(args) > 1 else []
         match = _resolve_signal_short_id(short_id)
         if match is None:
             _send(
@@ -720,7 +807,27 @@ def handle_command(text: str, user: str = "team"):
             )
             return
         row = match["row"]
-        fb = _record_signal_feedback(row["id"], action, notes, user)
+
+        entry_price = None
+        quantity = None
+        if cmd == "/executed":
+            entry_price, quantity, notes = _parse_price_qty_note(trailing)
+            if entry_price is None:
+                try:
+                    conn = sqlite3.connect(DB_PATH)
+                    ep_row = conn.execute(
+                        "SELECT entry_price FROM signal_alerts WHERE id=?",
+                        (row["id"],),
+                    ).fetchone()
+                    conn.close()
+                    entry_price = float(ep_row[0]) if ep_row and ep_row[0] is not None else None
+                except Exception:
+                    pass
+        else:
+            notes = " ".join(trailing)
+
+        fb = _record_signal_feedback(row["id"], action, notes, user,
+                                     entry_price=entry_price, quantity=quantity)
         if not fb:
             _send("❌ Failed to record feedback (DB write error). Check logs.")
             return
@@ -729,12 +836,95 @@ def handle_command(text: str, user: str = "team"):
         tp_v = row.get("take_profit") or 0.0
         conf_pct = int((row.get("confidence") or 0) * 100)
         note_line = f"\n<b>Notes:</b> {notes}" if notes else ""
+        extra = ""
+        if cmd == "/executed" and entry_price is not None:
+            extra = f"\n<b>Entry @ ${entry_price:.2f}</b>" + (f", qty {int(quantity)}" if quantity else "")
         _send(
             f"✅ <b>{action.upper()}</b> recorded by <b>{user}</b>\n"
             f"{direction} <b>{row['agent_name']}</b> · conf {conf_pct}% · "
             f"entry ${entry_v:.2f} → TP ${tp_v:.2f}\n"
-            f"<code>{row['id'][:8]}</code>{note_line}"
+            f"<code>{row['id'][:8]}</code>{note_line}{extra}"
         )
+
+    elif cmd == "/close":
+        if not args:
+            _send("Usage: /close &lt;signal-id&gt; @&lt;exit_price&gt; [qty] [note]")
+            return
+        short_id = args[0]
+        trailing = args[1:]
+        exit_price, quantity, notes = _parse_price_qty_note(trailing)
+        if exit_price is None:
+            _send("❌ Provide an exit price prefixed with @ (e.g. /close abc123 @28.10).")
+            return
+        match = _resolve_signal_short_id(short_id)
+        if match is None:
+            _send(f"⚠️ No signal matching <code>{short_id}</code>. Use /signals to list recent IDs.")
+            return
+        if match.get("ambiguous"):
+            cand = "\n".join(
+                f"  <code>{m['id'][:12]}</code> — {m['agent_name']} "
+                f"({m.get('signal_type','?')}) at {(m.get('timestamp','') or '')[:16]}"
+                for m in match["matches"]
+            )
+            _send(f"⚠️ <code>{short_id}</code> matches multiple signals:\n{cand}\n"
+                  "<i>Add more characters to disambiguate.</i>")
+            return
+        row = match["row"]
+        # Pull entry_price AND quantity from the executed feedback row first
+        # (so /close can omit them when the team already logged them via
+        # /executed). Falls back to signal_alerts.entry_price; qty falls back
+        # to 1.0 only if it was never recorded anywhere.
+        entry_price = None
+        prior_qty: float | None = None
+        try:
+            conn = sqlite3.connect(DB_PATH)
+            ep_row = conn.execute(
+                "SELECT entry_price, quantity FROM signal_feedback "
+                "WHERE alert_id=? AND action_taken='executed' LIMIT 1",
+                (row["id"],),
+            ).fetchone()
+            if ep_row:
+                if ep_row[0] is not None:
+                    entry_price = float(ep_row[0])
+                if ep_row[1] is not None:
+                    prior_qty = float(ep_row[1])
+            if entry_price is None:
+                ep_row2 = conn.execute(
+                    "SELECT entry_price FROM signal_alerts WHERE id=?",
+                    (row["id"],),
+                ).fetchone()
+                entry_price = float(ep_row2[0]) if ep_row2 and ep_row2[0] is not None else None
+            conn.close()
+        except Exception as e:
+            log.warning(f"[tgbot] /close entry lookup failed: {e}")
+        if entry_price is None:
+            _send(f"❌ No entry price found for <code>{short_id[:8]}</code>. Log with /executed first.")
+            return
+        is_bullish = (row.get("take_profit") or 0) > (row.get("entry_price") or 0)
+        price_diff = exit_price - entry_price
+        signed_diff = price_diff if is_bullish else -price_diff
+        # Precedence: explicit /close qty > qty captured at /executed > 1.0
+        qty = quantity if quantity is not None else (prior_qty if prior_qty is not None else 1.0)
+        pnl = signed_diff * qty
+        pnl_pct = (signed_diff / entry_price) * 100.0
+        fb = _record_signal_feedback(
+            row["id"], "closed", notes, user,
+            entry_price=entry_price, exit_price=exit_price,
+            quantity=qty, pnl=pnl, pnl_pct=pnl_pct,
+        )
+        if not fb:
+            _send("❌ Failed to write close feedback. Check logs.")
+            return
+        emoji = "🟢" if pnl > 0 else "🔴"
+        direction_str = "BULLISH" if is_bullish else "BEARISH"
+        reply = (
+            f"{emoji} <b>Closed {direction_str} signal <code>{row['id'][:8]}</code></b>\n"
+            f"Entry @ ${entry_price:.2f}, exit @ ${exit_price:.2f}, "
+            f"P&amp;L {pnl:.2f} ({pnl_pct:+.2f}%)"
+        )
+        if notes:
+            reply += f"\n<i>{notes}</i>"
+        _send(reply)
 
     elif cmd in ("/supportme", "/buymeacoffee"):
         _send(
@@ -1184,9 +1374,10 @@ def handle_command(text: str, user: str = "team"):
             "/status — system health, tick count, last agent activity\n"
             "/standup — agent daily standup (signals, win rates, team ROI)\n"
             "/signals [N] — list recent signals with short IDs\n"
-            "/executed &lt;id&gt; [note] — log that the team acted on a signal\n"
+            "/executed &lt;id&gt; [@price] [qty] [note] — log that the team acted on a signal\n"
             "/ignored &lt;id&gt; [reason] — log that the team passed on a signal\n"
             "/missed &lt;id&gt; [note] — log that the team wanted to act but missed it\n"
+            "/close &lt;id&gt; @&lt;exit_price&gt; [qty] [note] — close a trade, compute P&amp;L\n"
             "/agents — last run time for each agent\n"
             "/ticks — price data received today\n"
             "/freshness — verify agents are reading current data\n\n"
@@ -1467,6 +1658,7 @@ def _register_commands():
         {"command": "executed",  "description": "Log a signal as executed — /executed <id> [note]"},
         {"command": "ignored",   "description": "Log a signal as ignored — /ignored <id> [reason]"},
         {"command": "missed",    "description": "Log a signal as missed — /missed <id> [note]"},
+        {"command": "close",     "description": "Close a trade and record P&L — /close <id> @<exit_price> [qty]"},
         {"command": "agents",    "description": "Last-run timestamp for every agent"},
         {"command": "freshness", "description": "Are agents reading fresh data? (staleness check)"},
         {"command": "ticks",     "description": "Price ticks received today"},

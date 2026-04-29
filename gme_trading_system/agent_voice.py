@@ -93,7 +93,13 @@ def _format(v: Voice, content: str, ts: str) -> str:
     # Keep it readable — cap at 500 chars
     if len(safe) > 500:
         safe = safe[:497] + "..."
-    time_part = ts[11:16] if len(ts) >= 16 else ts  # HH:MM
+    from datetime import date
+    if len(ts) >= 16:
+        ts_date = ts[:10]
+        hhmm = ts[11:16]
+        time_part = hhmm if ts_date == str(date.today()) else f"{ts_date[5:]} {hhmm}"
+    else:
+        time_part = ts
     return f"{v.emoji} <b>{v.label}</b> <i>{time_part}</i>\n{safe}"
 
 
