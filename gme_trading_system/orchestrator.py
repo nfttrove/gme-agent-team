@@ -2088,77 +2088,106 @@ def run_daily_huddle():
         write_log("Boss", str(e), "daily_huddle", "error")
 
 
+def run_paper_trade_checker():
+    """Every 5 min — close paper trades that hit TP/SL or expired."""
+    try:
+        from paper_trader import check_and_close_open_trades
+        result = check_and_close_open_trades(DB_PATH)
+        if result["closed"]:
+            log.info(f"[PaperTrader] closed {result['closed']} trades "
+                     f"(tp={result.get('tp_hits',0)} sl={result.get('sl_hits',0)} "
+                     f"exp={result.get('expired',0)})")
+    except Exception as e:
+        log.warning(f"[PaperTrader] checker failed: {e}")
+
+
 def run_standup_report():
     """11 AM & 4 PM ET — Send agent performance standup to Telegram."""
     log.info("[Standup] === AGENT PERFORMANCE REPORT ===")
     try:
+        from paper_trader import get_trade_stats, ensure_paper_trades_table
         conn = sqlite3.connect(DB_PATH)
+        conn.row_factory = sqlite3.Row
+        ensure_paper_trades_table(conn)
 
-        # Get signals from last 24 hours by agent
-        signals = conn.execute("""
-            SELECT agent_name, COUNT(*) as total, AVG(confidence) as avg_conf
-            FROM signal_alerts
-            WHERE datetime(timestamp) > datetime('now', '-1 day')
+        # Per-agent paper trade stats (last 24h)
+        pt_stats = get_trade_stats(conn, days=1)
+
+        # Per-agent historical signal accuracy (last 30d from signal_scores)
+        acc_rows = conn.execute(
+            """
+            SELECT agent_name,
+                   COUNT(*)                                              AS n,
+                   AVG(directional_hit)                                 AS hit_rate,
+                   AVG(CASE WHEN tp_hit IS NOT NULL THEN tp_hit END)    AS tp_rate,
+                   AVG(brier_term)                                      AS brier
+            FROM signal_scores
+            WHERE validated_at > datetime('now', '-30 days')
             GROUP BY agent_name
-            ORDER BY total DESC
-        """).fetchall()
-
-        if not signals:
-            log.info("[Standup] No signals in last 24 hours")
-            conn.close()
-            return
-
-        # Get feedback stats for each agent
-        feedback_stats = {}
-        for agent_name, _, _ in signals:
-            feedback = conn.execute("""
-                SELECT
-                    COUNT(*) as total_feedback,
-                    SUM(CASE WHEN action_taken = 'executed' THEN 1 ELSE 0 END) as executed,
-                    SUM(CASE WHEN action_taken = 'executed' AND pnl_pct > 0 THEN 1 ELSE 0 END) as wins,
-                    AVG(CASE WHEN action_taken = 'executed' THEN pnl_pct END) as avg_pnl_pct
-                FROM signal_feedback sf
-                JOIN signal_alerts sa ON sf.alert_id = sa.id
-                WHERE sa.agent_name = ? AND datetime(sf.execution_timestamp) > datetime('now', '-1 day')
-            """, (agent_name,)).fetchone()
-            if feedback:
-                feedback_stats[agent_name] = feedback
-
-        # Calculate team totals
-        total_signals = sum(s[1] for s in signals)
-        total_executed = sum(f[1] or 0 for f in feedback_stats.values())
-        total_wins = sum(f[2] or 0 for f in feedback_stats.values())
-        team_roi = (total_wins / total_executed * 100) if total_executed > 0 else 0
-
-        lines = ["<b>🤖 AGENT DAILY STANDUP</b>\n"]
-
-        for agent_name, total, avg_conf in signals:
-            fb = feedback_stats.get(agent_name, (0, 0, 0, None))
-            executed = fb[1] or 0
-            wins = fb[2] or 0
-            win_rate = (wins / executed * 100) if executed > 0 else 0
-            conf_pct = int(avg_conf * 100) if avg_conf else 0
-
-            status = "✨" if win_rate == 100 and executed > 0 else "✅" if win_rate >= 67 else "⚠️ " if executed > 0 else "🔹"
-            lines.append(f"{status} <b>{agent_name}</b>: {total} signals, {conf_pct}% confidence")
-            if executed > 0:
-                lines.append(f"   → {executed} executed, {wins} wins ({win_rate:.0f}% win rate)")
-
-        lines.append(f"\n<b>📈 Team ROI: {total_wins}/{total_executed} wins ({team_roi:.0f}% win rate)</b>")
-
-        # Highlight best/worst
-        if feedback_stats:
-            best = max([(a, f[2]/f[1]*100 if f[1] else 0) for a, f in feedback_stats.items() if f[1]],
-                      key=lambda x: x[1], default=("N/A", 0))
-            worst = min([(a, f[2]/f[1]*100 if f[1] else 0) for a, f in feedback_stats.items() if f[1]],
-                       key=lambda x: x[1], default=("N/A", 0))
-
-            if best[0] != "N/A":
-                lines.append(f"🌟 Best: <b>{best[0]}</b> ({best[1]:.0f}%)")
-            if worst[0] != "N/A" and worst[1] < 100:
-                lines.append(f"📍 Needs tuning: <b>{worst[0]}</b> ({worst[1]:.0f}%)")
+            ORDER BY n DESC
+            """
+        ).fetchall()
+        acc = {r["agent_name"]: dict(r) for r in acc_rows}
 
         conn.close()
+
+        lines = ["<b>🤖 AGENT STANDUP</b>\n"]
+
+        # ── Paper trades (24h) ──────────────────────────────────────────────
+        if pt_stats:
+            lines.append("<b>📊 Hypothetical Trades — Last 24h</b>")
+            team_tp = team_sl = team_open = team_total = 0
+            team_pnl: list[float] = []
+            for s in pt_stats:
+                total = s["total"] or 0
+                tp = s["tp_hits"] or 0
+                sl = s["sl_hits"] or 0
+                exp = s["expired"] or 0
+                open_ = s["open"] or 0
+                closed = s["closed"] or 0
+                avg_pnl = s["avg_pnl"]
+                win_rate = (tp / closed * 100) if closed else 0
+                pnl_str = f"{avg_pnl:+.1f}%" if avg_pnl is not None else "—"
+                icon = "✅" if win_rate >= 60 else "⚠️" if closed else "🔹"
+                lines.append(
+                    f"{icon} <b>{s['agent_name']}</b>: {total} trades  "
+                    f"TP {tp} · SL {sl} · exp {exp} · open {open_}  "
+                    f"win {win_rate:.0f}% · avg {pnl_str}"
+                )
+                team_tp += tp
+                team_sl += sl
+                team_open += open_
+                team_total += total
+                if avg_pnl is not None:
+                    team_pnl.extend([avg_pnl] * max(1, closed))
+            team_closed = team_tp + team_sl + (team_total - team_tp - team_sl - team_open)
+            team_win = (team_tp / team_closed * 100) if team_closed else 0
+            team_avg = (sum(team_pnl) / len(team_pnl)) if team_pnl else None
+            pnl_line = f"  avg PnL {team_avg:+.1f}%" if team_avg is not None else ""
+            lines.append(
+                f"\n<b>Team: {team_tp}/{team_closed} TP wins ({team_win:.0f}%){pnl_line}</b>"
+            )
+        else:
+            lines.append("No paper trades in last 24h — signals fire at open.")
+
+        # ── 30-day signal accuracy ──────────────────────────────────────────
+        if acc:
+            lines.append("\n<b>📡 30-Day Signal Accuracy (scored)</b>")
+            for agent_name, a in acc.items():
+                n = a["n"] or 0
+                if n < 3:
+                    continue
+                hit = a["hit_rate"]
+                tp_r = a["tp_rate"]
+                brier = a["brier"]
+                hit_str = f"{hit:.0%}" if hit is not None else "—"
+                tp_str = f"{tp_r:.0%}" if tp_r is not None else "—"
+                edge = abs((hit or 0.5) - 0.5)
+                verdict = "fade ⚠️" if (hit or 0.5) < 0.45 else "trust ✅" if (hit or 0.5) > 0.55 else "neutral"
+                lines.append(
+                    f"  <b>{agent_name}</b> (n={n}): "
+                    f"dir {hit_str} · TP {tp_str} · {verdict}"
+                )
 
         msg = "\n".join(lines)
         from notifier import notify
@@ -2250,6 +2279,10 @@ class TradingSystemOrchestrator:
         # window elapses instead of waiting until 4:30 PM debrief.
         self.scheduler.add_job(run_calibration, IntervalTrigger(minutes=10), id="calibration")
 
+        # Paper trade close-checker — scan open hypothetical trades against
+        # real price ticks every 5 min; close on TP/SL first-touch or 4h expiry.
+        self.scheduler.add_job(run_paper_trade_checker, IntervalTrigger(minutes=5), id="paper_trade_checker")
+
         # Nightly DB maintenance: backup + prune old backups + log cleanup (3 AM ET)
         from db_maintenance import nightly_maintenance
         self.scheduler.add_job(nightly_maintenance, CronTrigger(hour=3, minute=0, timezone=ET), id="db_nightly")
@@ -2276,6 +2309,7 @@ class TradingSystemOrchestrator:
 ╠══════════════════════════════════════════════════════════════════╣
 ║  Synthesis (cross-agent brief) every 5 min — shared context      ║
 ║  Valerie  (data validator)     every 5 min                       ║
+║  PaperTrader (close checker)   every 5 min — auto TP/SL close    ║
 ║  Chatty   (commentary)         every 5 min — reads Synthesis     ║
 ║  Newsie   (news sentiment)     every 30 min                      ║
 ║  Pattern  (multi-day)          every 2 hours                     ║

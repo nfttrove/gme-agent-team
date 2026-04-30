@@ -77,6 +77,20 @@ def seeded_db(tmp_path, monkeypatch):
             stop_loss REAL, take_profit REAL, reasoning TEXT,
             telegram_message_id INTEGER, timestamp TEXT, created_at TEXT
         );
+        CREATE TABLE signal_scores (
+            signal_id TEXT PRIMARY KEY, agent_name TEXT, signal_type TEXT,
+            validated_at TEXT, baseline_price REAL, end_price REAL,
+            tp_hit INTEGER DEFAULT 0, sl_hit INTEGER DEFAULT 0,
+            directional_hit INTEGER DEFAULT 0, brier_term REAL, notes TEXT,
+            created_at TEXT DEFAULT (datetime('now'))
+        );
+        CREATE TABLE paper_trades (
+            id TEXT PRIMARY KEY, signal_id TEXT NOT NULL,
+            agent_name TEXT, signal_type TEXT, direction TEXT NOT NULL,
+            entry_price REAL NOT NULL, stop_loss REAL, take_profit REAL,
+            opened_at TEXT NOT NULL, closed_at TEXT, exit_price REAL,
+            outcome TEXT, pnl_pct REAL
+        );
         INSERT INTO signal_alerts (id, agent_name, signal_type, confidence,
             severity, entry_price, stop_loss, take_profit, reasoning, timestamp)
             VALUES ('abc12345-1111-2222-3333-444455556666', 'Pattern',
@@ -432,10 +446,8 @@ def test_signals_lists_recent_with_short_ids(seeded_db, captured_sends):
     assert captured_sends
     body = captured_sends[0]
     assert "RECENT SIGNALS" in body
-    # Short IDs (first 8 chars of each seed UUID) must be present
     assert "abc12345" in body
     assert "def98765" in body
-    # Agent names should be readable, confidence shown
     assert "Pattern" in body
     assert "Trendy" in body
     assert "70%" in body
@@ -459,106 +471,40 @@ def test_signals_on_empty_db_does_not_crash(tmp_path, monkeypatch, captured_send
     assert "No signals in the log yet." in captured_sends[0]
 
 
-def test_executed_without_id_prints_usage(captured_sends):
-    telegram_bot.handle_command("/executed")
-    assert captured_sends
-    assert "Usage" in captured_sends[0]
+def test_manual_feedback_commands_retired(captured_sends):
+    """All four retired manual-logging commands return a consistent 'retired' notice."""
+    for cmd in ("/executed", "/ignored", "/missed", "/close"):
+        telegram_bot.handle_command(cmd)
+    # Every response should mention the paper trade replacement
+    assert all("paper trade" in s.lower() or "retired" in s.lower()
+               for s in captured_sends)
 
 
-def test_executed_records_feedback_row(seeded_db, captured_sends):
-    # Bare integer (50) is parsed as quantity, '@25.10' as entry_price; the
-    # remaining tokens form the note. See _parse_price_qty_note.
-    telegram_bot.handle_command("/executed abc12345 bought @25.10 50 swing trade",
-                                user="alice")
+def test_signals_shows_paper_trade_outcome(seeded_db, captured_sends):
+    """/signals shows TP/SL outcome tag when a paper trade is closed."""
+    import uuid, datetime
+    conn = sqlite3.connect(seeded_db)
+    # Create paper_trades table and insert a closed tp_hit row
+    conn.execute(
+        """CREATE TABLE IF NOT EXISTS paper_trades (
+            id TEXT PRIMARY KEY, signal_id TEXT NOT NULL,
+            agent_name TEXT, signal_type TEXT, direction TEXT,
+            entry_price REAL, stop_loss REAL, take_profit REAL,
+            opened_at TEXT, closed_at TEXT, exit_price REAL,
+            outcome TEXT, pnl_pct REAL)"""
+    )
+    conn.execute(
+        "INSERT INTO paper_trades VALUES (?, ?, 'Pattern', 'pattern_signal', "
+        "'bull', 25.0, 24.0, 26.0, '2026-04-23T14:00:00Z', "
+        "'2026-04-23T17:00:00Z', 26.0, 'tp_hit', 4.0)",
+        (str(uuid.uuid4()), "abc12345-1111-2222-3333-444455556666"),
+    )
+    conn.commit()
+    conn.close()
+    telegram_bot.handle_command("/signals")
     body = captured_sends[0]
-    assert "EXECUTED" in body
-    assert "alice" in body
-    conn = sqlite3.connect(seeded_db)
-    row = conn.execute(
-        "SELECT alert_id, action_taken, team_member, team_notes, "
-        "       entry_price, quantity "
-        "FROM signal_feedback"
-    ).fetchone()
-    conn.close()
-    assert row is not None, "no signal_feedback row written"
-    assert row[0].startswith("abc12345")
-    assert row[1] == "executed"
-    assert row[2] == "alice"
-    assert "swing trade" in row[3]
-    assert row[4] == 25.10
-    assert row[5] == 50.0
-
-
-def test_ignored_records_reason(seeded_db, captured_sends):
-    telegram_bot.handle_command("/ignored abc12345 low conviction", user="bob")
-    conn = sqlite3.connect(seeded_db)
-    row = conn.execute(
-        "SELECT action_taken, team_notes FROM signal_feedback"
-    ).fetchone()
-    conn.close()
-    assert row[0] == "ignored"
-    assert row[1] == "low conviction"
-
-
-def test_missed_is_distinct_from_ignored(seeded_db, captured_sends):
-    """'missed' (wanted to act, didn't) is a different decision from
-    'ignored' (chose not to). Both must be capturable — don't collapse."""
-    telegram_bot.handle_command("/missed abc12345 phone died", user="carol")
-    conn = sqlite3.connect(seeded_db)
-    row = conn.execute(
-        "SELECT action_taken, team_member, team_notes FROM signal_feedback"
-    ).fetchone()
-    conn.close()
-    assert row[0] == "missed"
-    assert row[1] == "carol"
-    assert row[2] == "phone died"
-
-
-def test_feedback_is_idempotent_per_action(seeded_db, captured_sends):
-    """Running /executed twice on the same signal must UPDATE, not insert a
-    duplicate. The team's latest note should win."""
-    telegram_bot.handle_command("/executed abc12345 first try", user="alice")
-    telegram_bot.handle_command("/executed abc12345 corrected note",
-                                user="alice")
-    conn = sqlite3.connect(seeded_db)
-    rows = conn.execute(
-        "SELECT team_notes FROM signal_feedback WHERE action_taken='executed'"
-    ).fetchall()
-    conn.close()
-    assert len(rows) == 1, f"duplicate feedback rows: {rows}"
-    assert "corrected note" in rows[0][0]
-
-
-def test_feedback_allows_action_changes(seeded_db, captured_sends):
-    """Team decides /executed then later /ignored — both rows must exist so
-    the decision trail is auditable."""
-    telegram_bot.handle_command("/executed abc12345", user="alice")
-    telegram_bot.handle_command("/ignored abc12345 changed my mind", user="alice")
-    conn = sqlite3.connect(seeded_db)
-    actions = {r[0] for r in conn.execute(
-        "SELECT action_taken FROM signal_feedback WHERE alert_id LIKE 'abc12345%'"
-    ).fetchall()}
-    conn.close()
-    assert actions == {"executed", "ignored"}
-
-
-def test_unknown_short_id_returns_error(seeded_db, captured_sends):
-    telegram_bot.handle_command("/executed 00000000")
-    assert any("No signal matching" in s for s in captured_sends)
-    # No feedback row should have been written
-    conn = sqlite3.connect(seeded_db)
-    count = conn.execute("SELECT COUNT(*) FROM signal_feedback").fetchone()[0] \
-        if conn.execute("SELECT name FROM sqlite_master WHERE name='signal_feedback'"
-        ).fetchone() else 0
-    conn.close()
-    assert count == 0
-
-
-def test_short_id_too_short_rejected(seeded_db, captured_sends):
-    """A 3-char prefix is way too ambiguous — must refuse rather than silently
-    matching the first alphabetical row."""
-    telegram_bot.handle_command("/executed abc")
-    assert any("No signal matching" in s for s in captured_sends)
+    assert "TP" in body       # tp_hit outcome shown
+    assert "4.0" in body      # pnl_pct shown
 
 
 def test_candidates_empty(captured_sends, monkeypatch, tmp_path):
@@ -637,21 +583,9 @@ def test_reject_drops_candidate(captured_sends, monkeypatch, tmp_path):
     assert cands.read_text().strip() == ""
 
 
-def test_ambiguous_prefix_lists_candidates(seeded_db, captured_sends, monkeypatch):
-    """If two signals share the prefix, show both and ask for more chars."""
-    # Seed a second signal that collides on the first 6 chars
-    conn = sqlite3.connect(seeded_db)
-    conn.execute(
-        "INSERT INTO signal_alerts (id, agent_name, signal_type, confidence, "
-        "severity, entry_price, stop_loss, take_profit, reasoning, timestamp) "
-        "VALUES ('abc12399-aaaa-bbbb-cccc-ddddeeeeffff', 'Futurist', "
-        "'price_prediction', 0.65, 'MEDIUM', 25.00, 24.50, 25.80, "
-        "'momentum', '2026-04-23T16:00:00-04:00')",
-    )
-    conn.commit()
-    conn.close()
-    telegram_bot.handle_command("/executed abc123")
-    joined = "\n".join(captured_sends)
-    assert "multiple signals" in joined
-    assert "Pattern" in joined
-    assert "Futurist" in joined
+def test_signals_shows_multiple_agents(seeded_db, captured_sends):
+    """/signals with two agents present shows both in the output."""
+    telegram_bot.handle_command("/signals 5")
+    body = captured_sends[0]
+    assert "Pattern" in body
+    assert "Trendy" in body

@@ -546,7 +546,15 @@ def handle_command(text: str, user: str = "team"):
 
     elif cmd == "/standup":
         try:
+            from paper_trader import get_trade_stats, ensure_paper_trades_table
             conn = sqlite3.connect(DB_PATH)
+            conn.row_factory = sqlite3.Row
+            ensure_paper_trades_table(conn)
+
+            # Latest price
+            price_row = conn.execute(
+                "SELECT close, timestamp FROM price_ticks ORDER BY timestamp DESC LIMIT 1"
+            ).fetchone()
 
             # Agent activity last 24h
             activity = conn.execute("""
@@ -559,156 +567,80 @@ def handle_command(text: str, user: str = "team"):
                 ORDER BY runs DESC
             """).fetchall()
 
-            # Latest price
-            price_row = conn.execute(
-                "SELECT close, timestamp FROM price_ticks ORDER BY timestamp DESC LIMIT 1"
-            ).fetchone()
+            # Paper trade stats (24h)
+            pt_stats = get_trade_stats(conn, days=1)
 
-            # Latest prediction
-            pred = conn.execute(
-                "SELECT horizon, predicted_price, confidence FROM predictions ORDER BY timestamp DESC LIMIT 1"
-            ).fetchone()
-
-            # Futurist calibration — the truth behind the "confidence" number.
-            # Pull latest performance_scores row for each metric.
-            calib = {}
-            for metric in ("prediction_mae_pct", "direction_hit_rate", "brier_score"):
-                row = conn.execute(
-                    "SELECT value, sample_size, date FROM performance_scores "
-                    "WHERE agent_name='Futurist' AND metric=? "
-                    "ORDER BY date DESC, id DESC LIMIT 1",
-                    (metric,),
-                ).fetchone()
-                if row:
-                    calib[metric] = row
-
-            # Recent trade decisions (last 7 days)
-            trades = conn.execute("""
-                SELECT action, COUNT(*) as n, AVG(confidence) as avg_conf
-                FROM trade_decisions
-                WHERE datetime(timestamp) > datetime('now', '-7 days')
-                GROUP BY action
-            """).fetchall()
+            # 30-day signal accuracy from signal_scores
+            acc_rows = conn.execute(
+                """
+                SELECT agent_name,
+                       COUNT(*)                                              AS n,
+                       AVG(directional_hit)                                 AS hit_rate,
+                       AVG(CASE WHEN tp_hit IS NOT NULL THEN tp_hit END)    AS tp_rate
+                FROM signal_scores
+                WHERE validated_at > datetime('now', '-30 days')
+                GROUP BY agent_name
+                ORDER BY n DESC
+                """
+            ).fetchall()
 
             conn.close()
 
-            lines = ["<b>🤖 AGENT STANDUP (last 24h)</b>\n"]
+            lines = ["<b>🤖 AGENT STANDUP</b>\n"]
 
             if price_row:
-                age = price_row[1][:16].replace("T", " ")
-                lines.append(f"<b>GME:</b> ${price_row[0]:.2f} (as of {age})\n")
+                age = (price_row["timestamp"] or "")[:16].replace("T", " ")
+                lines.append(f"<b>GME:</b> ${price_row['close']:.2f}  <i>({age})</i>\n")
 
-            if pred:
-                conf_pct = int(pred[2] * 100) if pred[2] else 0
-                lines.append(f"<b>Futurist call:</b> {pred[0]} → ${pred[1]:.2f} <i>(stated {conf_pct}%)</i>")
-
-                # Reality-check the stated confidence against actual track record
-                if calib.get("direction_hit_rate") and calib.get("brier_score"):
-                    hit = calib["direction_hit_rate"][0]
-                    n = calib["direction_hit_rate"][1]
-                    brier = calib["brier_score"][0]
-                    mae = calib.get("prediction_mae_pct", [0])[0] or 0
-                    # Brier < 0.25 beats random; > 0.25 is worse than a coin flip
-                    verdict = "📉 worse than random" if brier > 0.25 else "📈 beats random"
+            # ── Paper trades ──────────────────────────────────────────────
+            if pt_stats:
+                lines.append("<b>📊 Hypothetical Trades — 24h</b>")
+                team_tp = team_closed = 0
+                for s in pt_stats:
+                    tp = s["tp_hits"] or 0
+                    sl = s["sl_hits"] or 0
+                    exp = s["expired"] or 0
+                    open_ = s["open"] or 0
+                    closed = s["closed"] or 0
+                    avg_pnl = s["avg_pnl"]
+                    win_rate = (tp / closed * 100) if closed else 0
+                    pnl_str = f"{avg_pnl:+.1f}%" if avg_pnl is not None else "—"
+                    icon = "✅" if win_rate >= 60 else "⚠️" if closed else "🔹"
                     lines.append(
-                        f"<b>Futurist reality (7d, n={n}):</b>\n"
-                        f"  • Hit rate: {hit:.0%}  |  MAE: {mae:.2f}%  |  Brier: {brier:.3f} ({verdict})"
+                        f"{icon} <b>{s['agent_name']}</b>: {s['total']} trades  "
+                        f"TP {tp} · SL {sl} · exp {exp} · open {open_}  "
+                        f"win {win_rate:.0f}% · avg {pnl_str}"
                     )
-                else:
-                    lines.append("  <i>Calibration: not enough scored predictions yet</i>")
-                lines.append("")
+                    team_tp += tp
+                    team_closed += closed
+                team_win = (team_tp / team_closed * 100) if team_closed else 0
+                lines.append(f"  <b>Team: {team_tp}/{team_closed} wins ({team_win:.0f}%)</b>")
+            else:
+                lines.append("No paper trades yet — opens automatically on next signal.\n")
 
-            # Signal-based calibration for Pattern / Trendy (and Futurist's
-            # signal_alerts row, which is scored by the 4h first-touch
-            # framework rather than horizon price-regression). These come
-            # from signal_scores → performance_scores, one row per metric.
-            sig_conn = sqlite3.connect(DB_PATH)
-            sig_rows = sig_conn.execute(
-                """
-                SELECT agent_name, metric, value, sample_size, date
-                FROM performance_scores
-                WHERE metric IN ('direction_hit_rate','brier_score','tp_hit_rate')
-                  AND agent_name IN ('Pattern','Trendy')
-                  AND notes LIKE 'source=signal_alerts%'
-                  AND date >= date('now','-7 days')
-                ORDER BY agent_name, date DESC, id DESC
-                """
-            ).fetchall()
-            sig_conn.close()
-            # Collapse to the most recent row per (agent, metric)
-            sig_by_agent: dict[str, dict] = {}
-            for agent, metric, value, n, _date in sig_rows:
-                bucket = sig_by_agent.setdefault(agent, {})
-                if metric not in bucket:
-                    bucket[metric] = (value, n)
-            if sig_by_agent:
-                lines.append("<b>Signal agents reality (7d, first-touch 4h):</b>")
-                for agent in ("Pattern", "Trendy"):
-                    m = sig_by_agent.get(agent)
-                    if not m:
+            # ── 30-day accuracy ───────────────────────────────────────────
+            if acc_rows:
+                lines.append("\n<b>📡 30-Day Signal Accuracy</b>")
+                for r in acc_rows:
+                    n = r["n"] or 0
+                    if n < 3:
                         continue
-                    hit = m.get("direction_hit_rate", (None, 0))
-                    tp  = m.get("tp_hit_rate",       (None, 0))
-                    br  = m.get("brier_score",       (None, 0))
-                    n   = hit[1] or tp[1] or br[1] or 0
-                    if n == 0:
-                        continue
-                    verdict = ""
-                    if br[0] is not None:
-                        verdict = " 📉 worse than random" if br[0] > 0.25 else " 📈 beats random"
-                    parts = [f"<b>{agent}</b> (n={n}):"]
-                    if hit[0] is not None:
-                        parts.append(f"hit {hit[0]:.0%}")
-                    if tp[0] is not None:
-                        parts.append(f"TP {tp[0]:.0%}")
-                    if br[0] is not None:
-                        parts.append(f"Brier {br[0]:.2f}{verdict}")
-                    lines.append("  • " + "  |  ".join(parts))
-                lines.append("")
+                    hit = r["hit_rate"]
+                    tp_r = r["tp_rate"]
+                    verdict = "fade ⚠️" if (hit or 0.5) < 0.45 else "trust ✅" if (hit or 0.5) > 0.55 else "neutral"
+                    hit_str = f"{hit:.0%}" if hit is not None else "—"
+                    tp_str = f"{tp_r:.0%}" if tp_r is not None else "—"
+                    lines.append(
+                        f"  <b>{r['agent_name']}</b> (n={n}): dir {hit_str} · TP {tp_str} · {verdict}"
+                    )
 
+            # ── Agent runs ────────────────────────────────────────────────
             if activity:
-                lines.append("<b>Agent Runs:</b>")
+                lines.append("\n<b>Agent Runs (24h)</b>")
                 for name, runs, ok in activity:
                     ok = ok or 0
                     icon = "✅" if ok == runs else "⚠️"
                     lines.append(f"  {icon} <b>{name}</b>: {runs} runs ({ok} ok)")
-            else:
-                lines.append("No agent activity in last 24h.")
-
-            if trades:
-                lines.append("\n<b>Trade Gate (7d):</b>")
-                for action, n, avg_conf in trades:
-                    conf_pct = int(avg_conf * 100) if avg_conf else 0
-                    lines.append(f"  {action.upper()}: {n}x @ {conf_pct}% avg confidence")
-
-            # Execution-rate roll-up from signal_feedback
-            try:
-                fb_conn = sqlite3.connect(DB_PATH)
-                fb_rows = fb_conn.execute(
-                    """
-                    SELECT a.agent_name,
-                           SUM(CASE WHEN f.action_taken='executed' THEN 1 ELSE 0 END),
-                           SUM(CASE WHEN f.action_taken='ignored'  THEN 1 ELSE 0 END),
-                           SUM(CASE WHEN f.action_taken='missed'   THEN 1 ELSE 0 END),
-                           SUM(CASE WHEN f.action_taken='closed'   THEN 1 ELSE 0 END),
-                           AVG(CASE WHEN f.action_taken='closed' THEN f.pnl_pct END)
-                    FROM signal_feedback f
-                    JOIN signal_alerts a ON f.alert_id = a.id
-                    GROUP BY a.agent_name
-                    ORDER BY a.agent_name
-                    """
-                ).fetchall()
-                fb_conn.close()
-                if fb_rows:
-                    lines.append("\n<b>⚙️ EXECUTION-RATE</b>")
-                    for agent, executed, ignored, missed, closed, avg_pct in fb_rows:
-                        pct_str = f"{avg_pct:+.1f}%" if avg_pct is not None else "—"
-                        lines.append(
-                            f"  • <b>{agent}</b>: {executed} exec, {ignored} ign, "
-                            f"{missed} miss, {closed} closed (avg PnL {pct_str})"
-                        )
-            except Exception:
-                pass
 
             _send("\n".join(lines))
         except Exception as e:
@@ -716,16 +648,16 @@ def handle_command(text: str, user: str = "team"):
             log.error(f"[tgbot] /standup failed: {e}")
 
     elif cmd == "/signals":
-        # List recent signals with their short IDs so the team can
-        # reference them in /executed /ignored /missed.
         try:
-            _ensure_signal_feedback_table()
+            from paper_trader import ensure_paper_trades_table
+            _pt_conn = sqlite3.connect(DB_PATH)
+            ensure_paper_trades_table(_pt_conn)
+            _pt_conn.close()
             n = 10
             if args and args[0].isdigit():
                 n = max(1, min(25, int(args[0])))
             conn = sqlite3.connect(DB_PATH)
-            # Tables may not exist in a fresh environment — guard with a
-            # schema check before querying so we fail explanatorily.
+            conn.row_factory = sqlite3.Row
             has_table = conn.execute(
                 "SELECT 1 FROM sqlite_master WHERE type='table' AND name='signal_alerts'"
             ).fetchone()
@@ -737,9 +669,9 @@ def handle_command(text: str, user: str = "team"):
                 f"""
                 SELECT s.id, s.agent_name, s.signal_type, s.confidence,
                        s.entry_price, s.take_profit, s.stop_loss, s.timestamp,
-                       (SELECT group_concat(action_taken, ',')
-                          FROM signal_feedback WHERE alert_id = s.id) AS feedback
+                       p.outcome, p.pnl_pct
                 FROM signal_alerts s
+                LEFT JOIN paper_trades p ON p.signal_id = s.id
                 ORDER BY s.timestamp DESC
                 LIMIT {n}
                 """
@@ -748,208 +680,43 @@ def handle_command(text: str, user: str = "team"):
             if not rows:
                 _send("No signals in the log yet.")
                 return
-            lines = [
-                f"<b>📋 RECENT SIGNALS (last {len(rows)})</b>",
-                "<i>Copy short ID, then /executed &lt;id&gt; · /ignored &lt;id&gt; "
-                "[reason] · /missed &lt;id&gt; [note]</i>\n",
-            ]
-            for (sig_id, agent, stype, conf, entry, tp, sl, ts, fb) in rows:
-                short = (sig_id or "")[:8]
-                entry_v = entry or 0.0
-                tp_v = tp or 0.0
-                sl_v = sl or 0.0
+            lines = [f"<b>📋 RECENT SIGNALS (last {len(rows)})</b>\n"]
+            for r in rows:
+                short = (r["id"] or "")[:8]
+                entry_v = r["entry_price"] or 0.0
+                tp_v = r["take_profit"] or 0.0
+                sl_v = r["stop_loss"] or 0.0
                 direction = "🟢" if tp_v > entry_v else "🔴" if tp_v < entry_v else "⚪"
-                time_str = (ts or "")[:16].replace("T", " ")
-                conf_pct = int((conf or 0) * 100)
-                fb_tag = f"  ✅ {fb}" if fb else ""
+                time_str = (r["timestamp"] or "")[:16].replace("T", " ")
+                conf_pct = int((r["confidence"] or 0) * 100)
+                outcome = r["outcome"]
+                if outcome == "tp_hit":
+                    result_tag = f"  ✅ TP +{r['pnl_pct']:.1f}%"
+                elif outcome == "sl_hit":
+                    result_tag = f"  ❌ SL {r['pnl_pct']:+.1f}%"
+                elif outcome == "expired":
+                    result_tag = f"  ⏱ exp {r['pnl_pct']:+.1f}%"
+                elif outcome is None and r["id"]:
+                    result_tag = "  ⏳"
+                else:
+                    result_tag = ""
                 lines.append(
-                    f"<code>{short}</code> {direction} <b>{agent}</b> "
+                    f"<code>{short}</code> {direction} <b>{r['agent_name']}</b> "
                     f"conf={conf_pct}% · ${entry_v:.2f} → TP ${tp_v:.2f} / "
-                    f"SL ${sl_v:.2f}  <i>{time_str}</i>{fb_tag}"
+                    f"SL ${sl_v:.2f}  <i>{time_str}</i>{result_tag}"
                 )
             _send("\n".join(lines))
         except Exception as e:
             _send(f"Signals error: {str(e)[:200]}")
             log.error(f"[tgbot] /signals failed: {e}")
 
-    elif cmd in ("/executed", "/ignored", "/missed"):
-        # Close the feedback loop — team logs what they did with a signal.
-        # This populates signal_feedback so the calibrator can later compute
-        # real team-ROI (execute/ignore rate per agent, PnL on executed).
-        action_map = {"/executed": "executed",
-                      "/ignored":  "ignored",
-                      "/missed":   "missed"}
-        action = action_map[cmd]
-        if not args:
-            _send(
-                f"<b>Usage:</b> <code>{cmd} &lt;short_id&gt; [note/reason]</code>\n"
-                f"See /signals for IDs."
-            )
-            return
-        short_id = args[0]
-        trailing = args[1:] if len(args) > 1 else []
-        match = _resolve_signal_short_id(short_id)
-        if match is None:
-            _send(
-                f"⚠️ No signal matching <code>{short_id}</code>. "
-                f"Use /signals to list recent IDs."
-            )
-            return
-        if match.get("ambiguous"):
-            cand = "\n".join(
-                f"  <code>{m['id'][:12]}</code> — {m['agent_name']} "
-                f"({m.get('signal_type','?')}) at {(m.get('timestamp','') or '')[:16]}"
-                for m in match["matches"]
-            )
-            _send(
-                f"⚠️ <code>{short_id}</code> matches multiple signals:\n{cand}\n"
-                f"<i>Add more characters to disambiguate.</i>"
-            )
-            return
-        row = match["row"]
-
-        entry_price = None
-        quantity = None
-        if cmd == "/executed":
-            entry_price, quantity, notes = _parse_price_qty_note(trailing)
-            if entry_price is None:
-                try:
-                    conn = sqlite3.connect(DB_PATH)
-                    ep_row = conn.execute(
-                        "SELECT entry_price FROM signal_alerts WHERE id=?",
-                        (row["id"],),
-                    ).fetchone()
-                    conn.close()
-                    entry_price = float(ep_row[0]) if ep_row and ep_row[0] is not None else None
-                except Exception:
-                    pass
-        else:
-            notes = " ".join(trailing)
-
-        fb = _record_signal_feedback(row["id"], action, notes, user,
-                                     entry_price=entry_price, quantity=quantity)
-        if not fb:
-            _send("❌ Failed to record feedback (DB write error). Check logs.")
-            return
-        direction = "🟢" if (row.get("take_profit") or 0) > (row.get("entry_price") or 0) else "🔴"
-        entry_v = row.get("entry_price") or 0.0
-        tp_v = row.get("take_profit") or 0.0
-        conf_pct = int((row.get("confidence") or 0) * 100)
-        note_line = f"\n<b>Notes:</b> {notes}" if notes else ""
-        extra = ""
-        if cmd == "/executed" and entry_price is not None:
-            extra = f"\n<b>Entry @ ${entry_price:.2f}</b>" + (f", qty {int(quantity)}" if quantity else "")
+    elif cmd in ("/executed", "/ignored", "/missed", "/close"):
         _send(
-            f"✅ <b>{action.upper()}</b> recorded by <b>{user}</b>\n"
-            f"{direction} <b>{row['agent_name']}</b> · conf {conf_pct}% · "
-            f"entry ${entry_v:.2f} → TP ${tp_v:.2f}\n"
-            f"<code>{row['id'][:8]}</code>{note_line}{extra}"
+            "ℹ️ Manual signal logging is retired.\n\n"
+            "Every signal now opens a hypothetical paper trade automatically. "
+            "Check <b>/signals</b> for live TP/SL outcomes, or <b>/standup</b> "
+            "for win rates."
         )
-
-    elif cmd == "/close":
-        if not args:
-            _send("Usage: /close &lt;signal-id&gt; @&lt;exit_price&gt; [qty] [note]")
-            return
-        short_id = args[0]
-        trailing = args[1:]
-        exit_price, quantity, notes = _parse_price_qty_note(trailing)
-        if exit_price is None:
-            _send("❌ Provide an exit price prefixed with @ (e.g. /close abc123 @28.10).")
-            return
-        match = _resolve_signal_short_id(short_id)
-        if match is None:
-            _send(f"⚠️ No signal matching <code>{short_id}</code>. Use /signals to list recent IDs.")
-            return
-        if match.get("ambiguous"):
-            cand = "\n".join(
-                f"  <code>{m['id'][:12]}</code> — {m['agent_name']} "
-                f"({m.get('signal_type','?')}) at {(m.get('timestamp','') or '')[:16]}"
-                for m in match["matches"]
-            )
-            _send(f"⚠️ <code>{short_id}</code> matches multiple signals:\n{cand}\n"
-                  "<i>Add more characters to disambiguate.</i>")
-            return
-        row = match["row"]
-        # Pull entry_price AND quantity from the executed feedback row first
-        # (so /close can omit them when the team already logged them via
-        # /executed). Falls back to signal_alerts.entry_price; qty falls back
-        # to 1.0 only if it was never recorded anywhere.
-        entry_price = None
-        prior_qty: float | None = None
-        try:
-            conn = sqlite3.connect(DB_PATH)
-            ep_row = conn.execute(
-                "SELECT entry_price, quantity FROM signal_feedback "
-                "WHERE alert_id=? AND action_taken='executed' LIMIT 1",
-                (row["id"],),
-            ).fetchone()
-            if ep_row:
-                if ep_row[0] is not None:
-                    entry_price = float(ep_row[0])
-                if ep_row[1] is not None:
-                    prior_qty = float(ep_row[1])
-            if entry_price is None:
-                ep_row2 = conn.execute(
-                    "SELECT entry_price FROM signal_alerts WHERE id=?",
-                    (row["id"],),
-                ).fetchone()
-                entry_price = float(ep_row2[0]) if ep_row2 and ep_row2[0] is not None else None
-            conn.close()
-        except Exception as e:
-            log.warning(f"[tgbot] /close entry lookup failed: {e}")
-        if entry_price is None:
-            _send(f"❌ No entry price found for <code>{short_id[:8]}</code>. Log with /executed first.")
-            return
-        # Direction inference: prefer the corroboration of TP-vs-entry AND
-        # stop-vs-entry. The old check (TP > entry) silently defaulted to
-        # BEARISH when either field was 0/NULL, so a signal missing one leg
-        # produced flipped P&L.
-        sa_entry = row.get("entry_price") or 0
-        sa_tp    = row.get("take_profit")
-        sa_stop  = row.get("stop_loss")
-        tp_above = sa_tp   is not None and sa_tp   > sa_entry
-        sl_below = sa_stop is not None and sa_stop < sa_entry
-        tp_below = sa_tp   is not None and sa_tp   < sa_entry
-        sl_above = sa_stop is not None and sa_stop > sa_entry
-        if tp_above and sl_below:
-            is_bullish = True
-        elif tp_below and sl_above:
-            is_bullish = False
-        elif tp_above or sl_below:
-            is_bullish = True
-        elif tp_below or sl_above:
-            is_bullish = False
-        else:
-            log.warning(
-                f"[tgbot] /close {row['id'][:8]}: cannot infer direction "
-                f"(entry={sa_entry}, TP={sa_tp}, stop={sa_stop}); "
-                f"defaulting to BULLISH"
-            )
-            is_bullish = True
-        price_diff = exit_price - entry_price
-        signed_diff = price_diff if is_bullish else -price_diff
-        # Precedence: explicit /close qty > qty captured at /executed > 1.0
-        qty = quantity if quantity is not None else (prior_qty if prior_qty is not None else 1.0)
-        pnl = signed_diff * qty
-        pnl_pct = (signed_diff / entry_price) * 100.0
-        fb = _record_signal_feedback(
-            row["id"], "closed", notes, user,
-            entry_price=entry_price, exit_price=exit_price,
-            quantity=qty, pnl=pnl, pnl_pct=pnl_pct,
-        )
-        if not fb:
-            _send("❌ Failed to write close feedback. Check logs.")
-            return
-        emoji = "🟢" if pnl > 0 else "🔴"
-        direction_str = "BULLISH" if is_bullish else "BEARISH"
-        reply = (
-            f"{emoji} <b>Closed {direction_str} signal <code>{row['id'][:8]}</code></b>\n"
-            f"Entry @ ${entry_price:.2f}, exit @ ${exit_price:.2f}, "
-            f"P&amp;L {pnl:.2f} ({pnl_pct:+.2f}%)"
-        )
-        if notes:
-            reply += f"\n<i>{notes}</i>"
-        _send(reply)
 
     elif cmd in ("/supportme", "/buymeacoffee"):
         _send(
@@ -1496,12 +1263,8 @@ def handle_command(text: str, user: str = "team"):
             "<b>📚 GME Trading Bot — Command Guide</b>\n\n"
             "<b>System Commands:</b>\n"
             "/status — system health, tick count, last agent activity\n"
-            "/standup — agent daily standup (signals, win rates, team ROI)\n"
-            "/signals [N] — list recent signals with short IDs\n"
-            "/executed &lt;id&gt; [@price] [qty] [note] — log that the team acted on a signal\n"
-            "/ignored &lt;id&gt; [reason] — log that the team passed on a signal\n"
-            "/missed &lt;id&gt; [note] — log that the team wanted to act but missed it\n"
-            "/close &lt;id&gt; @&lt;exit_price&gt; [qty] [note] — close a trade, compute P&amp;L\n"
+            "/standup — hypothetical trade win rates + 30d signal accuracy\n"
+            "/signals [N] — recent signals with live TP/SL outcomes\n"
             "/agents — last run time for each agent\n"
             "/ticks — price data received today\n"
             "/freshness — verify agents are reading current data\n"
@@ -1781,12 +1544,8 @@ def _register_commands():
         {"command": "brief",     "description": "Strategy brief — price, direction, agent signals"},
         {"command": "swot",      "description": "SWOT — strengths, weaknesses, opportunities, threats"},
         {"command": "status",    "description": "System heartbeat — ticks, agents, last activity"},
-        {"command": "standup",   "description": "Agent scorecard — signals, win rates, OK %"},
-        {"command": "signals",   "description": "List recent signals with short IDs"},
-        {"command": "executed",  "description": "Log a signal as executed — /executed <id> [note]"},
-        {"command": "ignored",   "description": "Log a signal as ignored — /ignored <id> [reason]"},
-        {"command": "missed",    "description": "Log a signal as missed — /missed <id> [note]"},
-        {"command": "close",     "description": "Close a trade and record P&L — /close <id> @<exit_price> [qty]"},
+        {"command": "standup",   "description": "Paper trade win rates + 30d signal accuracy"},
+        {"command": "signals",   "description": "Recent signals with live TP/SL outcomes"},
         {"command": "agents",    "description": "Last-run timestamp for every agent"},
         {"command": "freshness", "description": "Are agents reading fresh data? (staleness check)"},
         {"command": "calibration","description": "Per-agent confidence calibration table"},

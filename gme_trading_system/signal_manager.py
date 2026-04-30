@@ -56,6 +56,17 @@ class SignalManager:
                 ),
             )
             conn.commit()
+
+            # Auto-open a paper trade for every actionable signal so we get
+            # real win-rate data without manual /executed logging.
+            if entry_price and stop_loss and take_profit:
+                try:
+                    from paper_trader import open_paper_trade
+                    open_paper_trade(conn, alert_id, agent_name, signal_type,
+                                     entry_price, stop_loss, take_profit)
+                except Exception as pt_err:
+                    log.warning(f"[signal_manager] paper trade open failed: {pt_err}")
+
             conn.close()
             log.info(f"Alert logged: {agent_name} | {signal_type} | confidence={confidence:.0%}")
             return alert_id
