@@ -1223,6 +1223,26 @@ def run_learning_debrief():
         write_log("Learner", str(e), "daily_debrief", "error")
 
 
+def run_lesson_producer():
+    """4:35 PM ET — mine signal_scores for lesson candidates. Auto-graduates
+    strong patterns into lessons.jsonl, stages weaker ones for /candidates
+    review. Runs 5 min after the debrief so today's scores have settled."""
+    log.info("[LessonProducer] === Daily lesson generation ===")
+    try:
+        from lesson_producer import produce_lessons
+        summary = produce_lessons()
+        msg = (f"generated={summary['candidates_generated']} "
+               f"auto_graduated={summary['auto_graduated']} "
+               f"staged={summary['staged']} "
+               f"total_lessons={summary['total_lessons']} "
+               f"total_staged={summary['total_staged']}")
+        log.info(f"[LessonProducer] {msg}")
+        write_log("LessonProducer", msg, "lesson_production")
+    except Exception as e:
+        log.error(f"[LessonProducer] Failed: {e}")
+        write_log("LessonProducer", str(e), "lesson_production", "error")
+
+
 def run_weekly_review():
     """Fridays 5:00 PM ET — Boss reviews trailing performance and adapts strategy."""
     log.info("[Learner] === Weekly strategy review ===")
@@ -2201,6 +2221,9 @@ class TradingSystemOrchestrator:
 
         # Learning sessions — agents review their own performance and adapt
         self.scheduler.add_job(run_learning_debrief, CronTrigger(hour=16, minute=30, timezone=ET), id="debrief")
+        # 5-min buffer after debrief — performance_scores has settled before
+        # the producer mines signal_scores for new graduated lessons.
+        self.scheduler.add_job(run_lesson_producer,  CronTrigger(hour=16, minute=35, timezone=ET), id="lesson_producer")
         self.scheduler.add_job(run_weekly_review,    CronTrigger(day_of_week="fri", hour=17, minute=0, timezone=ET), id="weekly_review")
 
         # CTO structural intelligence — PE playbook monitoring and short side research
@@ -2266,6 +2289,7 @@ class TradingSystemOrchestrator:
 ║  📊 STANDUP (agent perf)       11:00 AM & 4:00 PM ET — ROI check ║
 ║  Aggregator                    4:35 PM ET                        ║
 ║  Learner  (daily debrief)      4:30 PM ET — score + adapt        ║
+║  LessonProducer                4:35 PM ET — mine new lessons     ║
 ║  Learner  (weekly review)      Fridays 5:00 PM ET                ║
 ║  CTO      (structural scan)    Sundays 8:00 AM — EDGAR + shorts  ║
 ║  ☕ Support message            Sundays 10:00 AM — coffee nudge    ║

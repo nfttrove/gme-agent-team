@@ -1377,6 +1377,66 @@ def handle_command(text: str, user: str = "team"):
             log.error(f"[tgbot] /calibration failed: {e}")
             _send(f"❌ /calibration failed: {str(e)[:400]}")
 
+    elif cmd == "/candidates":
+        try:
+            from lesson_producer import list_staged_candidates
+            staged = list_staged_candidates()
+            if not staged:
+                _send("📋 <b>Lesson candidates</b>\n\n"
+                      "No staged candidates pending review. "
+                      "Auto-graduated lessons go straight to <code>lessons.jsonl</code>; "
+                      "weaker patterns appear here for /graduate or /reject.")
+                return
+            lines = ["📋 <b>Lesson candidates</b> — staged for review\n"]
+            for c in staged[:15]:
+                pid = c.get("pattern_id", "")
+                outcome = c.get("outcome", "")
+                evidence = c.get("evidence", "?")
+                conf = c.get("confidence", 0)
+                lines.append(
+                    f"<code>{pid[:10]}</code> "
+                    f"(n={evidence}, conf={conf:.2f})\n"
+                    f"  {outcome[:180]}"
+                )
+            lines.append("\n<i>Promote: /graduate &lt;short_id&gt; — Drop: /reject &lt;short_id&gt;</i>")
+            _send("\n".join(lines))
+        except Exception as e:
+            log.error(f"[tgbot] /candidates failed: {e}")
+            _send(f"❌ /candidates failed: {str(e)[:400]}")
+
+    elif cmd == "/graduate":
+        if not args:
+            _send("Usage: <code>/graduate &lt;short_id&gt;</code>\n"
+                  "List staged candidates with /candidates first.")
+            return
+        try:
+            from lesson_producer import graduate_candidate
+            promoted = graduate_candidate(args[0])
+            if promoted is None:
+                _send(f"⚠️ No staged candidate matching <code>{args[0]}</code>. "
+                      "Use /candidates to see pending IDs.")
+                return
+            _send(f"✅ Graduated <code>{promoted['pattern_id']}</code>\n"
+                  f"  {promoted.get('outcome', '')[:200]}")
+        except Exception as e:
+            log.error(f"[tgbot] /graduate failed: {e}")
+            _send(f"❌ /graduate failed: {str(e)[:400]}")
+
+    elif cmd == "/reject":
+        if not args:
+            _send("Usage: <code>/reject &lt;short_id&gt;</code>")
+            return
+        try:
+            from lesson_producer import reject_candidate
+            removed = reject_candidate(args[0])
+            if removed is None:
+                _send(f"⚠️ No staged candidate matching <code>{args[0]}</code>.")
+                return
+            _send(f"🗑 Rejected <code>{removed}</code>")
+        except Exception as e:
+            log.error(f"[tgbot] /reject failed: {e}")
+            _send(f"❌ /reject failed: {str(e)[:400]}")
+
     elif cmd == "/test":
         _send("⏳ Running Telegram handler smoke tests…")
         try:
@@ -1453,7 +1513,10 @@ def handle_command(text: str, user: str = "team"):
             "/trove [TICKERS] — deep-value Trove Score screen (default watchlist if no tickers)\n\n"
             "<b>🧠 Agent Learning:</b>\n"
             "/learn \"<lesson>\" --why \"<reason>\" — teach agents a rule\n"
-            "/lessons [topic] — show lessons agents learned\n\n"
+            "/lessons [topic] — show lessons agents learned\n"
+            "/candidates — staged lesson candidates pending review\n"
+            "/graduate &lt;short_id&gt; — promote a staged candidate to active lesson\n"
+            "/reject &lt;short_id&gt; — drop a staged candidate\n\n"
             "<b>Settings:</b>\n"
             "/frequency [low|medium|high] — notification level\n\n"
             "<b>☕ Support:</b>\n"
@@ -1727,6 +1790,9 @@ def _register_commands():
         {"command": "agents",    "description": "Last-run timestamp for every agent"},
         {"command": "freshness", "description": "Are agents reading fresh data? (staleness check)"},
         {"command": "calibration","description": "Per-agent confidence calibration table"},
+        {"command": "candidates", "description": "Staged lesson candidates pending review"},
+        {"command": "graduate",   "description": "Promote a staged candidate — /graduate <short_id>"},
+        {"command": "reject",     "description": "Drop a staged candidate — /reject <short_id>"},
         {"command": "ticks",     "description": "Price ticks received today"},
         {"command": "force",     "description": "Run an agent on demand — /force valerie|newsie|futurist|…"},
         {"command": "compare",   "description": "Gemma vs DeepSeek side-by-side — /compare <question>"},

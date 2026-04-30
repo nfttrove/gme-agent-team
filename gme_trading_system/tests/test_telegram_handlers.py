@@ -561,6 +561,82 @@ def test_short_id_too_short_rejected(seeded_db, captured_sends):
     assert any("No signal matching" in s for s in captured_sends)
 
 
+def test_candidates_empty(captured_sends, monkeypatch, tmp_path):
+    """No staged candidates → /candidates says so cleanly, doesn't crash."""
+    import lesson_producer as lp
+    cands = tmp_path / "candidates" / "candidates.jsonl"
+    monkeypatch.setattr(lp, "CANDIDATES_PATH", str(cands))
+    telegram_bot.handle_command("/candidates")
+    joined = "\n".join(captured_sends)
+    assert "No staged candidates" in joined
+
+
+def test_candidates_lists_staged(captured_sends, monkeypatch, tmp_path):
+    """A staged candidate shows its short id, n, and outcome."""
+    import lesson_producer as lp
+    cands = tmp_path / "candidates" / "candidates.jsonl"
+    cands.parent.mkdir(parents=True, exist_ok=True)
+    import json
+    cands.write_text(json.dumps({
+        "pattern_id": "directional_bias_TestAgent_test_signal",
+        "outcome": "TestAgent's test_signal directional hits 30% (n=15)",
+        "evidence": 15, "confidence": 0.7, "status": "staged",
+    }) + "\n")
+    monkeypatch.setattr(lp, "CANDIDATES_PATH", str(cands))
+    telegram_bot.handle_command("/candidates")
+    joined = "\n".join(captured_sends)
+    assert "directio" in joined          # short id prefix shown
+    assert "TestAgent" in joined         # outcome surfaced
+    assert "n=15" in joined
+
+
+def test_graduate_promotes_staged_candidate(captured_sends, monkeypatch, tmp_path):
+    """/graduate <short_id> moves a staged candidate to lessons.jsonl."""
+    import lesson_producer as lp, json
+    cands = tmp_path / "candidates" / "candidates.jsonl"
+    lessons = tmp_path / "lessons.jsonl"
+    cands.parent.mkdir(parents=True, exist_ok=True)
+    cands.write_text(json.dumps({
+        "pattern_id": "directional_bias_X_y",
+        "outcome": "X's y signal hits 30%",
+        "evidence": 15, "confidence": 0.7, "status": "staged",
+    }) + "\n")
+    monkeypatch.setattr(lp, "CANDIDATES_PATH", str(cands))
+    monkeypatch.setattr(lp, "LESSONS_PATH", str(lessons))
+    telegram_bot.handle_command("/graduate directio")
+    joined = "\n".join(captured_sends)
+    assert "Graduated" in joined
+    # Verify on disk: lessons.jsonl has the row, candidates.jsonl is empty
+    assert lessons.exists() and "directional_bias_X_y" in lessons.read_text()
+    assert cands.read_text().strip() == ""
+
+
+def test_graduate_no_match_warns(captured_sends, monkeypatch, tmp_path):
+    """A short id that matches nothing → user-friendly warning, no crash."""
+    import lesson_producer as lp
+    cands = tmp_path / "candidates" / "candidates.jsonl"
+    monkeypatch.setattr(lp, "CANDIDATES_PATH", str(cands))
+    telegram_bot.handle_command("/graduate notfound")
+    joined = "\n".join(captured_sends)
+    assert "No staged candidate matching" in joined
+
+
+def test_reject_drops_candidate(captured_sends, monkeypatch, tmp_path):
+    import lesson_producer as lp, json
+    cands = tmp_path / "candidates" / "candidates.jsonl"
+    cands.parent.mkdir(parents=True, exist_ok=True)
+    cands.write_text(json.dumps({
+        "pattern_id": "directional_bias_X_y",
+        "outcome": "drop me", "evidence": 15, "confidence": 0.7,
+        "status": "staged",
+    }) + "\n")
+    monkeypatch.setattr(lp, "CANDIDATES_PATH", str(cands))
+    telegram_bot.handle_command("/reject directio")
+    joined = "\n".join(captured_sends)
+    assert "Rejected" in joined
+    assert cands.read_text().strip() == ""
+
+
 def test_ambiguous_prefix_lists_candidates(seeded_db, captured_sends, monkeypatch):
     """If two signals share the prefix, show both and ask for more chars."""
     # Seed a second signal that collides on the first 6 chars
