@@ -51,12 +51,32 @@ ENABLED = bool(TOKEN and CHAT_ID)
 PAYPAL_URL = "https://www.paypal.com/paypalme/2r0v3"
 
 
+# Owner-only commands: they mutate state, feed the learning loop, change
+# scheduling, or trigger costly background work. Strangers running these
+# would corrupt win-rate ledgers, poison the lesson corpus, or DOS Gemma.
+OWNER_ONLY_COMMANDS = {
+    "/executed", "/ignored", "/missed", "/close",  # win-rate ledger
+    "/learn",                                      # lesson corpus injection
+    "/force",                                      # on-demand cycle trigger
+    "/frequency",                                  # changes alert cadence
+    "/candidates", "/graduate", "/reject",         # lesson lifecycle
+    "/update",                                     # supabase sync
+}
+
+# Reply target for the request currently being handled. Single-threaded
+# poll loop sets this before dispatching a command; _send() reads it so
+# the response goes back to whoever asked. Falls back to CHAT_ID for
+# unsolicited bot output (startup ping, scheduled pushes, etc).
+_active_reply_chat: str | None = None
+
+
 def _send(text: str):
     if not ENABLED:
         return
+    target = _active_reply_chat or CHAT_ID
     try:
         requests.post(f"{BASE_URL}/sendMessage", json={
-            "chat_id": CHAT_ID,
+            "chat_id": target,
             "text": text,
             "parse_mode": "HTML",
         }, timeout=10)
@@ -1590,20 +1610,37 @@ def run_bot():
                 msg = update.get("message", {})
                 text = msg.get("text", "")
                 chat_id = str(msg.get("chat", {}).get("id", ""))
+                if not chat_id:
+                    continue
+                is_owner = (chat_id == CHAT_ID)
+                from_info = msg.get("from") or {}
+                user = (from_info.get("username")
+                        or from_info.get("first_name")
+                        or "guest")
 
-                if chat_id != CHAT_ID:
-                    continue  # ignore messages from other chats
-
-                if text.startswith("/"):
-                    log.info(f"[tgbot] Command: {text}")
-                    from_info = msg.get("from") or {}
-                    user = (from_info.get("username")
-                            or from_info.get("first_name")
-                            or "team")
-                    handle_command(text, user=user)
-                elif text:
-                    log.info(f"[tgbot] Chat: {text[:50]}")
-                    _handle_chat(text)
+                # Route every reply for this request back to its sender.
+                global _active_reply_chat
+                _active_reply_chat = chat_id
+                try:
+                    if text.startswith("/"):
+                        cmd_word = text.split()[0].lower()
+                        log.info(f"[tgbot] Command from {user}@{chat_id}: {text}")
+                        if cmd_word in OWNER_ONLY_COMMANDS and not is_owner:
+                            _send("🔒 Owner-only command.")
+                            continue
+                        handle_command(text, user=user)
+                    elif text:
+                        # Free-form LLM chat is owner-only — every message
+                        # eats local Gemma cycles, so it's a DOS vector if
+                        # opened to strangers.
+                        if not is_owner:
+                            _send("ℹ️ Free chat is owner-only. Try /help "
+                                  "for commands you can run.")
+                            continue
+                        log.info(f"[tgbot] Chat from {user}@{chat_id}: {text[:50]}")
+                        _handle_chat(text)
+                finally:
+                    _active_reply_chat = None
         except Exception as e:
             log.error(f"[tgbot] Poll error: {e}")
             time.sleep(5)
