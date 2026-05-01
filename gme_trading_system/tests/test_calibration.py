@@ -232,7 +232,7 @@ def test_brier_penalises_overconfident_wrong_calls(tmp_path):
     db = _make_db(tmp_path)
     conn = sqlite3.connect(db)
 
-    made = datetime(2026, 4, 23, 10, 0, tzinfo=ET)
+    made = datetime.now(ET).replace(hour=10, minute=0, second=0, microsecond=0)
     # Baseline price at prediction time: $25
     conn.execute(
         "INSERT INTO price_ticks (symbol, close, timestamp) VALUES ('GME', 25.00, ?)",
@@ -271,7 +271,7 @@ def test_write_performance_scores_is_idempotent(tmp_path):
     db = _make_db(tmp_path)
     conn = sqlite3.connect(db)
 
-    made = datetime(2026, 4, 23, 10, 0, tzinfo=ET)
+    made = datetime.now(ET).replace(hour=10, minute=0, second=0, microsecond=0)
     conn.execute(
         "INSERT INTO price_ticks (symbol, close, timestamp) VALUES ('GME', 25.00, ?)",
         (made.isoformat(),),
@@ -311,7 +311,7 @@ def test_perfect_calibration_gives_zero_brier(tmp_path):
     db = _make_db(tmp_path)
     conn = sqlite3.connect(db)
 
-    made = datetime(2026, 4, 23, 10, 0, tzinfo=ET)
+    made = datetime.now(ET).replace(hour=10, minute=0, second=0, microsecond=0)
     conn.execute(
         "INSERT INTO price_ticks (symbol, close, timestamp) VALUES ('GME', 25.00, ?)",
         (made.isoformat(),),
@@ -417,7 +417,7 @@ def test_signal_scorer_detects_sl_first_touch_as_loss(tmp_path):
     """Bullish signal: SL hit before TP → directional_hit=0, sl_hit=1."""
     db = _make_db(tmp_path)
     conn = sqlite3.connect(db)
-    made = datetime(2026, 4, 23, 10, 0, tzinfo=ET)
+    made = datetime.now(ET).replace(hour=10, minute=0, second=0, microsecond=0)
     _insert_signal(conn, sig_id="sig-loss", agent="Pattern", ts=made,
                    entry=25.0, tp=26.0, sl=24.0, conf=0.80)
     conn.execute(
