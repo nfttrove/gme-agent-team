@@ -407,3 +407,88 @@ class TestAlembicIntegration:
         # Check for any migration files
         migrations = [f for f in os.listdir(versions_path) if f.endswith(".py")]
         assert len(migrations) > 0, "No migration files found"
+
+
+class TestAgentVoiceFreshness:
+    """Forwarder must skip stale rows and only send fresh ones (regression
+    against the 2-day-stale Synthesis bug)."""
+
+    def _seed(self, db_path, agent, task_type, ts, content, status="ok"):
+        conn = sqlite3.connect(db_path)
+        conn.execute(
+            "INSERT INTO agent_logs (agent_name, timestamp, task_type, content, status) "
+            "VALUES (?, ?, ?, ?, ?)",
+            (agent, ts, task_type, content, status),
+        )
+        conn.commit()
+        last_id = conn.execute("SELECT last_insert_rowid()").fetchone()[0]
+        conn.close()
+        return last_id
+
+    def test_stale_rows_skipped_fresh_row_sent(self, test_db, monkeypatch):
+        from datetime import datetime, timedelta, timezone
+
+        import agent_voice
+
+        sent_messages = []
+        monkeypatch.setattr(
+            agent_voice.notifier,
+            "_send",
+            lambda msg: (sent_messages.append(msg), True)[1],
+        )
+
+        now = datetime.now(timezone.utc)
+        stale_ts1 = (now - timedelta(days=2)).isoformat()
+        stale_ts2 = (now - timedelta(hours=3)).isoformat()
+        fresh_ts = (now - timedelta(minutes=2)).isoformat()
+
+        s1 = self._seed(test_db, "Synthesis", "synthesis", stale_ts1, "STALE-1")
+        s2 = self._seed(test_db, "Synthesis", "synthesis", stale_ts2, "STALE-2")
+        s3 = self._seed(test_db, "Synthesis", "synthesis", fresh_ts, "FRESH")
+
+        # Pre-seed watermark below s1 so all three are candidates
+        conn = sqlite3.connect(test_db)
+        conn.execute(
+            "CREATE TABLE IF NOT EXISTS voice_watermarks ("
+            "  agent_name TEXT NOT NULL,"
+            "  task_type  TEXT NOT NULL,"
+            "  last_id    INTEGER NOT NULL DEFAULT 0,"
+            "  PRIMARY KEY (agent_name, task_type)"
+            ")"
+        )
+        conn.execute(
+            "INSERT INTO voice_watermarks (agent_name, task_type, last_id) VALUES (?, ?, ?)",
+            ("Synthesis", "synthesis", s1 - 1),
+        )
+        conn.commit()
+        conn.close()
+
+        result = agent_voice.forward_pending(db_path=test_db)
+
+        assert result["Synthesis"] == 1, "exactly one fresh row should be sent"
+        assert len(sent_messages) == 1
+        assert "FRESH" in sent_messages[0]
+        assert "STALE-1" not in sent_messages[0] and "STALE-2" not in sent_messages[0]
+
+        # Watermark must have advanced past all three rows
+        conn = sqlite3.connect(test_db)
+        wm = conn.execute(
+            "SELECT last_id FROM voice_watermarks "
+            "WHERE agent_name='Synthesis' AND task_type='synthesis'"
+        ).fetchone()[0]
+        conn.close()
+        assert wm == s3, f"watermark should advance to fresh row id {s3}, got {wm}"
+
+    def test_is_stale_threshold(self):
+        from datetime import datetime, timedelta, timezone
+
+        from agent_voice import _is_stale
+
+        now = datetime.now(timezone.utc)
+        assert _is_stale((now - timedelta(minutes=45)).isoformat(), 30) is True
+        assert _is_stale((now - timedelta(minutes=5)).isoformat(), 30) is False
+        # Naive timestamp (treated as UTC)
+        assert _is_stale((now - timedelta(minutes=5)).replace(tzinfo=None).isoformat(), 30) is False
+        # Garbage / empty → stale
+        assert _is_stale("", 30) is True
+        assert _is_stale("not-a-timestamp", 30) is True

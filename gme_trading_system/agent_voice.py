@@ -18,6 +18,7 @@ import logging
 import os
 import sqlite3
 from dataclasses import dataclass
+from datetime import datetime, timedelta, timezone
 
 import notifier
 
@@ -87,6 +88,28 @@ def _set_watermark(conn: sqlite3.Connection, v: Voice, last_id: int) -> None:
     )
 
 
+def _is_stale(ts: str, max_age_minutes: int) -> bool:
+    """True if ts is older than max_age_minutes. Returns True on parse
+    failure to err on the side of skipping (better to drop a row than
+    forward stale content as if current).
+
+    `ts` is whatever write_log persisted — currently ET ISO 8601 with
+    offset (e.g. '2026-05-01T10:00:06-04:00'). datetime.fromisoformat
+    handles tz-aware strings; SQLite default 'YYYY-MM-DD HH:MM:SS' (no tz)
+    is also accepted, treated as UTC.
+    """
+    if not ts:
+        return True
+    try:
+        normalized = ts.replace(" ", "T", 1) if (len(ts) > 10 and ts[10] == " ") else ts
+        dt = datetime.fromisoformat(normalized)
+        if dt.tzinfo is None:
+            dt = dt.replace(tzinfo=timezone.utc)
+        return (datetime.now(timezone.utc) - dt) > timedelta(minutes=max_age_minutes)
+    except Exception:
+        return True
+
+
 def _format(v: Voice, content: str, ts: str) -> str:
     # Strip HTML-special chars that break Telegram parse_mode=HTML
     safe = (content or "").replace("<", "&lt;").replace(">", "&gt;").strip()
@@ -104,8 +127,22 @@ def _format(v: Voice, content: str, ts: str) -> str:
 
 
 def forward_pending(db_path: str = DB_PATH) -> dict[str, int]:
-    """Forward any unseen agent outputs to Telegram. Returns {agent: count_sent}."""
+    """Forward any unseen agent outputs to Telegram. Returns {agent: count_sent}.
+
+    Stale-row defense: if a row's timestamp is older than
+    AGENT_VOICE_MAX_STALENESS_MIN (default 30) minutes, it is silently
+    skipped and the watermark is advanced past it. This keeps the team
+    from being shown 2-day-old "current" briefs after the forwarder gets
+    behind a backlog (the watermark drains at max_per_run/tick, which
+    matches the agent's own write rate, so a backlog never catches up
+    on its own).
+    """
     sent: dict[str, int] = {}
+    stale_cutoff_min = int(os.getenv("AGENT_VOICE_MAX_STALENESS_MIN", "30"))
+    # Big enough to plow through multi-day backlogs in a few ticks; bounded
+    # so a single tick can't stall on huge result sets.
+    QUERY_LIMIT = 500
+
     conn = sqlite3.connect(db_path)
     try:
         _ensure_schema(conn)
@@ -115,28 +152,36 @@ def forward_pending(db_path: str = DB_PATH) -> dict[str, int]:
                 "SELECT id, timestamp, content FROM agent_logs "
                 "WHERE agent_name=? AND task_type=? AND status='ok' AND id > ? "
                 "ORDER BY id ASC LIMIT ?",
-                (v.agent_name, v.task_type, watermark, v.max_per_run),
+                (v.agent_name, v.task_type, watermark, QUERY_LIMIT),
             ).fetchall()
 
-            count = 0
+            sent_count = 0
+            skipped_count = 0
             new_watermark = watermark
             for row_id, ts, content in rows:
+                if _is_stale(ts or "", stale_cutoff_min):
+                    new_watermark = row_id
+                    skipped_count += 1
+                    continue
+                if sent_count >= v.max_per_run:
+                    break
                 msg = _format(v, content or "", ts or "")
                 ok = notifier._send(msg)
                 if not ok:
                     log.warning(f"[voice] send failed for {v.agent_name} id={row_id}; "
-                                "not advancing watermark")
-                    break  # leave remaining unsent so next run retries
-                count += 1
+                                "not advancing watermark past it")
+                    break  # leave this and remaining rows for next tick
+                sent_count += 1
                 new_watermark = row_id
 
-            # Skip over any rows we couldn't send (above). On success, jump past
-            # all rows we did send. If there were rows but none sent, watermark
-            # stays put and we'll retry next tick.
+            if skipped_count:
+                log.info(f"[voice] {v.agent_name} skipped {skipped_count} stale row(s) "
+                         f"(>{stale_cutoff_min} min old)")
+
             if new_watermark != watermark:
                 _set_watermark(conn, v, new_watermark)
                 conn.commit()
-            sent[v.agent_name] = count
+            sent[v.agent_name] = sent_count
     finally:
         conn.close()
     return sent
