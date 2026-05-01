@@ -61,6 +61,14 @@ OWNER_ONLY_COMMANDS = {
     "/frequency",                                  # changes alert cadence
     "/candidates", "/graduate", "/reject",         # lesson lifecycle
     "/update",                                     # supabase sync
+    # LLM/external-API eaters — each call costs 20s+ of local Gemma or a
+    # paid-tier API hit. A bored stranger holding the key down DOSes the
+    # actual signal agents. Open these later behind rate limits if demand.
+    "/swot",                                       # ~20s Gemma narrative
+    "/compare",                                    # Gemma + DeepSeek (~60s)
+    "/brief",                                      # CrewAI chain w/ LLM
+    "/trove",                                      # Finnhub / SEC fan-out
+    "/lessons",                                    # subprocess + LLM recall
 }
 
 # Reply target for the request currently being handled. Single-threaded
@@ -1278,6 +1286,23 @@ def handle_command(text: str, user: str = "team"):
             _send(f"❌ Test runner error: {str(e)[:200]}")
             log.error(f"[tgbot] /test failed: {e}")
 
+    elif cmd == "/start":
+        _send(
+            "👋 <b>Welcome to the GME Trading Bot</b>\n\n"
+            "I'm a 9-agent analysis system tracking GME — pattern breakouts "
+            "(intraday + daily), trend shifts, news sentiment, geopolitical "
+            "risk, and price predictions. Each signal carries a calibrated "
+            "confidence score backed by live paper-trade win rates.\n\n"
+            "<b>Try these:</b>\n"
+            "/signals — recent alerts with TP/SL outcomes\n"
+            "/standup — current win rates and 30d accuracy\n"
+            "/status — system heartbeat\n"
+            "/help — full command list\n\n"
+            "Push alerts arrive in the public channel. Search for the "
+            "channel link or ask the owner to share it.\n\n"
+            "<i>Signals, not advice. Trade your own thesis.</i>"
+        )
+
     elif cmd == "/help":
         _send(
             "<b>📚 GME Trading Bot — Command Guide</b>\n\n"
@@ -1561,6 +1586,7 @@ def _register_commands():
     if not ENABLED:
         return
     commands = [
+        {"command": "start",     "description": "Welcome + quick orientation"},
         {"command": "brief",     "description": "Strategy brief — price, direction, agent signals"},
         {"command": "swot",      "description": "SWOT — strengths, weaknesses, opportunities, threats"},
         {"command": "status",    "description": "System heartbeat — ticks, agents, last activity"},

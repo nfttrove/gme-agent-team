@@ -58,12 +58,18 @@ AGENT_EMOJI = {
 
 _ENABLED = bool(TELEGRAM_TOKEN and TELEGRAM_CHAT_ID)
 
+# Appended to every outbound push so the broadcast carries a minimum-effort
+# disclaimer once the channel is public. One line keeps the message dense.
+_DISCLAIMER_FOOTER = "\n\n<i>Signals, not advice. Trade your own thesis.</i>"
+
 
 def _send(text: str, parse_mode: str = "HTML") -> bool:
     """Send a Telegram message. Returns True on success."""
     if not _ENABLED:
         log.info(f"[notify] Telegram not configured. Message would have been:\n{text}")
         return False
+    if parse_mode == "HTML" and _DISCLAIMER_FOOTER not in text:
+        text = text + _DISCLAIMER_FOOTER
     breaker = get_breaker("telegram")
     try:
         resp = breaker.call(
