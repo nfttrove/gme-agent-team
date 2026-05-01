@@ -36,6 +36,7 @@ log = logging.getLogger(__name__)
 
 TELEGRAM_TOKEN   = os.getenv("TELEGRAM_BOT_TOKEN", "")
 TELEGRAM_CHAT_ID = os.getenv("TELEGRAM_CHAT_ID", "")
+TELEGRAM_OWNER_CHAT_ID = os.getenv("TELEGRAM_OWNER_CHAT_ID", "")
 
 _BASE_URL = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}"
 
@@ -64,30 +65,33 @@ _DISCLAIMER_FOOTER = "\n\n<i>Signals, not advice. Trade your own thesis.</i>"
 
 
 def _send(text: str, parse_mode: str = "HTML") -> bool:
-    """Send a Telegram message. Returns True on success."""
+    """Send a Telegram message to both public channel and owner DM. Returns True if at least one succeeds."""
     if not _ENABLED:
         log.info(f"[notify] Telegram not configured. Message would have been:\n{text}")
         return False
     if parse_mode == "HTML" and _DISCLAIMER_FOOTER not in text:
         text = text + _DISCLAIMER_FOOTER
     breaker = get_breaker("telegram")
-    try:
-        resp = breaker.call(
-            requests.post,
-            f"{_BASE_URL}/sendMessage",
-            json={"chat_id": TELEGRAM_CHAT_ID, "text": text, "parse_mode": parse_mode},
-            timeout=10,
-        )
-        if resp.status_code == 200:
-            return True
-        log.warning(f"[notify] Telegram error {resp.status_code}: {resp.text[:200]}")
-        return False
-    except CircuitOpenError:
-        log.warning(f"[notify] Telegram circuit open — skipping notification")
-        return False
-    except requests.RequestException as e:
-        log.error(f"[notify] Telegram send failed: {e}")
-        return False
+    success = False
+    # Send to both public channel and owner DM
+    chat_ids = [cid for cid in [TELEGRAM_CHAT_ID, TELEGRAM_OWNER_CHAT_ID] if cid]
+    for chat_id in chat_ids:
+        try:
+            resp = breaker.call(
+                requests.post,
+                f"{_BASE_URL}/sendMessage",
+                json={"chat_id": chat_id, "text": text, "parse_mode": parse_mode},
+                timeout=10,
+            )
+            if resp.status_code == 200:
+                success = True
+            else:
+                log.warning(f"[notify] Telegram error {resp.status_code} to {chat_id}: {resp.text[:200]}")
+        except CircuitOpenError:
+            log.warning(f"[notify] Telegram circuit open — skipping notification to {chat_id}")
+        except requests.RequestException as e:
+            log.error(f"[notify] Telegram send failed to {chat_id}: {e}")
+    return success
 
 
 # ── Alert types ────────────────────────────────────────────────────────────────

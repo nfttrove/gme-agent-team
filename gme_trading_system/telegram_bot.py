@@ -43,6 +43,7 @@ log = logging.getLogger(__name__)
 
 TOKEN    = os.getenv("TELEGRAM_BOT_TOKEN", "")
 CHAT_ID  = os.getenv("TELEGRAM_CHAT_ID", "")
+OWNER_CHAT_ID = os.getenv("TELEGRAM_OWNER_CHAT_ID", "")
 DB_PATH  = os.path.join(os.path.dirname(__file__), "agent_memory.db")
 BASE_URL = f"https://api.telegram.org/bot{TOKEN}"
 
@@ -1638,7 +1639,7 @@ def run_bot():
                 chat_id = str(msg.get("chat", {}).get("id", ""))
                 if not chat_id:
                     continue
-                is_owner = (chat_id == CHAT_ID)
+                is_owner = (chat_id == OWNER_CHAT_ID) if OWNER_CHAT_ID else (chat_id == CHAT_ID)
                 from_info = msg.get("from") or {}
                 user = (from_info.get("username")
                         or from_info.get("first_name")
