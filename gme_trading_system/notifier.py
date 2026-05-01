@@ -39,6 +39,22 @@ TELEGRAM_CHAT_ID = os.getenv("TELEGRAM_CHAT_ID", "")
 
 _BASE_URL = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}"
 
+# Per-agent emojis so two LOW-severity alerts from different agents don't
+# look identical at a glance. Voice forwarder uses these too (agent_voice.py).
+AGENT_EMOJI = {
+    "Valerie":   "✅",  # data validation
+    "Chatty":    "💬",  # commentary
+    "Newsie":    "📰",  # news sentiment
+    "Pattern":   "🎯",  # chart patterns
+    "Trendy":    "📈",  # daily trend
+    "Futurist":  "🔮",  # price prediction
+    "GeoRisk":   "🌍",  # geopolitical
+    "Synthesis": "🧠",  # cross-agent consensus
+    "Boss":      "🧭",  # daily mission briefing
+    "CTO":       "🛡️",  # structural / Trove score
+    "Calibrator":"📐",  # confidence calibration
+}
+
 _ENABLED = bool(TELEGRAM_TOKEN and TELEGRAM_CHAT_ID)
 
 
@@ -294,7 +310,9 @@ def notify_signal_alert(agent_name: str, signal_type: str, confidence: float,
         severity = "🟢 LOW"
         emoji = "📌"
 
-    msg = f"{emoji} <b>SIGNAL ALERT</b> — {agent_name}\n\n"
+    agent_icon = AGENT_EMOJI.get(agent_name, "")
+    name_display = f"{agent_icon} {agent_name}".strip()
+    msg = f"{emoji} <b>SIGNAL ALERT</b> — {name_display}\n\n"
     msg += f"<b>{signal_type.upper().replace('_', ' ')}</b>\n"
     if cal_meta.get("cold_start") or abs(stated_conf - confidence) < 0.005:
         msg += f"Confidence: <b>{confidence:.0%}</b> {severity}\n\n"
