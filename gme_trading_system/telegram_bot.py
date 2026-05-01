@@ -35,6 +35,8 @@ from zoneinfo import ZoneInfo
 import requests
 from dotenv import load_dotenv
 
+from notifier import _send as _broadcast
+
 load_dotenv()
 
 ET = ZoneInfo("America/New_York")
@@ -72,17 +74,30 @@ OWNER_ONLY_COMMANDS = {
     "/lessons",                                    # subprocess + LLM recall
 }
 
-# Reply target for the request currently being handled. Single-threaded
-# poll loop sets this before dispatching a command; _send() reads it so
-# the response goes back to whoever asked. Falls back to CHAT_ID for
-# unsolicited bot output (startup ping, scheduled pushes, etc).
+# Reply target for the request currently being handled. The single-threaded
+# poll loop sets this before dispatching each command so _reply() routes the
+# response back to whoever asked. Unsolicited output (status pings, errors
+# fired outside a request context) must use _broadcast() instead — that goes
+# through notifier._send to fan out to channel + owner DM and pick up the
+# disclaimer footer + circuit breaker.
 _active_reply_chat: str | None = None
 
 
-def _send(text: str):
+def _reply(text: str):
+    """Reply to the user who issued the current command.
+
+    Must be called inside a request handler (where _active_reply_chat is set).
+    If called without a request context, logs a warning and falls back to the
+    public channel — that fallback is a safety net, not a feature; the warning
+    is the signal to switch the call site to _broadcast()."""
     if not ENABLED:
         return
-    target = _active_reply_chat or CHAT_ID
+    target = _active_reply_chat
+    if target is None:
+        log.warning("[tgbot] _reply() called outside request context — "
+                    "falling back to broadcast channel; use _broadcast() "
+                    "for unsolicited output")
+        target = CHAT_ID
     try:
         requests.post(f"{BASE_URL}/sendMessage", json={
             "chat_id": target,
@@ -90,7 +105,7 @@ def _send(text: str):
             "parse_mode": "HTML",
         }, timeout=10)
     except Exception as e:
-        log.warning(f"[tgbot] send failed: {e}")
+        log.warning(f"[tgbot] reply failed: {e}")
 
 
 def _get_updates(offset: int) -> list:
@@ -462,7 +477,7 @@ def handle_command(text: str, user: str = "team"):
     args = text.strip().split()[1:] if len(text.strip().split()) > 1 else []
 
     if cmd == "/update":
-        _send("⏳ Running system refresh — agents updating...")
+        _reply("⏳ Running system refresh — agents updating...")
         try:
             import sys
             sys.path.insert(0, os.path.dirname(__file__))
@@ -477,7 +492,7 @@ def handle_command(text: str, user: str = "team"):
             msg_lines.append(f"<b>News Sentiment:</b>\n{agent_results.get('news', 'N/A')[:200]}\n")
             msg_lines.append(f"<b>Structural Intel (CTO):</b>\n{agent_results.get('cto', 'N/A')[:200]}\n")
 
-            _send("\n".join(msg_lines))
+            _reply("\n".join(msg_lines))
 
             # Also sync Supabase
             try:
@@ -485,21 +500,21 @@ def handle_command(text: str, user: str = "team"):
                 client = _get_client()
                 state = _load_state()
                 state = sync_once(client, state)
-                _send("✅ <b>Supabase sync complete.</b>")
+                _reply("✅ <b>Supabase sync complete.</b>")
                 log.info("[tgbot] Manual /update with agent refresh triggered")
             except Exception as e:
                 log.error(f"[tgbot] Supabase sync failed: {e}")
-                _send(f"⚠️ Sync warning: {str(e)[:100]}")
+                _reply(f"⚠️ Sync warning: {str(e)[:100]}")
 
         except Exception as e:
-            _send(f"❌ Refresh failed: {str(e)[:200]}")
+            _reply(f"❌ Refresh failed: {str(e)[:200]}")
             log.error(f"[tgbot] Update command failed: {e}")
 
     elif cmd == "/status":
         tick_count = _db_scalar("SELECT COUNT(*) FROM price_ticks WHERE date(timestamp)=date('now')")
         last_log   = _db_scalar("SELECT agent_name || ': ' || task_type FROM agent_logs ORDER BY timestamp DESC LIMIT 1")
         freq       = _get_frequency()
-        _send(
+        _reply(
             f"<b>GME System Status</b>\n"
             f"Ticks today: {tick_count or 0}\n"
             f"Notifications: {freq}\n"
@@ -520,7 +535,7 @@ def handle_command(text: str, user: str = "team"):
             conn.close()
             if row:
                 last_ts = row[1][:16].replace("T", " ")
-                _send(
+                _reply(
                     f"<b>GME Tick Data</b>\n"
                     f"Latest price: <b>${row[0]:.2f}</b>\n"
                     f"Last tick: {last_ts} UTC\n"
@@ -528,9 +543,9 @@ def handle_command(text: str, user: str = "team"):
                     f"Total in DB: {total}"
                 )
             else:
-                _send("No price ticks in database yet.")
+                _reply("No price ticks in database yet.")
         except Exception as e:
-            _send(f"Ticks error: {e}")
+            _reply(f"Ticks error: {e}")
 
     elif cmd == "/freshness":
         try:
@@ -546,9 +561,9 @@ def handle_command(text: str, user: str = "team"):
             verdict = "⚠️ Stale data — agent narratives may be wrong." if any_bad else "All green — safe to trust agent output."
             lines.append("")
             lines.append(f"<b>{verdict}</b>")
-            _send("\n".join(lines))
+            _reply("\n".join(lines))
         except Exception as e:
-            _send(f"Freshness error: {e}")
+            _reply(f"Freshness error: {e}")
 
     elif cmd == "/agents":
         try:
@@ -562,16 +577,16 @@ def handle_command(text: str, user: str = "team"):
             """).fetchall()
             conn.close()
             if not rows:
-                _send("No agent logs yet.")
+                _reply("No agent logs yet.")
                 return
             lines = ["<b>Agent Last Activity</b>"]
             for name, task, status, ts in rows:
                 icon = "✅" if status == "ok" else "❌"
                 ts_short = ts[:16] if ts else "?"
                 lines.append(f"{icon} <b>{name}</b> [{task}] {ts_short}")
-            _send("\n".join(lines))
+            _reply("\n".join(lines))
         except Exception as e:
-            _send(f"Agent log error: {e}")
+            _reply(f"Agent log error: {e}")
 
     elif cmd == "/standup":
         try:
@@ -671,9 +686,9 @@ def handle_command(text: str, user: str = "team"):
                     icon = "✅" if ok == runs else "⚠️"
                     lines.append(f"  {icon} <b>{name}</b>: {runs} runs ({ok} ok)")
 
-            _send("\n".join(lines))
+            _reply("\n".join(lines))
         except Exception as e:
-            _send(f"Standup error: {e}")
+            _reply(f"Standup error: {e}")
             log.error(f"[tgbot] /standup failed: {e}")
 
     elif cmd == "/signals":
@@ -692,7 +707,7 @@ def handle_command(text: str, user: str = "team"):
             ).fetchone()
             if not has_table:
                 conn.close()
-                _send("No signal_alerts table yet — run a signal cycle first.")
+                _reply("No signal_alerts table yet — run a signal cycle first.")
                 return
             rows = conn.execute(
                 f"""
@@ -707,7 +722,7 @@ def handle_command(text: str, user: str = "team"):
             ).fetchall()
             conn.close()
             if not rows:
-                _send("No signals in the log yet.")
+                _reply("No signals in the log yet.")
                 return
             lines = [f"<b>📋 RECENT SIGNALS (last {len(rows)})</b>\n"]
             for r in rows:
@@ -734,13 +749,13 @@ def handle_command(text: str, user: str = "team"):
                     f"conf={conf_pct}% · ${entry_v:.2f} → TP ${tp_v:.2f} / "
                     f"SL ${sl_v:.2f}  <i>{time_str}</i>{result_tag}"
                 )
-            _send("\n".join(lines))
+            _reply("\n".join(lines))
         except Exception as e:
-            _send(f"Signals error: {str(e)[:200]}")
+            _reply(f"Signals error: {str(e)[:200]}")
             log.error(f"[tgbot] /signals failed: {e}")
 
     elif cmd in ("/executed", "/ignored", "/missed", "/close"):
-        _send(
+        _reply(
             "ℹ️ Manual signal logging is retired.\n\n"
             "Every signal now opens a hypothetical paper trade automatically. "
             "Check <b>/signals</b> for live TP/SL outcomes, or <b>/standup</b> "
@@ -748,7 +763,7 @@ def handle_command(text: str, user: str = "team"):
         )
 
     elif cmd in ("/supportme", "/buymeacoffee"):
-        _send(
+        _reply(
             "☕ <b>Support the team</b>\n\n"
             "If this bot has been useful, a coffee keeps it brewing:\n"
             f"👉 <a href=\"{PAYPAL_URL}\">{PAYPAL_URL}</a>\n\n"
@@ -756,7 +771,7 @@ def handle_command(text: str, user: str = "team"):
         )
 
     elif cmd == "/brief":
-        _send("⏳ Generating strategy brief — takes ~30 seconds...")
+        _reply("⏳ Generating strategy brief — takes ~30 seconds...")
         try:
             import sys
             sys.path.insert(0, os.path.dirname(__file__))
@@ -822,9 +837,9 @@ def handle_command(text: str, user: str = "team"):
             # Safety net: enforce correct direction + verified ranges
             result_str = enforce_direction(str(result), fact)
             result_str = enforce_levels(result_str, fact)
-            _send(f"<b>📋 STRATEGY BRIEF</b>\n\n{result_str[:3000]}")
+            _reply(f"<b>📋 STRATEGY BRIEF</b>\n\n{result_str[:3000]}")
         except Exception as e:
-            _send(f"Brief failed: {e}")
+            _reply(f"Brief failed: {e}")
 
     elif cmd == "/frequency":
         levels = {"low", "medium", "high"}
@@ -836,10 +851,10 @@ def handle_command(text: str, user: str = "team"):
                 "medium": "Trades + daily summary",
                 "high":   "Every agent decision + trades + summary",
             }
-            _send(f"Notification frequency set to <b>{level}</b>.\n{descriptions[level]}")
+            _reply(f"Notification frequency set to <b>{level}</b>.\n{descriptions[level]}")
         else:
             current = _get_frequency()
-            _send(
+            _reply(
                 f"Current frequency: <b>{current}</b>\n\n"
                 f"Change with:\n"
                 f"/frequency low — daily summary only\n"
@@ -857,7 +872,7 @@ def handle_command(text: str, user: str = "team"):
         try:
             full_text = text.strip()
             if "--why" not in full_text:
-                _send("❌ Usage: /learn \"<lesson>\" --why \"<reason>\"\nExample: /learn \"High IV = premium decay\" --why \"IV rank > 70% = better theta\"")
+                _reply("❌ Usage: /learn \"<lesson>\" --why \"<reason>\"\nExample: /learn \"High IV = premium decay\" --why \"IV rank > 70% = better theta\"")
                 return
 
             parts = full_text.split("--why", 1)
@@ -865,7 +880,7 @@ def handle_command(text: str, user: str = "team"):
             why = parts[1].strip().strip('"\'') if len(parts) > 1 else ""
 
             if not claim or not why:
-                _send("❌ Both claim and reason required.")
+                _reply("❌ Both claim and reason required.")
                 return
 
             # Run learn.py
@@ -875,18 +890,18 @@ def handle_command(text: str, user: str = "team"):
             )
 
             if result.returncode == 0:
-                _send(f"✅ <b>Lesson graduated!</b>\n\n<i>{claim}</i>\n\nWhy: {why}")
+                _reply(f"✅ <b>Lesson graduated!</b>\n\n<i>{claim}</i>\n\nWhy: {why}")
                 log.info(f"[tgbot] Lesson learned: {claim}")
             else:
-                _send(f"⚠️ Learn failed: {result.stderr[:200]}")
+                _reply(f"⚠️ Learn failed: {result.stderr[:200]}")
         except Exception as e:
-            _send(f"❌ Error: {str(e)[:200]}")
+            _reply(f"❌ Error: {str(e)[:200]}")
             log.error(f"[tgbot] /learn failed: {e}")
 
     elif cmd == "/trove":
         tickers = [a.strip("'\"/").upper() for a in args if a.strip("'\"/")] if args else None
         label   = " ".join(tickers) if tickers else "default watchlist"
-        _send(f"⏳ Running Trove Score on <b>{label}</b>…")
+        _reply(f"⏳ Running Trove Score on <b>{label}</b>…")
         try:
             import sys, os as _os
             sys.path.insert(0, _os.path.dirname(__file__))
@@ -894,7 +909,7 @@ def handle_command(text: str, user: str = "team"):
             ticker_list = tickers if tickers else DEFAULT_WATCHLIST
             results = run_screen(ticker_list, max_tickers=20)
             if not results:
-                _send("❌ No data returned — check ticker symbols.")
+                _reply("❌ No data returned — check ticker symbols.")
             else:
                 lines = ["<b>📊 Trove Score Rankings</b>\n"]
                 for r in results:
@@ -905,9 +920,9 @@ def handle_command(text: str, user: str = "team"):
                         f"NetCash {r['net_cash_pct']}%  AltZ {r['altman_z']}"
                     )
                 lines.append("\n<i>A=Valuation · B=Capital · C=Quality</i>")
-                _send("\n".join(lines))
+                _reply("\n".join(lines))
         except Exception as e:
-            _send(f"❌ Trove error: {str(e)[:200]}")
+            _reply(f"❌ Trove error: {str(e)[:200]}")
             log.error(f"[tgbot] /trove failed: {e}")
 
     elif cmd == "/lessons":
@@ -925,11 +940,11 @@ def handle_command(text: str, user: str = "team"):
             )
 
             if result.returncode == 0 and result.stdout:
-                _send(f"<b>📚 Lessons for: {query}</b>\n\n{result.stdout[:2000]}")
+                _reply(f"<b>📚 Lessons for: {query}</b>\n\n{result.stdout[:2000]}")
             else:
-                _send(f"No lessons found for: {query}\n\nTeach one with: /learn \"<lesson>\" --why \"<reason>\"")
+                _reply(f"No lessons found for: {query}\n\nTeach one with: /learn \"<lesson>\" --why \"<reason>\"")
         except Exception as e:
-            _send(f"❌ Recall error: {str(e)[:200]}")
+            _reply(f"❌ Recall error: {str(e)[:200]}")
             log.error(f"[tgbot] /lessons failed: {e}")
 
     elif cmd == "/force":
@@ -947,7 +962,7 @@ def handle_command(text: str, user: str = "team"):
         }
         if not args or args[0].lower() not in agent_map:
             names = ", ".join(sorted(agent_map))
-            _send(
+            _reply(
                 "<b>Force an agent cycle</b>\n\n"
                 f"Usage: /force &lt;agent&gt;\nAgents: {names}\n\n"
                 "Runs the agent once on demand. Takes 10–60s depending on LLM."
@@ -973,7 +988,7 @@ def handle_command(text: str, user: str = "team"):
             except Exception:
                 pass
 
-            _send(f"⏳ Forcing {label}…")
+            _reply(f"⏳ Forcing {label}…")
             try:
                 import orchestrator
                 func = getattr(orchestrator, func_name)
@@ -1007,15 +1022,15 @@ def handle_command(text: str, user: str = "team"):
                         lines.append("Previous: never (first run on record)")
                     lines.append("")
                     lines.append(f"<i>{content[:1400]}</i>")
-                    _send("\n".join(lines))
+                    _reply("\n".join(lines))
                 else:
-                    _send(f"✅ {label} ran — no new log row (check /status)")
+                    _reply(f"✅ {label} ran — no new log row (check /status)")
             except Exception as e:
                 log.error(f"[tgbot] /force {key} failed: {e}")
-                _send(f"❌ /force {key} failed: {str(e)[:400]}")
+                _reply(f"❌ /force {key} failed: {str(e)[:400]}")
 
     elif cmd == "/swot":
-        _send("⏳ Building SWOT — aggregating agent intel (~20s)…")
+        _reply("⏳ Building SWOT — aggregating agent intel (~20s)…")
         try:
             from market_state import get_market_fact
             import requests as _req
@@ -1129,10 +1144,10 @@ def handle_command(text: str, user: str = "team"):
                 f"<b>📊 GME SWOT</b>  ${price:.2f} ({pct:+.2f}%)\n"
                 f"<i>{fact.get('timestamp','')[:19].replace('T',' ')}</i>\n\n"
             )
-            _send(header + swot[:3500])
+            _reply(header + swot[:3500])
         except Exception as e:
             log.error(f"[tgbot] /swot failed: {e}")
-            _send(f"❌ /swot failed: {str(e)[:400]}")
+            _reply(f"❌ /swot failed: {str(e)[:400]}")
 
     elif cmd == "/calibration":
         try:
@@ -1168,17 +1183,17 @@ def handle_command(text: str, user: str = "team"):
                 f"30-day lookback. Floor means stated conf is halved; "
                 f"ceiling means it's boosted 1.5×.</i>"
             )
-            _send(msg)
+            _reply(msg)
         except Exception as e:
             log.error(f"[tgbot] /calibration failed: {e}")
-            _send(f"❌ /calibration failed: {str(e)[:400]}")
+            _reply(f"❌ /calibration failed: {str(e)[:400]}")
 
     elif cmd == "/candidates":
         try:
             from lesson_producer import list_staged_candidates
             staged = list_staged_candidates()
             if not staged:
-                _send("📋 <b>Lesson candidates</b>\n\n"
+                _reply("📋 <b>Lesson candidates</b>\n\n"
                       "No staged candidates pending review. "
                       "Auto-graduated lessons go straight to <code>lessons.jsonl</code>; "
                       "weaker patterns appear here for /graduate or /reject.")
@@ -1195,46 +1210,46 @@ def handle_command(text: str, user: str = "team"):
                     f"  {outcome[:180]}"
                 )
             lines.append("\n<i>Promote: /graduate &lt;short_id&gt; — Drop: /reject &lt;short_id&gt;</i>")
-            _send("\n".join(lines))
+            _reply("\n".join(lines))
         except Exception as e:
             log.error(f"[tgbot] /candidates failed: {e}")
-            _send(f"❌ /candidates failed: {str(e)[:400]}")
+            _reply(f"❌ /candidates failed: {str(e)[:400]}")
 
     elif cmd == "/graduate":
         if not args:
-            _send("Usage: <code>/graduate &lt;short_id&gt;</code>\n"
+            _reply("Usage: <code>/graduate &lt;short_id&gt;</code>\n"
                   "List staged candidates with /candidates first.")
             return
         try:
             from lesson_producer import graduate_candidate
             promoted = graduate_candidate(args[0])
             if promoted is None:
-                _send(f"⚠️ No staged candidate matching <code>{args[0]}</code>. "
+                _reply(f"⚠️ No staged candidate matching <code>{args[0]}</code>. "
                       "Use /candidates to see pending IDs.")
                 return
-            _send(f"✅ Graduated <code>{promoted['pattern_id']}</code>\n"
+            _reply(f"✅ Graduated <code>{promoted['pattern_id']}</code>\n"
                   f"  {promoted.get('outcome', '')[:200]}")
         except Exception as e:
             log.error(f"[tgbot] /graduate failed: {e}")
-            _send(f"❌ /graduate failed: {str(e)[:400]}")
+            _reply(f"❌ /graduate failed: {str(e)[:400]}")
 
     elif cmd == "/reject":
         if not args:
-            _send("Usage: <code>/reject &lt;short_id&gt;</code>")
+            _reply("Usage: <code>/reject &lt;short_id&gt;</code>")
             return
         try:
             from lesson_producer import reject_candidate
             removed = reject_candidate(args[0])
             if removed is None:
-                _send(f"⚠️ No staged candidate matching <code>{args[0]}</code>.")
+                _reply(f"⚠️ No staged candidate matching <code>{args[0]}</code>.")
                 return
-            _send(f"🗑 Rejected <code>{removed}</code>")
+            _reply(f"🗑 Rejected <code>{removed}</code>")
         except Exception as e:
             log.error(f"[tgbot] /reject failed: {e}")
-            _send(f"❌ /reject failed: {str(e)[:400]}")
+            _reply(f"❌ /reject failed: {str(e)[:400]}")
 
     elif cmd == "/test":
-        _send("⏳ Running Telegram handler smoke tests…")
+        _reply("⏳ Running Telegram handler smoke tests…")
         try:
             import subprocess, sys
             import os as os_module
@@ -1260,7 +1275,7 @@ def handle_command(text: str, user: str = "team"):
                 failed = int(match.group(1)) if match else 0
 
                 if failed == 0 and passed > 0:
-                    _send(
+                    _reply(
                         f"✅ <b>ALL COMMAND TESTS PASSED</b>\n\n"
                         f"Passed: {passed}\n"
                         f"Failed: 0\n"
@@ -1272,23 +1287,23 @@ def handle_command(text: str, user: str = "team"):
                         "/help and the unknown-command fallback.</i>"
                     )
                 else:
-                    _send(
+                    _reply(
                         f"⚠️ <b>TEST FAILURES</b>\n\n"
                         f"Passed: {passed}\n"
                         f"Failed: {failed}\n\n"
                         f"Last 20 lines:\n<code>{output[-1000:]}</code>"
                     )
             else:
-                _send(f"❌ Test run error:\n<code>{output[-500:]}</code>")
+                _reply(f"❌ Test run error:\n<code>{output[-500:]}</code>")
 
         except subprocess.TimeoutExpired:
-            _send("❌ Tests timed out after 60 seconds")
+            _reply("❌ Tests timed out after 60 seconds")
         except Exception as e:
-            _send(f"❌ Test runner error: {str(e)[:200]}")
+            _reply(f"❌ Test runner error: {str(e)[:200]}")
             log.error(f"[tgbot] /test failed: {e}")
 
     elif cmd == "/start":
-        _send(
+        _reply(
             "👋 <b>Welcome to the GME Trading Bot</b>\n\n"
             "I'm a 9-agent analysis system tracking GME — pattern breakouts "
             "(intraday + daily), trend shifts, news sentiment, geopolitical "
@@ -1305,7 +1320,7 @@ def handle_command(text: str, user: str = "team"):
         )
 
     elif cmd == "/help":
-        _send(
+        _reply(
             "<b>📚 GME Trading Bot — Command Guide</b>\n\n"
             "<b>System Commands:</b>\n"
             "/status — system health, tick count, last agent activity\n"
@@ -1346,7 +1361,7 @@ def handle_command(text: str, user: str = "team"):
         )
 
     elif cmd == "/compare" and args:
-        _send("🤔 Comparing Gemma & DeepSeek... (takes ~1 minute)")
+        _reply("🤔 Comparing Gemma & DeepSeek... (takes ~1 minute)")
         question = " ".join(args)
         try:
             context = _build_context()
@@ -1379,14 +1394,14 @@ Keep responses brief (1 paragraph max). Think: Bloomberg meets a knowledgeable f
                     msg += f"<b>Gemma (Fast):</b>\n{responses['gemma2:9b']}\n\n"
                 if responses.get("deepseek-r1:8b"):
                     msg += f"<b>DeepSeek (Complex):</b>\n{responses['deepseek-r1:8b']}"
-                _send(msg)
+                _reply(msg)
             else:
-                _send("❌ Both models failed. Check Ollama connection.")
+                _reply("❌ Both models failed. Check Ollama connection.")
         except Exception as e:
-            _send(f"Compare failed: {e}")
+            _reply(f"Compare failed: {e}")
 
     else:
-        _send(
+        _reply(
             "<b>Available commands:</b>\n"
             "/help — full command guide and chat capabilities\n"
             "/status — system health\n"
@@ -1575,11 +1590,11 @@ def _handle_chat(text: str):
     try:
         context = _build_context()
         response = _ask_llm(text, context)
-        _send(f"🤖 <i>{response}</i>")
+        _reply(f"🤖 <i>{response}</i>")
         log.info(f"[tgbot] Chat: {text[:50]}... → response sent")
     except Exception as e:
         log.error(f"[tgbot] chat handler failed: {e}")
-        _send("❌ Error processing your question. Try again.")
+        _reply("❌ Error processing your question. Try again.")
 
 
 def _register_commands():
@@ -1626,7 +1641,7 @@ def run_bot():
     _ensure_settings_table()
     _register_commands()
     log.info("[tgbot] Two-way Telegram bot started")
-    _send("🤖 <b>GME Bot online.</b> Send /status for system health.")
+    _broadcast("🤖 <b>GME Bot online.</b> Send /status for system health.")
 
     offset = 0
     while True:
@@ -1653,7 +1668,7 @@ def run_bot():
                         cmd_word = text.split()[0].lower()
                         log.info(f"[tgbot] Command from {user}@{chat_id}: {text}")
                         if cmd_word in OWNER_ONLY_COMMANDS and not is_owner:
-                            _send("🔒 Owner-only command.")
+                            _reply("🔒 Owner-only command.")
                             continue
                         handle_command(text, user=user)
                     elif text:
@@ -1661,7 +1676,7 @@ def run_bot():
                         # eats local Gemma cycles, so it's a DOS vector if
                         # opened to strangers.
                         if not is_owner:
-                            _send("ℹ️ Free chat is owner-only. Try /help "
+                            _reply("ℹ️ Free chat is owner-only. Try /help "
                                   "for commands you can run.")
                             continue
                         log.info(f"[tgbot] Chat from {user}@{chat_id}: {text[:50]}")

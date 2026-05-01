@@ -2,12 +2,12 @@
 Smoke tests for every Telegram command handler in telegram_bot.py.
 
 Goal: prove each `elif cmd == "/x":` branch runs without raising and produces
-SOME output via _send(). These are branch-coverage tests, not behavior tests —
+SOME output via _reply(). These are branch-coverage tests, not behavior tests —
 they catch the class of bug where a typo or missing import silently breaks a
 command (e.g. the `os.dirname → os.path.dirname` bug).
 
 External dependencies are mocked:
-  - _send is captured via monkeypatch (no real Telegram API calls)
+  - _reply is captured via monkeypatch (no real Telegram API calls)
   - subprocess.run (for /learn, /lessons, /test) returns canned output
   - crewai Crew (for /brief, /update) returns a stub result
   - requests.post (for /compare) returns canned JSON
@@ -120,9 +120,9 @@ def seeded_db(tmp_path, monkeypatch):
 
 @pytest.fixture
 def captured_sends(monkeypatch):
-    """Collect every call to _send instead of hitting Telegram."""
+    """Collect every call to _reply instead of hitting Telegram."""
     sent = []
-    monkeypatch.setattr(telegram_bot, "_send", lambda text: sent.append(text))
+    monkeypatch.setattr(telegram_bot, "_reply", lambda text: sent.append(text))
     return sent
 
 
