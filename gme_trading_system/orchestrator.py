@@ -1347,6 +1347,24 @@ def run_intraday_aggregation():
         log.error(f"[Aggregator-intraday] {e}")
 
 
+def run_history_overwrite():
+    """Nightly — re-fetch the last year of GME daily candles from yfinance and
+    overwrite local rows. Tick-derived rows have been chronically partial
+    (TradingView webhook delivers only a fraction of minute bars), poisoning
+    20-day ADV used by Chatty's volume-regime label. yfinance reports
+    exchange-authoritative volume."""
+    try:
+        from import_history import import_history
+        result = import_history(years=1, overwrite=True)
+        log.info(f"[HistoryImport] {result}")
+        write_log("HistoryImport",
+                  f"deleted={result['deleted']} inserted={result['inserted']}",
+                  "history_overwrite")
+    except Exception as e:
+        log.error(f"[HistoryImport] {e}")
+        write_log("HistoryImport", str(e), "history_overwrite", "error")
+
+
 @active_window_required
 def run_voice_forwarder():
     """Forward new per-agent narrative outputs to Telegram in each agent's voice."""
@@ -2416,6 +2434,10 @@ class TradingSystemOrchestrator:
         # 8 PM ET EOD analysis bypasses @active_window_required (window ends 17:00 ET).
         self.scheduler.add_job(run_daily_trend.__wrapped__, CronTrigger(hour=20, minute=0,  timezone=ET), id="trendy_eod")
         self.scheduler.add_job(run_daily_aggregation, CronTrigger(hour=16, minute=35, timezone=ET), id="aggregator")
+        # Overwrite the aggregator's partial-capture rows with yfinance's
+        # exchange-reported volume on weekdays. 16:40 = 5 min after aggregator,
+        # by which point Yahoo's daily bar is finalized for the session.
+        self.scheduler.add_job(run_history_overwrite, CronTrigger(day_of_week="mon-fri", hour=16, minute=40, timezone=ET), id="history_overwrite")
         self.scheduler.add_job(run_intraday_aggregation, IntervalTrigger(minutes=5), id="aggregator_intraday")
         self.scheduler.add_job(run_voice_forwarder, IntervalTrigger(minutes=10), id="voice_forwarder")
         self.scheduler.add_job(run_standup_report,    CronTrigger(hour=16, minute=0,  timezone=ET), id="standup_close")
