@@ -577,8 +577,12 @@ def _compute_trendy_signal():
     if not closes or not highs or not lows:
         return None, "no lookback candles available"
 
-    support_hint = round(min(lows), 2)
-    resistance_hint = round(max(highs), 2)
+    # 5-day swing levels — 20d min/max drags S/R to stale prints from prior
+    # consolidation (e.g. a 3-week-old low that's 10%+ below market once a
+    # trend kicks in), producing limit-order entries that never fill.
+    swing = min(5, len(lows))
+    support_hint = round(min(lows[-swing:]), 2)
+    resistance_hint = round(max(highs[-swing:]), 2)
     price = float(ind["price"])
 
     prompt = (
@@ -591,7 +595,7 @@ def _compute_trendy_signal():
         f"pct_from_vwap={ind.get('pct_from_vwap',0):+.2f}%\n"
         f"  above_vwap={ind.get('above_vwap')}  above_ema21={ind.get('above_ema21')}  "
         f"above_ema50={ind.get('above_ema50')}\n"
-        f"  20d lookback: low={support_hint:.2f}  high={resistance_hint:.2f}  "
+        f"  5d swing: low={support_hint:.2f}  high={resistance_hint:.2f}  "
         f"latest_close={closes[-1]:.2f}\n\n"
         "Schema (all fields required):\n"
         '{"trend_direction": "UP"|"DOWN"|"SIDEWAYS", "confidence": <0.0-1.0>, '
@@ -600,7 +604,7 @@ def _compute_trendy_signal():
         '"severity": "HIGH"|"MEDIUM"|"LOW"}\n\n'
         "Rules: UP requires price > VWAP AND price > EMA21. DOWN requires price < VWAP AND price < EMA21. "
         "Otherwise SIDEWAYS. Confidence ≤ 0.55 if EMAs disagree or RSI in 45-55. "
-        f"Support should be near {support_hint}, resistance near {resistance_hint}. severity=HIGH if confidence>=0.75."
+        f"support_level MUST equal {support_hint}, resistance_level MUST equal {resistance_hint}. severity=HIGH if confidence>=0.75."
     )
 
     ollama_host = os.getenv("OLLAMA_HOST", "http://localhost:11434")
@@ -2225,10 +2229,14 @@ class TradingSystemOrchestrator:
         # Cloud agents — rate-limited
         self.scheduler.add_job(run_news,         IntervalTrigger(minutes=30), id="newsie")
         self.scheduler.add_job(run_pattern,      IntervalTrigger(hours=2),    id="pattern")   # was 6h
-        self.scheduler.add_job(run_daily_trend,  IntervalTrigger(hours=4),    id="trendy_interval")  # intraday
+        # Anchor Trendy's 4h interval to 08:45 ET so daytime firings (08:45, 12:45,
+        # 16:45 ET) land inside the active window (08:30-17:00 ET). Without this
+        # the schedule drifts to wall-clock midnight and most firings get gated out.
+        trendy_anchor = datetime.now(ET).replace(hour=8, minute=45, second=0, microsecond=0)
+        self.scheduler.add_job(run_daily_trend,  IntervalTrigger(hours=4, start_date=trendy_anchor), id="trendy_interval")  # intraday
 
         # Signal confidence loop agents — bypass pattern (pre-fetched tools, direct Ollama)
-        self.scheduler.add_job(run_trendy_signal,    IntervalTrigger(hours=4),    id="trendy_signal")
+        self.scheduler.add_job(run_trendy_signal,    IntervalTrigger(hours=4, start_date=trendy_anchor), id="trendy_signal")
         self.scheduler.add_job(run_pattern_signal,   IntervalTrigger(hours=2),    id="pattern_signal")
         self.scheduler.add_job(run_futurist_prediction_signal, IntervalTrigger(hours=2), id="futurist_signal")
         # Dropped: run_synthesis_signal, run_newsie_signal, run_futurist_cycle —
@@ -2242,7 +2250,8 @@ class TradingSystemOrchestrator:
         self.scheduler.add_job(run_daily_huddle,      CronTrigger(hour=9,  minute=0,  timezone=ET), id="huddle")
         self.scheduler.add_job(run_daily_briefing,    CronTrigger(hour=10, minute=0,  timezone=ET), id="briefing")
         self.scheduler.add_job(run_standup_report,    CronTrigger(hour=11, minute=0,  timezone=ET), id="standup_midday")
-        self.scheduler.add_job(run_daily_trend,       CronTrigger(hour=20, minute=0,  timezone=ET), id="trendy_eod")
+        # 8 PM ET EOD analysis bypasses @active_window_required (window ends 17:00 ET).
+        self.scheduler.add_job(run_daily_trend.__wrapped__, CronTrigger(hour=20, minute=0,  timezone=ET), id="trendy_eod")
         self.scheduler.add_job(run_daily_aggregation, CronTrigger(hour=16, minute=35, timezone=ET), id="aggregator")
         self.scheduler.add_job(run_intraday_aggregation, IntervalTrigger(minutes=5), id="aggregator_intraday")
         self.scheduler.add_job(run_voice_forwarder, IntervalTrigger(minutes=10), id="voice_forwarder")
