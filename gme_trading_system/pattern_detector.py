@@ -68,22 +68,40 @@ class PatternReport:
 
 # ── public entry point ───────────────────────────────────────────────────────
 
-def detect_patterns(candles: Sequence[dict]) -> Optional[PatternReport]:
-    """Analyze daily OHLCV candles and return a PatternReport, or None if we
-    don't have enough data to say anything honest.
+def detect_patterns(
+    candles: Sequence[dict],
+    config: dict | None = None,
+) -> Optional[PatternReport]:
+    """Analyze OHLCV candles and return a PatternReport, or None if we don't
+    have enough data to say anything honest.
 
     Expected candle schema: {'date', 'open', 'high', 'low', 'close', 'volume'}
     in chronological order (oldest first).
+
+    `config` (optional) overrides the module-level tuning constants — used by
+    the intraday caller, which needs a higher MIN_CANDLES and is otherwise
+    happy with the same relative thresholds. Keys honoured: MIN_CANDLES,
+    SWING_WINDOW, FLATNESS_FRACTION, CONVERGENCE_MIN_DELTA, BREAKOUT_TAIL.
     """
-    if not candles or len(candles) < MIN_CANDLES:
+    cfg = {
+        "MIN_CANDLES": MIN_CANDLES,
+        "SWING_WINDOW": SWING_WINDOW,
+        "FLATNESS_FRACTION": FLATNESS_FRACTION,
+        "CONVERGENCE_MIN_DELTA": CONVERGENCE_MIN_DELTA,
+        "BREAKOUT_TAIL": BREAKOUT_TAIL,
+    }
+    if config:
+        cfg.update({k: v for k, v in config.items() if k in cfg})
+
+    if not candles or len(candles) < cfg["MIN_CANDLES"]:
         return None
 
-    df = _to_dataframe(candles)
+    df = _to_dataframe(candles, cfg["MIN_CANDLES"])
     if df is None or df.empty:
         return None
 
     indicators = _compute_indicators(df)
-    geometry = _detect_geometry(df, indicators.get("atr14"))
+    geometry = _detect_geometry(df, indicators.get("atr14"), cfg)
 
     # Combine indicators + geometry into a single verdict.
     return _build_report(df, indicators, geometry)
@@ -91,7 +109,7 @@ def detect_patterns(candles: Sequence[dict]) -> Optional[PatternReport]:
 
 # ── private: dataframe prep ──────────────────────────────────────────────────
 
-def _to_dataframe(candles: Sequence[dict]) -> Optional[pd.DataFrame]:
+def _to_dataframe(candles: Sequence[dict], min_candles: int = MIN_CANDLES) -> Optional[pd.DataFrame]:
     try:
         df = pd.DataFrame(list(candles))
         for col in ("open", "high", "low", "close"):
@@ -101,7 +119,7 @@ def _to_dataframe(candles: Sequence[dict]) -> Optional[pd.DataFrame]:
         if "volume" in df.columns:
             df["volume"] = pd.to_numeric(df["volume"], errors="coerce").fillna(0)
         df = df.dropna(subset=["open", "high", "low", "close"]).reset_index(drop=True)
-        return df if len(df) >= MIN_CANDLES else None
+        return df if len(df) >= min_candles else None
     except Exception as e:
         log.warning(f"[pattern_detector] dataframe build failed: {e}")
         return None
@@ -204,16 +222,28 @@ def _linear_fit(points: list[tuple[int, float]]) -> Optional[tuple[float, float]
     return float(slope), float(intercept)
 
 
-def _detect_geometry(df: pd.DataFrame, atr: Optional[float]) -> dict:
+def _detect_geometry(df: pd.DataFrame, atr: Optional[float], cfg: dict | None = None) -> dict:
     """Classify the recent shape: ascending/descending/symmetric triangle,
     channel up/down, breakout, breakdown, or none. Returns a dict with
     `pattern`, `breakout_level`, `breakout_direction`, and the swing points
     used so callers can cite them."""
+    if cfg is None:
+        cfg = {
+            "SWING_WINDOW": SWING_WINDOW,
+            "FLATNESS_FRACTION": FLATNESS_FRACTION,
+            "CONVERGENCE_MIN_DELTA": CONVERGENCE_MIN_DELTA,
+            "BREAKOUT_TAIL": BREAKOUT_TAIL,
+        }
+    swing_window = cfg.get("SWING_WINDOW", SWING_WINDOW)
+    flatness_fraction = cfg.get("FLATNESS_FRACTION", FLATNESS_FRACTION)
+    convergence_min_delta = cfg.get("CONVERGENCE_MIN_DELTA", CONVERGENCE_MIN_DELTA)
+    breakout_tail = cfg.get("BREAKOUT_TAIL", BREAKOUT_TAIL)
+
     # Only consider the last ~30 bars (or all if fewer) for pattern scope
     recent = df.iloc[-min(30, len(df)):].reset_index(drop=True)
 
-    highs = _find_swings(recent["high"], SWING_WINDOW, is_high=True)
-    lows = _find_swings(recent["low"], SWING_WINDOW, is_high=False)
+    highs = _find_swings(recent["high"], swing_window, is_high=True)
+    lows = _find_swings(recent["low"], swing_window, is_high=False)
 
     recent_high = float(recent["high"].max())
     recent_low = float(recent["low"].min())
@@ -225,7 +255,7 @@ def _detect_geometry(df: pd.DataFrame, atr: Optional[float]) -> dict:
     # of the total high-low range. This makes flatness consistent regardless
     # of the stock's absolute price level.
     range_per_bar = max((recent_high - recent_low) / bars, 1e-4)
-    flat_threshold = range_per_bar * FLATNESS_FRACTION
+    flat_threshold = range_per_bar * flatness_fraction
 
     high_fit = _linear_fit(highs) if len(highs) >= MIN_SWINGS_FOR_FIT else None
     low_fit = _linear_fit(lows) if len(lows) >= MIN_SWINGS_FOR_FIT else None
@@ -247,7 +277,7 @@ def _detect_geometry(df: pd.DataFrame, atr: Optional[float]) -> dict:
     # (the window excluding the last few bars, which may themselves be the
     # breakout move). Without this exclusion, the "high of the window"
     # includes the breakout bar itself and we'd never fire.
-    tail_bars = min(BREAKOUT_TAIL, max(1, bars // 6))
+    tail_bars = min(breakout_tail, max(1, bars // 6))
     base = recent.iloc[:-tail_bars] if bars > tail_bars + 5 else recent
     base_high = float(base["high"].max())
     base_low = float(base["low"].min())
@@ -279,7 +309,7 @@ def _detect_geometry(df: pd.DataFrame, atr: Optional[float]) -> dict:
             first_range is not None
             and last_range is not None
             and first_range > 0
-            and (first_range - last_range) / first_range > CONVERGENCE_MIN_DELTA
+            and (first_range - last_range) / first_range > convergence_min_delta
         )
 
         if high_flat and ls > flat_threshold:

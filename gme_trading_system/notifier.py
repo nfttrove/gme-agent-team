@@ -45,7 +45,8 @@ AGENT_EMOJI = {
     "Valerie":   "✅",  # data validation
     "Chatty":    "💬",  # commentary
     "Newsie":    "📰",  # news sentiment
-    "Pattern":   "🎯",  # chart patterns
+    "Pattern":   "🎯",  # chart patterns (daily)
+    "Pattern Intraday": "⚡",  # 5-min chart patterns
     "Trendy":    "📈",  # daily trend
     "Futurist":  "🔮",  # price prediction
     "GeoRisk":   "🌍",  # geopolitical

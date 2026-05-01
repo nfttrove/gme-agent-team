@@ -1032,6 +1032,166 @@ def run_pattern_signal():
             write_log("Pattern", str(e), "pattern_signal", "error")
 
 
+# ── Intraday pattern signal (5-minute bars) ──────────────────────────────────
+
+# Intraday parameters chosen by the task spec — daily detector uses 0.60 conf
+# and ±4%/±6% R/R; intraday is noisier so we raise the bar.
+_INTRADAY_PATTERN_CONFIDENCE_FLOOR = 0.70
+_INTRADAY_STOP_PCT = 0.015   # ±1.5% stop
+_INTRADAY_TARGET_PCT = 0.025  # ±2.5% target
+_INTRADAY_LOOKBACK_BARS = 60  # ~5 hours of 5-min bars
+_INTRADAY_AGG_LOOKBACK_MINUTES = 360  # aggregate the last 6 hours of ticks
+
+
+def _fetch_intraday_candles(lookback_bars: int = _INTRADAY_LOOKBACK_BARS) -> list[dict]:
+    """Read the most recent N 5-minute candles from intraday_candles, oldest
+    first. Returns [] if the table is empty or missing."""
+    conn = sqlite3.connect(DB_PATH)
+    try:
+        conn.row_factory = sqlite3.Row
+        cur = conn.cursor()
+        try:
+            cur.execute(
+                "SELECT bucket_start AS date, open, high, low, close, volume "
+                "FROM intraday_candles "
+                "WHERE symbol='GME' AND interval='5m' "
+                "ORDER BY bucket_start DESC LIMIT ?",
+                (lookback_bars,),
+            )
+        except sqlite3.OperationalError:
+            return []  # table doesn't exist yet
+        rows = [dict(r) for r in cur.fetchall()]
+        rows.reverse()
+        return rows
+    finally:
+        conn.close()
+
+
+def _compute_intraday_pattern_signal():
+    """Deterministic intraday pattern detection on 5-minute bars.
+
+    Mirrors `_compute_pattern_signal` but reads from `intraday_candles`
+    instead of `daily_candles` and tunes the detector via the new `config`
+    arg (higher MIN_CANDLES because 5-min noise drowns short windows).
+
+    Re-aggregates ticks first so a fresh cycle sees fresh bars even if the
+    standalone aggregator job hasn't fired.
+    """
+    from models.agent_outputs import PatternSignal
+    from pattern_detector import detect_patterns
+    import intraday_aggregator
+
+    try:
+        intraday_aggregator.aggregate_5m_bars(_INTRADAY_AGG_LOOKBACK_MINUTES)
+    except Exception as e:
+        log.warning(f"[Pattern Intraday] aggregator failed (continuing with stale): {e}")
+
+    candles = _fetch_intraday_candles()
+    if not candles or len(candles) < 30:
+        return None, f"insufficient intraday candles ({len(candles)} < 30)"
+
+    report = detect_patterns(candles, config={"MIN_CANDLES": 30})
+    if report is None:
+        return None, "intraday detector returned no report (data quality)"
+
+    # No LLM narration on the intraday path — the cycle runs every 5 min so
+    # a 30s Gemma call would dominate cost for cosmetic prose. Use the
+    # deterministic default sentence directly.
+    sentence = _default_pattern_sentence(report)
+
+    try:
+        signal = PatternSignal(
+            pattern_type=report.pattern_type,
+            confidence=report.confidence,
+            breakout_level=report.breakout_level,
+            breakout_direction=report.breakout_direction,
+            reasoning=sentence[:220],
+            severity=report.severity,
+            signal_type="intraday_pattern_signal",
+        )
+    except Exception as e:
+        return None, f"validation error: {e} | report={report.as_dict()}"
+
+    if signal.pattern_type == "none":
+        narrative = signal.reasoning[:220]
+    else:
+        narrative = (
+            f"{signal.pattern_type} (5m) · {signal.breakout_direction} break @ "
+            f"${signal.breakout_level:.2f} (conf={signal.confidence:.0%}) · "
+            f"{signal.reasoning[:220]}"
+        )
+    return signal, narrative
+
+
+@active_window_required
+def run_intraday_pattern_signal():
+    """Every 5 min — intraday pattern detection on 5-minute bars + Telegram alert."""
+    log.info("[Pattern Intraday] Starting intraday pattern signal cycle")
+    write_log("Pattern Intraday", "Running intraday pattern signal cycle",
+              "intraday_pattern_signal", "running")
+
+    with metrics.cycle("intraday_pattern_signal"):
+        try:
+            signal, narrative = _compute_intraday_pattern_signal()
+            if signal is None:
+                log.warning(f"[Pattern Intraday] {narrative}")
+                status = ("parse_error" if "parse" in narrative
+                          else "validation_error" if "validation" in narrative
+                          else "error")
+                write_log("Pattern Intraday", narrative, "intraday_pattern_signal", status)
+                return
+
+            write_log("Pattern Intraday", narrative, "intraday_pattern_signal", "ok")
+            log.info(f"[Pattern Intraday] {narrative}")
+
+            if (signal.pattern_type == "none"
+                    or signal.confidence < _INTRADAY_PATTERN_CONFIDENCE_FLOOR):
+                metrics.snapshot()
+                return
+
+            entry_price = signal.breakout_level
+            if signal.breakout_direction == "UP":
+                stop_loss = round(signal.breakout_level * (1 - _INTRADAY_STOP_PCT), 2)
+                take_profit = round(signal.breakout_level * (1 + _INTRADAY_TARGET_PCT), 2)
+            else:
+                stop_loss = round(signal.breakout_level * (1 + _INTRADAY_STOP_PCT), 2)
+                take_profit = round(signal.breakout_level * (1 - _INTRADAY_TARGET_PCT), 2)
+
+            manager = SignalManager(DB_PATH)
+            alert_id = manager.log_alert(
+                agent_name="Pattern Intraday",
+                signal_type=signal.signal_type,
+                confidence=signal.confidence,
+                severity=signal.severity,
+                entry_price=entry_price,
+                stop_loss=stop_loss,
+                take_profit=take_profit,
+                reasoning=signal.reasoning[:500],
+            )
+            try:
+                notify_signal_alert(
+                    agent_name="Pattern Intraday",
+                    signal_type=signal.signal_type,
+                    confidence=signal.confidence,
+                    entry_price=entry_price,
+                    stop_loss=stop_loss,
+                    take_profit=take_profit,
+                    reasoning=(f"{signal.pattern_type} (5m) | "
+                               f"{signal.breakout_direction} break @ "
+                               f"${signal.breakout_level:.2f} — "
+                               f"{signal.reasoning[:160]}"),
+                    alert_id=alert_id,
+                )
+            except Exception as e:
+                log.warning(f"[Pattern Intraday] Alert failed: {e}")
+
+            metrics.snapshot()
+
+        except Exception as e:
+            log.error(f"[Pattern Intraday] {e}")
+            write_log("Pattern Intraday", str(e), "intraday_pattern_signal", "error")
+
+
 @active_window_required
 def run_newsie_signal():
     """Newsie agent sentiment signal with confidence logging."""
@@ -2238,6 +2398,9 @@ class TradingSystemOrchestrator:
         # Signal confidence loop agents — bypass pattern (pre-fetched tools, direct Ollama)
         self.scheduler.add_job(run_trendy_signal,    IntervalTrigger(hours=4, start_date=trendy_anchor), id="trendy_signal")
         self.scheduler.add_job(run_pattern_signal,   IntervalTrigger(hours=2),    id="pattern_signal")
+        # Intraday pattern detection on 5-minute bars — fires every bar close.
+        # Active-window-gated, so off-hours firings exit silently.
+        self.scheduler.add_job(run_intraday_pattern_signal, IntervalTrigger(minutes=5), id="intraday_pattern_signal")
         self.scheduler.add_job(run_futurist_prediction_signal, IntervalTrigger(hours=2), id="futurist_signal")
         # Dropped: run_synthesis_signal, run_newsie_signal, run_futurist_cycle —
         # CrewAI twins of run_synthesis / run_news / run_futurist_prediction_signal.
