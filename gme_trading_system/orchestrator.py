@@ -183,6 +183,18 @@ def run_validation():
         write_log("Valerie", str(e), "validation", "error")
 
 
+def _live_intraday_volume(symbol: str) -> float | None:
+    """Cumulative regular-session volume from yfinance. Returns None on failure."""
+    try:
+        import yfinance as yf
+        info = yf.Ticker(symbol).fast_info
+        v = getattr(info, "last_volume", None) or info.get("lastVolume")
+        return float(v) if v else None
+    except Exception as e:
+        log.warning(f"[_live_intraday_volume] {e}")
+        return None
+
+
 @active_window_required
 def _volume_regime(conn: sqlite3.Connection, symbol: str = "GME") -> dict:
     """Session-relative volume regime, computed deterministically.
@@ -199,13 +211,25 @@ def _volume_regime(conn: sqlite3.Connection, symbol: str = "GME") -> dict:
     now_et    = datetime.now(ET)
     today_str = now_et.date().isoformat()
 
-    # Today's cumulative volume — daily_candles is kept fresh by the aggregator;
-    # fall back to summing raw price_ticks if not yet populated.
-    row = conn.execute(
-        "SELECT volume FROM daily_candles WHERE symbol=? AND date=?",
-        (symbol, today_str),
-    ).fetchone()
-    today_vol = float(row[0]) if row and row[0] else 0.0
+    MARKET_OPEN  = dtime(9, 30)
+    MARKET_CLOSE = dtime(16, 0)
+    t = now_et.time().replace(tzinfo=None)
+
+    # Today's cumulative volume. The TradingView webhook only delivers ~3% of
+    # GME minute bars (see commit 594319f), so summing price_ticks intraday
+    # under-counts by ~30x. During the regular session, fetch the cumulative
+    # session volume live from yfinance; fall back to daily_candles / price_ticks.
+    today_vol = 0.0
+    if MARKET_OPEN <= t < MARKET_CLOSE:
+        live = _live_intraday_volume(symbol)
+        if live and live > 0:
+            today_vol = live
+    if today_vol == 0:
+        row = conn.execute(
+            "SELECT volume FROM daily_candles WHERE symbol=? AND date=?",
+            (symbol, today_str),
+        ).fetchone()
+        today_vol = float(row[0]) if row and row[0] else 0.0
     if today_vol == 0:
         row = conn.execute(
             "SELECT COALESCE(SUM(volume),0) FROM price_ticks "
@@ -227,9 +251,6 @@ def _volume_regime(conn: sqlite3.Connection, symbol: str = "GME") -> dict:
         return {"label": "unknown", "ratio": 0.0,
                 "today_volume": int(today_vol), "baseline_adv": int(adv)}
 
-    MARKET_OPEN  = dtime(9, 30)
-    MARKET_CLOSE = dtime(16, 0)
-    t = now_et.time().replace(tzinfo=None)
     if MARKET_OPEN <= t < MARKET_CLOSE:
         minutes_elapsed = max(1, (t.hour - 9) * 60 + (t.minute - 30))
         expected = adv * (minutes_elapsed / 390.0)
