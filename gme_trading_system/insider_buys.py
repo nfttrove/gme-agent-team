@@ -101,11 +101,16 @@ def _truthy(v: Optional[str]) -> bool:
     return v is not None and v.strip() in ("1", "true", "True")
 
 
-def parse_form4(xml_bytes: bytes) -> tuple[bool, str, list[tuple[float, float]]]:
-    """Return (is_director_or_officer, owner_name, [(shares, price), ...] for P-code rows)."""
+def parse_form4(xml_bytes: bytes, issuer_cik: Optional[str] = None) -> tuple[bool, str, list[tuple[float, float]]]:
+    """Return (is_section16_filer, owner_name, [(shares, price), ...] for P-code rows).
+
+    Excludes filings where the reporting owner is the issuer itself
+    (corporate buybacks structured as Form 4s — not insider conviction).
+    """
     root = ET.fromstring(xml_bytes)
     is_dir = is_off = is_ten = False
     owner_name = ""
+    owner_cik = ""
 
     for elem in root.iter():
         tag = _strip_ns(elem.tag)
@@ -115,8 +120,12 @@ def parse_form4(xml_bytes: bytes) -> tuple[bool, str, list[tuple[float, float]]]
             is_ten = is_ten or _truthy(_findtext(elem, "isTenPercentOwner"))
         elif tag == "reportingOwnerId" and not owner_name:
             owner_name = _findtext(elem, "rptOwnerName") or ""
+            owner_cik = (_findtext(elem, "rptOwnerCik") or "").lstrip("0")
 
     if not (is_dir or is_off or is_ten):
+        return False, owner_name, []
+    if issuer_cik and owner_cik and owner_cik == str(int(issuer_cik)):
+        # Issuer filing on itself — corporate buyback, not insider conviction.
         return False, owner_name, []
 
     buys: list[tuple[float, float]] = []
@@ -216,7 +225,7 @@ def fetch_insider_buys(ticker: str, years: int = 3) -> InsiderBuyStats:
             try:
                 xr = _get(xml_url)
                 xr.raise_for_status()
-                eligible, name, buys = parse_form4(xr.content)
+                eligible, name, buys = parse_form4(xr.content, issuer_cik=cik)
             except (CircuitOpenError, requests.RequestException, ET.ParseError) as e:
                 log.debug("form4 fetch/parse failed for %s: %s", acc, e)
                 continue
