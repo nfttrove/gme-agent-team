@@ -47,6 +47,12 @@ DEFAULT_WATCHLIST = [
     "MSFT","GOOGL","AMZN","NVDA","META","TSLA",
     # Deep-value / insider-conviction additions
     "BABA","PYPL","DIS","WBD","WBA","PARA","F","GM",
+    # Legacy-semis cohort (pair with INTC)
+    "MU","STX",
+    # Beaten-down healthcare
+    "CVS",
+    # Retail with director purchases
+    "BBY","KSS","M",
 ]
 
 

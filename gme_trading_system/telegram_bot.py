@@ -907,7 +907,7 @@ def handle_command(text: str, user: str = "team"):
             sys.path.insert(0, _os.path.dirname(__file__))
             from trove import run_screen, DEFAULT_WATCHLIST
             ticker_list = tickers if tickers else DEFAULT_WATCHLIST
-            results = run_screen(ticker_list, max_tickers=45)
+            results = run_screen(ticker_list, max_tickers=60)
             if not results:
                 _reply("❌ No data returned — check ticker symbols.")
             else:
