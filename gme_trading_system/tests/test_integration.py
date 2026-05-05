@@ -492,3 +492,74 @@ class TestAgentVoiceFreshness:
         # Garbage / empty → stale
         assert _is_stale("", 30) is True
         assert _is_stale("not-a-timestamp", 30) is True
+
+
+class TestTroveInsiderConviction:
+    """Pillar D — director/officer open-market purchases (Form 4 code P)."""
+
+    def test_insider_conviction_scoring(self):
+        from trove import TroveInputs, score, _score_insider_conviction
+
+        # 6 buys, $2M → count=8, dollar=6, pillar D=14
+        cp, dp, total = _score_insider_conviction(6, 2_000_000)
+        assert (cp, dp, total) == (8.0, 6.0, 14.0)
+
+        # Zero case
+        assert _score_insider_conviction(0, 0) == (0.0, 0.0, 0.0)
+
+        # Mid: 2 buys, $500k → cp=2, dp=4
+        assert _score_insider_conviction(2, 500_000)[2] == 6.0
+
+        # End-to-end: total still ≤ 100, pillar caps respected
+        i = TroveInputs(
+            ev_fcf=8, ev_ebitda=6, pb=0.8, altman_z=3.5, debt_equity=0.05,
+            cash_mm=2000, total_debt_mm=10, market_cap_mm=5000,
+            operating_margin=0.20, roe=0.18, net_margin=0.10,
+            insider_buy_count=6, insider_buy_dollars=2_000_000,
+        )
+        r = score(i)
+        assert r["pillars"]["A"] <= 25.01
+        assert r["pillars"]["B"] <= 40.01
+        assert r["pillars"]["C"] <= 20.01
+        assert r["pillars"]["D"] == 14.0
+        assert r["total"] <= 100.01
+        assert r["insider"] == {"count": 6, "dollars": 2_000_000.0}
+
+    def test_insider_buys_parser_offline(self):
+        """Parser extracts P-code transactions from a synthetic Form 4 XML."""
+        from insider_buys import parse_form4
+
+        xml = b"""<?xml version="1.0"?>
+<ownershipDocument>
+  <reportingOwner>
+    <reportingOwnerId><rptOwnerName>Test Director</rptOwnerName></reportingOwnerId>
+    <reportingOwnerRelationship>
+      <isDirector>1</isDirector>
+      <isOfficer>0</isOfficer>
+    </reportingOwnerRelationship>
+  </reportingOwner>
+  <nonDerivativeTable>
+    <nonDerivativeTransaction>
+      <transactionCoding><transactionCode>P</transactionCode></transactionCoding>
+      <transactionAmounts>
+        <transactionShares><value>1000</value></transactionShares>
+        <transactionPricePerShare><value>25.00</value></transactionPricePerShare>
+        <transactionAcquiredDisposedCode><value>A</value></transactionAcquiredDisposedCode>
+      </transactionAmounts>
+    </nonDerivativeTransaction>
+    <nonDerivativeTransaction>
+      <transactionCoding><transactionCode>S</transactionCode></transactionCoding>
+      <transactionAmounts>
+        <transactionShares><value>500</value></transactionShares>
+        <transactionPricePerShare><value>30.00</value></transactionPricePerShare>
+        <transactionAcquiredDisposedCode><value>D</value></transactionAcquiredDisposedCode>
+      </transactionAmounts>
+    </nonDerivativeTransaction>
+  </nonDerivativeTable>
+</ownershipDocument>"""
+        eligible, name, buys = parse_form4(xml)
+        assert eligible is True
+        assert name == "Test Director"
+        assert len(buys) == 1  # only the P-code row
+        assert buys[0] == (1000.0, 25.0)
+        assert sum(s * p for s, p in buys) == 25_000.0

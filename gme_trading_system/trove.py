@@ -1,6 +1,7 @@
 """
 Trove Score — deep-value scoring framework.
-Pillars: A=Valuation (30pts), B=Capital Structure (45pts), C=Quality (25pts).
+Pillars: A=Valuation (25pts), B=Capital Structure (40pts), C=Quality (20pts),
+         D=Insider Conviction (15pts). Total = 100.
 
 Shared library used by TroveScoreTool (agents) and the /trove Telegram command.
 """
@@ -60,10 +61,37 @@ class TroveInputs:
     operating_margin: float
     roe:              float
     net_margin:       float
+    insider_buy_count:   int   = 0
+    insider_buy_dollars: float = 0.0
 
     @property
     def net_cash_pct(self) -> float:
         return (self.cash_mm - self.total_debt_mm) / self.market_cap_mm
+
+
+# ── Pillar D: Insider Conviction (15 pts) ─────────────────────────────────────
+# Director+officer open-market purchases (Form 4 code "P") over 3-year window.
+
+def _score_insider_conviction(count: int, dollars: float) -> tuple[float, float, float]:
+    """Return (count_pts/8, dollar_pts/7, total/15)."""
+    if count >= 6:    cp = 8.0
+    elif count >= 3:  cp = 5.0
+    elif count >= 1:  cp = 2.0
+    else:             cp = 0.0
+
+    if dollars >= 10_000_000:    dp = 7.0
+    elif dollars >= 1_000_000:   dp = 6.0
+    elif dollars >= 100_000:     dp = 4.0
+    elif dollars > 0:            dp = 2.0
+    else:                        dp = 0.0
+
+    return cp, dp, cp + dp
+
+
+# Pillar rescale factors so the legacy tables (sum 30/45/25) map to 25/40/20.
+_SCALE_A = 25.0 / 30.0
+_SCALE_B = 40.0 / 45.0
+_SCALE_C = 20.0 / 25.0
 
 
 # ── Scorer ────────────────────────────────────────────────────────────────────
@@ -84,7 +112,14 @@ def score(inputs: TroveInputs) -> dict:
     c2 = _asc(i.roe, _ROE)
     c3 = 5.0 if i.net_margin > 0 else 0.0
 
-    total  = a1 + a2 + a3 + b1 + b2 + b3 + c1 + c2 + c3
+    pillar_a = (a1 + a2 + a3) * _SCALE_A
+    pillar_b = (b1 + b2 + b3) * _SCALE_B
+    pillar_c = (c1 + c2 + c3) * _SCALE_C
+    d_count_pts, d_dollar_pts, pillar_d = _score_insider_conviction(
+        i.insider_buy_count, i.insider_buy_dollars
+    )
+
+    total  = pillar_a + pillar_b + pillar_c + pillar_d
     rating = next((s for t, s in _RATINGS if total >= t), "☆☆☆☆☆")
 
     immunity = {
@@ -96,8 +131,13 @@ def score(inputs: TroveInputs) -> dict:
     }
 
     return {
-        "scores":         {"A1":a1,"A2":a2,"A3":a3,"B1":b1,"B2":b2,"B3":b3,"C1":c1,"C2":c2,"C3":c3},
-        "pillars":        {"A": round(a1+a2+a3,2), "B": round(b1+b2+b3,2), "C": round(c1+c2+c3,2)},
+        "scores":         {"A1":a1,"A2":a2,"A3":a3,"B1":b1,"B2":b2,"B3":b3,
+                            "C1":c1,"C2":c2,"C3":c3,
+                            "D1":d_count_pts,"D2":d_dollar_pts},
+        "pillars":        {"A": round(pillar_a,2), "B": round(pillar_b,2),
+                            "C": round(pillar_c,2), "D": round(pillar_d,2)},
+        "insider":        {"count": i.insider_buy_count,
+                            "dollars": round(i.insider_buy_dollars, 2)},
         "total":          round(total, 2),
         "rating":         rating,
         "immunity":       immunity,
@@ -192,6 +232,16 @@ def fetch(ticker: str) -> Optional[TroveInputs]:
         def nan_to(v, sentinel):
             return sentinel if (v is None or (isinstance(v, float) and math.isnan(v))) else v
 
+        # Insider conviction: directors+officers open-market buys, 3y. Soft-fail to (0, 0).
+        ib_count, ib_dollars = 0, 0.0
+        try:
+            from insider_buys import fetch_insider_buys
+            ib = fetch_insider_buys(ticker, years=3)
+            if ib.error is None:
+                ib_count, ib_dollars = ib.count, ib.dollars
+        except Exception:
+            pass
+
         return TroveInputs(
             ev_fcf           = nan_to(ev_fcf,    0),
             ev_ebitda        = nan_to(ev_ebitda, 99),
@@ -204,6 +254,8 @@ def fetch(ticker: str) -> Optional[TroveInputs]:
             operating_margin = nan_to(op_margin,  0),
             roe              = nan_to(roe,         0),
             net_margin       = nan_to(net_margin,  0),
+            insider_buy_count   = ib_count,
+            insider_buy_dollars = ib_dollars,
         )
     except Exception:
         return None
@@ -232,6 +284,9 @@ def run_screen(tickers: list[str], max_tickers: int = 30) -> list[dict]:
                     "pillar_A":  result["pillars"]["A"],
                     "pillar_B":  result["pillars"]["B"],
                     "pillar_C":  result["pillars"]["C"],
+                    "pillar_D":  result["pillars"]["D"],
+                    "insider_buy_count":   inp.insider_buy_count,
+                    "insider_buy_dollars": inp.insider_buy_dollars,
                     "immunity":  result["immunity_count"],
                     "ev_fcf":    round(inp.ev_fcf, 1),
                     "ev_ebitda": round(inp.ev_ebitda, 1),

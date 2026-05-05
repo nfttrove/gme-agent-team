@@ -1512,6 +1512,11 @@ def run_cto_trove_score():
         A = r["pillars"]["A"]
         B = r["pillars"]["B"]
         C = r["pillars"]["C"]
+        D = r["pillars"]["D"]
+        ins_count = inp.insider_buy_count
+        ins_dollars = inp.insider_buy_dollars
+        ins_str = (f"${ins_dollars/1e6:.1f}M" if ins_dollars >= 1e6
+                   else (f"${ins_dollars/1e3:.0f}K" if ins_dollars > 0 else "$0"))
         imm = r["immunity"]
         imm_count = r["immunity_count"]
         net_cash_pct = (inp.cash_mm - inp.total_debt_mm) / inp.market_cap_mm if inp.market_cap_mm else 0
@@ -1580,11 +1585,13 @@ def run_cto_trove_score():
             "that IS the thesis shape — call it out, don't flag it as a contradiction.\n\n"
             f"TODAY'S SCORE — {tier_hint}:\n"
             f"GME | Score {total:.1f}/100 ({rating}) | Immunity {imm_count}/5\n"
-            f"Pillars — Valuation: {A:.1f}/30 · Capital: {B:.1f}/45 · Quality: {C:.1f}/25\n"
+            f"Pillars — Valuation: {A:.1f}/25 · Capital: {B:.1f}/40 · Quality: {C:.1f}/20 · "
+            f"Insider Conviction: {D:.1f}/15\n"
             f"Inputs: EV/FCF {inp.ev_fcf:.1f} · EV/EBITDA {inp.ev_ebitda:.1f} · P/B {inp.pb:.2f} · "
             f"Altman Z {inp.altman_z:.1f} · D/E {inp.debt_equity:.2f} · "
             f"Net Cash {net_cash_pct*100:.1f}% of MCap · Op Margin {inp.operating_margin*100:.1f}% · "
-            f"ROE {inp.roe*100:.1f}% · Net Margin {inp.net_margin*100:.1f}%"
+            f"ROE {inp.roe*100:.1f}% · Net Margin {inp.net_margin*100:.1f}%\n"
+            f"Insider open-market buys (dir/officer, last 3y): {ins_count} purchases / {ins_str} total"
         )
         interpretation = ""
         try:
@@ -1610,7 +1617,8 @@ def run_cto_trove_score():
         )
         brief = (
             f"GME Trove Score: {total:.1f}/100 {rating} {delta_str}\n"
-            f"Pillars — Valuation {A:.1f}/30 · Capital {B:.1f}/45 · Quality {C:.1f}/25\n"
+            f"Pillars — Valuation {A:.1f}/25 · Capital {B:.1f}/40 · Quality {C:.1f}/20 · Insider {D:.1f}/15\n"
+            f"Insider 3y buys: {ins_count} purchases / {ins_str}\n"
             f"Immunity {imm_count}/5: {imm_line}\n"
             f"Inputs — EV/FCF {inp.ev_fcf:.1f} · EV/EBITDA {inp.ev_ebitda:.1f} · P/B {inp.pb:.2f} · "
             f"Altman Z {inp.altman_z:.1f} · D/E {inp.debt_equity:.2f} · Net Cash {net_cash_pct*100:.1f}% · "

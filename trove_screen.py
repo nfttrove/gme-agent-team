@@ -70,10 +70,30 @@ class TroveInputs:
     operating_margin: float
     roe:              float
     net_margin:       float
+    insider_buy_count:   int   = 0
+    insider_buy_dollars: float = 0.0
 
     @property
     def net_cash_pct(self) -> float:
         return (self.cash_mm - self.total_debt_mm) / self.market_cap_mm
+
+
+def _score_insider_conviction(count: int, dollars: float) -> tuple[float, float, float]:
+    if count >= 6:    cp = 8.0
+    elif count >= 3:  cp = 5.0
+    elif count >= 1:  cp = 2.0
+    else:             cp = 0.0
+    if dollars >= 10_000_000:    dp = 7.0
+    elif dollars >= 1_000_000:   dp = 6.0
+    elif dollars >= 100_000:     dp = 4.0
+    elif dollars > 0:            dp = 2.0
+    else:                        dp = 0.0
+    return cp, dp, cp + dp
+
+
+_SCALE_A = 25.0 / 30.0
+_SCALE_B = 40.0 / 45.0
+_SCALE_C = 20.0 / 25.0
 
 
 # ── Scorer ────────────────────────────────────────────────────────────────────
@@ -93,7 +113,13 @@ def trove_score(i: TroveInputs) -> dict:
     c2 = _asc(i.roe, _ROE)
     c3 = 5.0 if i.net_margin > 0 else 0.0
 
-    total = a1 + a2 + a3 + b1 + b2 + b3 + c1 + c2 + c3
+    pillar_a = (a1 + a2 + a3) * _SCALE_A
+    pillar_b = (b1 + b2 + b3) * _SCALE_B
+    pillar_c = (c1 + c2 + c3) * _SCALE_C
+    d_count_pts, d_dollar_pts, pillar_d = _score_insider_conviction(
+        i.insider_buy_count, i.insider_buy_dollars
+    )
+    total = pillar_a + pillar_b + pillar_c + pillar_d
     rating = next((s for t, s in _RATINGS if total >= t), "☆☆☆☆☆")
 
     immunity = {
@@ -105,8 +131,12 @@ def trove_score(i: TroveInputs) -> dict:
     }
 
     return {
-        "scores":  {"A1":a1,"A2":a2,"A3":a3,"B1":b1,"B2":b2,"B3":b3,"C1":c1,"C2":c2,"C3":c3},
-        "pillars": {"A": a1+a2+a3, "B": b1+b2+b3, "C": c1+c2+c3},
+        "scores":  {"A1":a1,"A2":a2,"A3":a3,"B1":b1,"B2":b2,"B3":b3,
+                     "C1":c1,"C2":c2,"C3":c3,
+                     "D1":d_count_pts,"D2":d_dollar_pts},
+        "pillars": {"A": pillar_a, "B": pillar_b, "C": pillar_c, "D": pillar_d},
+        "insider": {"count": i.insider_buy_count,
+                     "dollars": round(i.insider_buy_dollars, 2)},
         "total":   round(total, 2),
         "rating":  rating,
         "immunity": immunity,
@@ -204,6 +234,15 @@ def fetch_inputs(ticker: str) -> Optional[TroveInputs]:
         def nan_to(v, sentinel):
             return sentinel if (v is None or (isinstance(v, float) and math.isnan(v))) else v
 
+        ib_count, ib_dollars = 0, 0.0
+        try:
+            from gme_trading_system.insider_buys import fetch_insider_buys
+            ib = fetch_insider_buys(ticker, years=3)
+            if ib.error is None:
+                ib_count, ib_dollars = ib.count, ib.dollars
+        except Exception:
+            pass
+
         return TroveInputs(
             ev_fcf           = nan_to(ev_fcf, 0),    # 0 → cash-fortress path
             ev_ebitda        = nan_to(ev_ebitda, 99),
@@ -216,6 +255,8 @@ def fetch_inputs(ticker: str) -> Optional[TroveInputs]:
             operating_margin = nan_to(op_margin, 0),
             roe              = nan_to(roe, 0),
             net_margin       = nan_to(net_margin, 0),
+            insider_buy_count   = ib_count,
+            insider_buy_dollars = ib_dollars,
         )
     except Exception as e:
         print(f"  [{ticker}] fetch error: {e}")
@@ -324,6 +365,9 @@ def main():
             "A (Val)":   round(result["pillars"]["A"], 1),
             "B (Cap)":   round(result["pillars"]["B"], 1),
             "C (Qual)":  round(result["pillars"]["C"], 1),
+            "D (Ins)":   round(result["pillars"]["D"], 1),
+            "Ins#":      inp.insider_buy_count,
+            "Ins$":      f"${inp.insider_buy_dollars/1e6:.1f}M" if inp.insider_buy_dollars >= 1e6 else f"${inp.insider_buy_dollars/1e3:.0f}K",
             "🛡️":        f"{result['immunity_count']}/5",
             "EV/FCF":    round(inp.ev_fcf, 1),
             "EV/EBITDA": round(inp.ev_ebitda, 1),
@@ -344,7 +388,7 @@ def main():
           .reset_index(drop=True))
     df.index += 1
 
-    cols = ["Ticker","Score","Rating","A (Val)","B (Cap)","C (Qual)","🛡️",
+    cols = ["Ticker","Score","Rating","A (Val)","B (Cap)","C (Qual)","D (Ins)","Ins#","Ins$","🛡️",
             "EV/FCF","EV/EBITDA","P/B","AltmanZ","D/E","NetCash%","OpMgn%","ROE%","NetMgn%"]
     pd.set_option("display.max_columns", None)
     pd.set_option("display.width", 220)

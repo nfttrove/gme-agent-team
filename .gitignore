@@ -32,6 +32,7 @@ orchestrator.log
 
 # Runtime state
 halt.flag
+gme_trading_system/.insider_cache/
 supabase_sync_state.json
 gme_trading_system/supabase_sync_state.json
 

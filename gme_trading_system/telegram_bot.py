@@ -913,13 +913,17 @@ def handle_command(text: str, user: str = "team"):
             else:
                 lines = ["<b>📊 Trove Score Rankings</b>\n"]
                 for r in results:
-                    imm    = "🛡️" * r["immunity"]
+                    imm     = "🛡️" * r["immunity"]
+                    ins_d   = r.get("insider_buy_dollars", 0) or 0
+                    ins_str = f"${ins_d/1e6:.1f}M" if ins_d >= 1e6 else (f"${ins_d/1e3:.0f}K" if ins_d > 0 else "$0")
                     lines.append(
                         f"<b>{r['ticker']}</b>  {r['score']:.1f}/100  {r['rating']}  {imm}\n"
-                        f"  A={r['pillar_A']:.0f}/30  B={r['pillar_B']:.0f}/45  C={r['pillar_C']:.0f}/25  "
-                        f"NetCash {r['net_cash_pct']}%  AltZ {r['altman_z']}"
+                        f"  A={r['pillar_A']:.0f}/25  B={r['pillar_B']:.0f}/40  C={r['pillar_C']:.0f}/20  "
+                        f"D={r['pillar_D']:.0f}/15\n"
+                        f"  NetCash {r['net_cash_pct']}%  AltZ {r['altman_z']}  "
+                        f"Insider 3y: {r.get('insider_buy_count', 0)} buys / {ins_str}"
                     )
-                lines.append("\n<i>A=Valuation · B=Capital · C=Quality</i>")
+                lines.append("\n<i>A=Valuation · B=Capital · C=Quality · D=Insider Conviction (3y dir/officer open-market buys)</i>")
                 _reply("\n".join(lines))
         except Exception as e:
             _reply(f"❌ Trove error: {str(e)[:200]}")

@@ -398,7 +398,7 @@ async def trove_cmd(interaction: discord.Interaction, tickers: str = ""):
             color=discord.Color.blue(),
             timestamp=datetime.now(ET),
         )
-        title_embed.set_footer(text="A=Valuation · B=Capital · C=Quality")
+        title_embed.set_footer(text="A=Valuation · B=Capital · C=Quality · D=Insider Conviction (3y open-market buys)")
 
         # Result embeds
         embeds = [title_embed]
@@ -413,13 +413,21 @@ async def trove_cmd(interaction: discord.Interaction, tickers: str = ""):
             )
             embed.add_field(
                 name="Pillars",
-                value=f"A: {r['pillar_A']:.0f}/30 | B: {r['pillar_B']:.0f}/45 | C: {r['pillar_C']:.0f}/25",
+                value=(f"A: {r['pillar_A']:.0f}/25 | B: {r['pillar_B']:.0f}/40 | "
+                       f"C: {r['pillar_C']:.0f}/20 | D: {r['pillar_D']:.0f}/15"),
                 inline=False,
             )
             embed.add_field(name="Immunity", value=shields or "None", inline=True)
             embed.add_field(
                 name="Metrics",
                 value=f"NetCash: {r['net_cash_pct']}%\nAltman Z: {r['altman_z'] or 'N/A'}\nEV/FCF: {r['ev_fcf']:.1f}x",
+                inline=True,
+            )
+            ins_d = r.get("insider_buy_dollars", 0) or 0
+            ins_str = f"${ins_d/1e6:.1f}M" if ins_d >= 1e6 else (f"${ins_d/1e3:.0f}K" if ins_d > 0 else "$0")
+            embed.add_field(
+                name="Insider 3y (dir/officer)",
+                value=f"{r.get('insider_buy_count', 0)} buys · {ins_str}",
                 inline=True,
             )
             embeds.append(embed)
