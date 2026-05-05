@@ -209,7 +209,10 @@ def fetch_insider_buys(ticker: str, years: int = 3) -> InsiderBuyStats:
                 continue
 
             acc_nodash = acc.replace("-", "")
-            xml_url = f"https://www.sec.gov/Archives/edgar/data/{cik_int}/{acc_nodash}/{doc}"
+            # primaryDocument often points to an xsl-rendered HTML wrapper
+            # (e.g. "xslF345X05/form4...xml"); strip that prefix to get raw XML.
+            raw_doc = doc.split("/", 1)[1] if doc.lower().startswith("xsl") else doc
+            xml_url = f"https://www.sec.gov/Archives/edgar/data/{cik_int}/{acc_nodash}/{raw_doc}"
             try:
                 xr = _get(xml_url)
                 xr.raise_for_status()
