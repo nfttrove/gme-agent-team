@@ -52,6 +52,10 @@ DEFAULT_TICKERS = [
     "VIPS","GME","ROIV","INTC","JHG","CART","FSLR","MNST","REGN","PATH",
     "TWLO","NOK","AMKR","ALGN","PINS","GROV","PUMP","CTRA","PHM","GFS",
     "AAPL","UA","NWSA","AMC","CPNG","CHWY","BKNG",
+    # Mag 7 (benchmark)
+    "MSFT","GOOGL","AMZN","NVDA","META","TSLA",
+    # Deep-value / insider-conviction additions
+    "BABA","PYPL","DIS","WBD","WBA","PARA","F","GM",
 ]
 
 
