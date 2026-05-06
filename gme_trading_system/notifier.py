@@ -21,6 +21,7 @@ Usage:
 import logging
 import os
 from datetime import datetime
+from pathlib import Path
 from zoneinfo import ZoneInfo
 
 import requests
@@ -92,6 +93,57 @@ def _send(text: str, parse_mode: str = "HTML") -> bool:
         except requests.RequestException as e:
             log.error(f"[notify] Telegram send failed to {chat_id}: {e}")
     return success
+
+
+def _send_photo(photo_path: Path, caption: str, parse_mode: str = "HTML") -> bool:
+    """Send a photo with caption to all configured chat IDs. Returns True if at least one succeeds."""
+    if not _ENABLED:
+        log.info(f"[notify] Telegram not configured. Photo {photo_path} would have been sent.")
+        return False
+    if not Path(photo_path).exists():
+        log.warning(f"[notify] photo not found at {photo_path}; falling back to text-only")
+        return _send(caption, parse_mode=parse_mode)
+    breaker = get_breaker("telegram")
+    success = False
+    chat_ids = [cid for cid in [TELEGRAM_CHAT_ID, TELEGRAM_OWNER_CHAT_ID] if cid]
+    for chat_id in chat_ids:
+        try:
+            with open(photo_path, "rb") as fh:
+                resp = breaker.call(
+                    requests.post,
+                    f"{_BASE_URL}/sendPhoto",
+                    data={"chat_id": chat_id, "caption": caption, "parse_mode": parse_mode},
+                    files={"photo": fh},
+                    timeout=20,
+                )
+            if resp.status_code == 200:
+                success = True
+            else:
+                log.warning(f"[notify] Telegram sendPhoto error {resp.status_code} to {chat_id}: {resp.text[:200]}")
+        except CircuitOpenError:
+            log.warning(f"[notify] Telegram circuit open — skipping photo to {chat_id}")
+        except (requests.RequestException, OSError) as e:
+            log.error(f"[notify] Telegram sendPhoto failed to {chat_id}: {e}")
+    return success
+
+
+PROMO_IMAGE = Path(__file__).parent / "assets" / "mygmebot_qr.png"
+PROMO_TEXT = (
+    "🎮 <b>@mygmebot</b> — Real-time $GME signals\n\n"
+    "9-agent analysis system: intraday + daily pattern breakouts, trend shifts, "
+    "news sentiment, geopolitical risk, price predictions. "
+    "Each with a calibrated confidence score.\n\n"
+    "👉 https://t.me/mygmebot\n\n"
+    "<i>Not financial advice. May contain errors.</i>"
+)
+
+
+def notify_promo() -> bool:
+    """Broadcast the @mygmebot promo (mascot/QR image + caption). Falls back to text if image missing."""
+    if PROMO_IMAGE.exists():
+        return _send_photo(PROMO_IMAGE, PROMO_TEXT)
+    log.warning(f"[notify] promo image missing at {PROMO_IMAGE}; sending text-only")
+    return _send(PROMO_TEXT)
 
 
 # ── Alert types ────────────────────────────────────────────────────────────────

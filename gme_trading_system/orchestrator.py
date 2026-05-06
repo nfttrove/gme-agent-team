@@ -1416,6 +1416,16 @@ def run_sunday_support_message():
         log.error(f"[Support] Failed: {e}")
 
 
+def run_promo_broadcast():
+    """Broadcast the @mygmebot promo card (mascot/QR + caption) to Telegram."""
+    try:
+        from notifier import notify_promo
+        ok = notify_promo()
+        log.info(f"[Promo] broadcast {'sent' if ok else 'failed'}")
+    except Exception as e:
+        log.error(f"[Promo] Failed: {e}")
+
+
 def run_learning_debrief():
     """4:30 PM ET — score predictions vs actuals and compute agent metrics."""
     log.info("[Learner] === Post-market debrief ===")
@@ -2516,6 +2526,10 @@ class TradingSystemOrchestrator:
 
         # Weekly coffee nudge — Sundays 10:00 AM ET
         self.scheduler.add_job(run_sunday_support_message, CronTrigger(day_of_week="sun", hour=10, minute=0, timezone=ET), id="sunday_support")
+
+        # @mygmebot promo broadcast — twice daily Mon-Fri (post-open + pre-close)
+        self.scheduler.add_job(run_promo_broadcast, CronTrigger(day_of_week="mon-fri", hour=10, minute=0,  timezone=ET), id="promo_morning")
+        self.scheduler.add_job(run_promo_broadcast, CronTrigger(day_of_week="mon-fri", hour=15, minute=30, timezone=ET), id="promo_afternoon")
 
         # Social monitor — scan tracked accounts every 15 minutes during market hours
         self.scheduler.add_job(run_social_scan, IntervalTrigger(minutes=15), id="social")

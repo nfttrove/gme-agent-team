@@ -1306,6 +1306,15 @@ def handle_command(text: str, user: str = "team"):
             _reply(f"❌ Test runner error: {str(e)[:200]}")
             log.error(f"[tgbot] /test failed: {e}")
 
+    elif cmd == "/promo":
+        try:
+            from notifier import notify_promo
+            ok = notify_promo()
+            _reply("✅ Promo broadcast sent." if ok else "❌ Promo broadcast failed.")
+        except Exception as e:
+            _reply(f"❌ Promo broadcast error: {str(e)[:200]}")
+            log.error(f"[tgbot] /promo failed: {e}")
+
     elif cmd == "/start":
         _reply(
             "👋 <b>Welcome to the GME Trading Bot</b>\n\n"
@@ -1348,7 +1357,8 @@ def handle_command(text: str, user: str = "team"):
             "<b>Settings:</b>\n"
             "/frequency [low|medium|high] — notification level\n\n"
             "<b>☕ Support:</b>\n"
-            "/supportme — buy-me-a-coffee / PayPal link\n\n"
+            "/supportme — buy-me-a-coffee / PayPal link\n"
+            "/promo — broadcast the @mygmebot promo card now\n\n"
             "<b>🧪 Testing:</b>\n"
             "/test — run Telegram handler smoke tests (~1 sec)\n"
             "/force &lt;agent&gt; — force an agent to run now "
