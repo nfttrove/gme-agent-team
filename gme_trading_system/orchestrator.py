@@ -1634,6 +1634,31 @@ def run_cto_trove_score():
         write_log("CTO", str(e), "trove_score", "error")
 
 
+def run_trove_history_log():
+    """9:15 AM ET — log every ticker scoring >= 65 to trove_score_history."""
+    log.info("[trove_history] daily log run")
+    try:
+        from trove_history import log_daily_scores
+        result = log_daily_scores(threshold=65.0)
+        write_log("CTO", f"trove_history log: {result}", "trove_history", "ok")
+    except Exception as e:
+        log.error(f"[trove_history] log failed: {e}")
+        write_log("CTO", str(e), "trove_history", "error")
+
+
+def run_trove_history_resolve():
+    """3:30 AM ET — resolve forward returns for any rows whose
+    30/90/365-day anniversary has passed."""
+    log.info("[trove_history] daily resolve run")
+    try:
+        from trove_history import resolve_forward_returns
+        result = resolve_forward_returns()
+        write_log("CTO", f"trove_history resolve: {result}", "trove_history", "ok")
+    except Exception as e:
+        log.error(f"[trove_history] resolve failed: {e}")
+        write_log("CTO", str(e), "trove_history", "error")
+
+
 def run_cto_daily_brief():
     """9:05 AM ET — CTO structural intelligence brief, just after morning huddle.
 
@@ -2481,6 +2506,8 @@ class TradingSystemOrchestrator:
         # CTO structural intelligence — PE playbook monitoring and short side research
         self.scheduler.add_job(run_cto_daily_brief,    CronTrigger(hour=9,  minute=5,  timezone=ET),                   id="cto_brief")
         self.scheduler.add_job(run_cto_trove_score,    CronTrigger(hour=9,  minute=10, timezone=ET),                   id="cto_trove")
+        self.scheduler.add_job(run_trove_history_log,  CronTrigger(hour=9,  minute=15, timezone=ET),                   id="trove_history_log")
+        self.scheduler.add_job(run_trove_history_resolve, CronTrigger(hour=3, minute=30, timezone=ET),                 id="trove_history_resolve")
         self.scheduler.add_job(run_cto_structural_scan, CronTrigger(day_of_week="sun", hour=8, minute=0, timezone=ET), id="cto_scan")
         self.scheduler.add_job(run_investor_intel_scan, CronTrigger(hour=8, minute=0, timezone=ET),                    id="investor_intel")
 
