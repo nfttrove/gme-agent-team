@@ -2456,7 +2456,19 @@ class TradingSystemOrchestrator:
             log.critical("[TradingSystemOrchestrator] Ollama unavailable; cannot start system")
             sys.exit(1)
 
-        self.scheduler = BackgroundScheduler(timezone="America/New_York")
+        # job_defaults prevents Ollama-induced pileup: if a job is queued
+        # because the previous one is still running, coalesce collapses
+        # multiple missed firings into one, and max_instances=1 stops a
+        # second copy from launching mid-run. misfire_grace_time keeps
+        # firings within 60s usable instead of dropping them.
+        self.scheduler = BackgroundScheduler(
+            timezone="America/New_York",
+            job_defaults={
+                "coalesce": True,
+                "max_instances": 1,
+                "misfire_grace_time": 60,
+            },
+        )
         with open(os.path.join(os.path.dirname(__file__), "risk_rules.yaml")) as f:
             self.risk_rules = yaml.safe_load(f)
 
