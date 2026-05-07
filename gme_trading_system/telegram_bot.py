@@ -1580,20 +1580,19 @@ Think: Bloomberg terminal meets a knowledgeable friend who reads a lot."""
         log.info("[tgbot] Response from Notebook LM")
         return notebook_response
 
-    # Try local Ollama models: Gemma → DeepSeek
-    for model_name in ["gemma2:9b", "deepseek-r1:8b"]:
-        try:
-            r = requests.post("http://localhost:11434/api/generate", json={
-                "model": model_name,
-                "prompt": f"{system_prompt}\n\n{user_message}",
-                "stream": False,
-            }, timeout=30)
-            if r.status_code == 200:
-                response = r.json().get("response", "").strip()
-                log.info(f"[tgbot] Response from {model_name}")
-                return response
-        except Exception as e:
-            log.debug(f"[tgbot] {model_name} failed: {e}")
+    # Try local Gemma
+    try:
+        r = requests.post("http://localhost:11434/api/generate", json={
+            "model": "gemma2:9b",
+            "prompt": f"{system_prompt}\n\n{user_message}",
+            "stream": False,
+        }, timeout=30)
+        if r.status_code == 200:
+            response = r.json().get("response", "").strip()
+            log.info("[tgbot] Response from gemma2:9b")
+            return response
+    except Exception as e:
+        log.debug(f"[tgbot] gemma2:9b failed: {e}")
 
     # Try Gemini Flash (paid fallback, only if local models fail)
     if os.getenv("GOOGLE_API_KEY"):

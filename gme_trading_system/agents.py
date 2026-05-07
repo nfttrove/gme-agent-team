@@ -8,12 +8,7 @@ log = logging.getLogger(__name__)
 
 
 class ResilientAgent(Agent):
-    """Multi-LLM agent with intelligent routing and fallbacks.
-
-    Routes to best LLM based on agent role:
-      - Complex reasoning (Futurist, CTO) → DeepSeek-r1:8b
-      - Simple agents (others) → Gemma 2:9b
-      - Fallback chain: Gemini Flash → Gemini Pro if primary fails
+    """Agent pinned to Gemma 2:9b with Gemini Flash → Pro cloud fallback.
 
     Disables tool use since local LLMs don't support structured outputs.
     All data is injected into task descriptions instead.
@@ -91,7 +86,7 @@ news_analyst_agent = ResilientAgent(
 )
 
 futurist_agent = ResilientAgent(
-    agent_name="Futurist",  # Routes to DeepSeek-r1:8b for complex reasoning
+    agent_name="Futurist",
     role="Market Futurist",
     goal="Predict GME price for the next 1h, 4h, and 24h with a confidence score for each horizon",
     backstory=(

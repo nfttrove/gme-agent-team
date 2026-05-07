@@ -84,13 +84,7 @@ def init_db():
 
 
 def check_ollama_ready() -> bool:
-    """Verify Ollama is running and has required models.
-
-    Requires: gemma2:9b (minimum)
-    Recommended: deepseek-r1:8b (for complex reasoning agents)
-
-    Logs failure and returns False if Ollama is unreachable or missing Gemma.
-    """
+    """Verify Ollama is reachable and gemma2:9b is pulled."""
     ollama_host = os.getenv("OLLAMA_HOST", "http://localhost:11434")
     try:
         response = requests.get(f"{ollama_host}/api/tags", timeout=2)
@@ -100,8 +94,7 @@ def check_ollama_ready() -> bool:
             log.error(f"[check_ollama_ready] REQUIRED: gemma2:9b not found. Available: {models}")
             return False
 
-        has_deepseek = "deepseek-r1:8b" in models
-        log.info(f"[check_ollama_ready] Ollama ready ({len(models)} models) - DeepSeek: {'YES' if has_deepseek else 'NO (fallback to Gemma for complex agents)'}")
+        log.info(f"[check_ollama_ready] Ollama ready ({len(models)} models)")
         return True
     except requests.exceptions.ConnectionError:
         log.error(f"[check_ollama_ready] Ollama unreachable at {ollama_host}")
@@ -2614,9 +2607,15 @@ class TradingSystemOrchestrator:
 
     def start(self):
         self.configure_schedule()
-        self.scheduler.start()
+        # Start bot + sync threads first, then defer scheduler 60s. Otherwise
+        # APScheduler fires backfilled jobs (Trendy, Synthesis, Futurist...)
+        # the instant scheduler.start() returns, all hitting the single Ollama
+        # runner at once and starving any user /commands queued in Telegram.
         start_bot_thread()
         start_sync_thread()
+        log.info("[startup] Bot online — deferring scheduler 60s to keep Ollama free for queued /commands")
+        time.sleep(60)
+        self.scheduler.start()
         write_log("Orchestrator", "All 10 agents online", "startup")
 
         # Sanity-check: print next fire time of the daily briefing so we can
