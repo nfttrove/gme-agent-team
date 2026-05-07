@@ -86,3 +86,49 @@ def get_llm_fallback_chain(agent_name: str) -> list:
     if has_gemini:
         chain.extend([gemini_flash, gemini_pro])
     return chain
+
+
+# ── Single-shot generate (bypasses CrewAI) ────────────────────────────────────
+
+def llm_generate(prompt: str, num_predict: int = 200, temperature: float = 0.2,
+                 timeout: int = 45) -> str:
+    """Synchronous LLM call with no CrewAI wrapping. STREAM_MODE-aware.
+
+    Use this for the orchestrator's "CrewAI-bypass" cycles (Synthesis, GeoRisk,
+    etc.) — Gemma can't tool-call, so those functions pre-fetch data and POST
+    a fully-formed prompt. They previously hit Ollama unconditionally;
+    STREAM_MODE now routes them to Gemini Flash so live streams don't drag
+    them through swap.
+
+    Returns the raw text response (whitespace-stripped). Raises on timeout
+    or API error so the caller can log + fall back.
+    """
+    if STREAM_MODE:
+        import google.generativeai as genai
+        api_key = os.getenv("GOOGLE_API_KEY", "")
+        if not api_key:
+            raise RuntimeError("STREAM_MODE on but GOOGLE_API_KEY missing")
+        genai.configure(api_key=api_key)
+        model = genai.GenerativeModel(
+            "gemini-2.5-flash",
+            generation_config={
+                "temperature": temperature,
+                "max_output_tokens": num_predict,
+            },
+        )
+        resp = model.generate_content(prompt, request_options={"timeout": timeout})
+        return (resp.text or "").strip()
+
+    import requests
+    r = requests.post(
+        f"{ollama_host}/api/generate",
+        json={
+            "model": "gemma2:9b",
+            "prompt": prompt,
+            "stream": False,
+            "options": {"num_predict": num_predict, "temperature": temperature},
+        },
+        timeout=timeout,
+    )
+    r.raise_for_status()
+    return r.json().get("response", "").strip()

@@ -1140,15 +1140,8 @@ def handle_command(text: str, user: str = "team"):
                 "each under 140 chars. Cite specific numbers/sources where possible."
             )
 
-            ollama_host = os.getenv("OLLAMA_HOST", "http://localhost:11434")
-            r = _req.post(
-                f"{ollama_host}/api/generate",
-                json={"model": "gemma2:9b", "prompt": prompt, "stream": False,
-                      "options": {"num_predict": 700, "temperature": 0.3}},
-                timeout=90,
-            )
-            r.raise_for_status()
-            swot = r.json().get("response", "").strip()
+            from llm_config import llm_generate
+            swot = llm_generate(prompt, num_predict=700, temperature=0.3, timeout=90).strip()
 
             from market_state import enforce_levels
             swot = enforce_levels(swot, fact)
@@ -1580,19 +1573,16 @@ Think: Bloomberg terminal meets a knowledgeable friend who reads a lot."""
         log.info("[tgbot] Response from Notebook LM")
         return notebook_response
 
-    # Try local Gemma
+    # Try local Gemma (or Gemini Flash via STREAM_MODE)
     try:
-        r = requests.post("http://localhost:11434/api/generate", json={
-            "model": "gemma2:9b",
-            "prompt": f"{system_prompt}\n\n{user_message}",
-            "stream": False,
-        }, timeout=30)
-        if r.status_code == 200:
-            response = r.json().get("response", "").strip()
-            log.info("[tgbot] Response from gemma2:9b")
+        from llm_config import llm_generate, STREAM_MODE
+        response = llm_generate(f"{system_prompt}\n\n{user_message}",
+                                num_predict=400, temperature=0.4, timeout=30).strip()
+        if response:
+            log.info(f"[tgbot] Response from {'Gemini Flash' if STREAM_MODE else 'gemma2:9b'}")
             return response
     except Exception as e:
-        log.debug(f"[tgbot] gemma2:9b failed: {e}")
+        log.debug(f"[tgbot] primary LLM failed: {e}")
 
     # Try Gemini Flash (paid fallback, only if local models fail)
     if os.getenv("GOOGLE_API_KEY"):

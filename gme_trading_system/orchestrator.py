@@ -317,16 +317,10 @@ def run_commentary():
             f"Team consensus: {synthesis_text}\n"
         )
 
-        ollama_host = os.getenv("OLLAMA_HOST", "http://localhost:11434")
-        r = requests.post(
-            f"{ollama_host}/api/generate",
-            json={"model": "gemma2:9b", "prompt": prompt, "stream": False,
-                  "options": {"num_predict": 80, "temperature": 0.7}},
-            timeout=30,
-        )
-        r.raise_for_status()
-        comment = r.json().get("response", "").strip().strip('"').strip("'")
-        # Collapse to first line — Gemma sometimes adds a second "explanation" line
+        from llm_config import llm_generate
+        comment = llm_generate(prompt, num_predict=80, temperature=0.7, timeout=30)
+        comment = comment.strip().strip('"').strip("'")
+        # Collapse to first line — model sometimes adds a second "explanation" line
         comment = comment.split("\n")[0].strip()[:240]
 
         if not comment:
@@ -345,8 +339,8 @@ def run_commentary():
         # Record the state key so the next run can detect "nothing changed"
         write_log("Chatty", state_key, "commentary_state")
     except requests.Timeout:
-        log.error("[Chatty] Ollama timeout")
-        write_log("Chatty", "Ollama timeout after 30s", "commentary", "timeout")
+        log.error("[Chatty] LLM timeout")
+        write_log("Chatty", "LLM timeout after 30s", "commentary", "timeout")
     except Exception as e:
         log.error(f"[Chatty] {e}")
         write_log("Chatty", str(e), "commentary", "error")
@@ -401,17 +395,11 @@ def run_news():
                 f"Composite sentiment: {composite:+.2f} ({label}) across {len(scored)} headlines.\n"
                 f"Top headlines:\n{top_lines}\n"
             )
-            ollama_host = os.getenv("OLLAMA_HOST", "http://localhost:11434")
+            from llm_config import llm_generate
             narrative = ""
             try:
-                r = requests.post(
-                    f"{ollama_host}/api/generate",
-                    json={"model": "gemma2:9b", "prompt": prompt, "stream": False,
-                          "options": {"num_predict": 120, "temperature": 0.5}},
-                    timeout=30,
-                )
-                r.raise_for_status()
-                narrative = r.json().get("response", "").strip().strip('"').strip("'")
+                narrative = llm_generate(prompt, num_predict=120, temperature=0.5, timeout=30)
+                narrative = narrative.strip().strip('"').strip("'")
                 narrative = narrative.split("\n")[0].strip()[:400]
             except Exception as e:
                 log.warning(f"[Newsie] narrative LLM failed: {e}")
@@ -482,20 +470,13 @@ def _compute_pattern_signal():
                 f"MACD hist: {report.indicators.get('macd_hist','n/a')}\n"
                 f"Supporting cues: {report.reasoning}\n"
             )
-            ollama_host = os.getenv("OLLAMA_HOST", "http://localhost:11434")
-            r = requests.post(
-                f"{ollama_host}/api/generate",
-                json={"model": "gemma2:9b", "prompt": prompt, "stream": False,
-                      "options": {"num_predict": 120, "temperature": 0.2}},
-                timeout=30,
-            )
-            r.raise_for_status()
-            candidate = r.json().get("response", "").strip().strip('"').strip("'")
-            candidate = candidate.split("\n")[0].strip()
+            from llm_config import llm_generate
+            candidate = llm_generate(prompt, num_predict=120, temperature=0.2, timeout=30)
+            candidate = candidate.strip().strip('"').strip("'").split("\n")[0].strip()
             if 20 < len(candidate) < 300:
                 sentence = candidate[:220]
         except Exception as e:
-            log.warning(f"[Pattern] narration fallback — Gemma error: {e}")
+            log.warning(f"[Pattern] narration fallback — LLM error: {e}")
 
     # Build PatternSignal from the detector output (authoritative) plus the
     # narration (cosmetic). PatternSignal validators will reject anything
@@ -621,15 +602,8 @@ def _compute_trendy_signal():
         f"support_level MUST equal {support_hint}, resistance_level MUST equal {resistance_hint}. severity=HIGH if confidence>=0.75."
     )
 
-    ollama_host = os.getenv("OLLAMA_HOST", "http://localhost:11434")
-    r = requests.post(
-        f"{ollama_host}/api/generate",
-        json={"model": "gemma2:9b", "prompt": prompt, "stream": False,
-              "options": {"num_predict": 300, "temperature": 0.2}},
-        timeout=60,
-    )
-    r.raise_for_status()
-    raw = r.json().get("response", "")
+    from llm_config import llm_generate
+    raw = llm_generate(prompt, num_predict=300, temperature=0.2, timeout=60)
     data = _extract_json(raw)
     if not data:
         return None, f"parse error: {raw[:300]}"
@@ -727,15 +701,8 @@ def run_futurist_prediction_signal():
                 "Use ATR(14) to size stops (≈1.5×ATR from entry). Confidence ≤ 0.60 if signals conflict."
             )
 
-            ollama_host = os.getenv("OLLAMA_HOST", "http://localhost:11434")
-            r = requests.post(
-                f"{ollama_host}/api/generate",
-                json={"model": "gemma2:9b", "prompt": prompt, "stream": False,
-                      "options": {"num_predict": 300, "temperature": 0.3}},
-                timeout=60,
-            )
-            r.raise_for_status()
-            raw = r.json().get("response", "")
+            from llm_config import llm_generate
+            raw = llm_generate(prompt, num_predict=300, temperature=0.3, timeout=60)
             prediction_data = _extract_json(raw)
             if not prediction_data:
                 log.warning("[Futurist] Could not parse prediction from output")
@@ -1647,15 +1614,9 @@ def run_cto_trove_score():
         )
         interpretation = ""
         try:
-            ollama_host = os.getenv("OLLAMA_HOST", "http://localhost:11434")
-            resp = requests.post(
-                f"{ollama_host}/api/generate",
-                json={"model": "gemma2:9b", "prompt": prompt, "stream": False,
-                      "options": {"num_predict": 200, "temperature": 0.4}},
-                timeout=30,
-            )
-            resp.raise_for_status()
-            interpretation = resp.json().get("response", "").strip().strip('"').strip("'")
+            from llm_config import llm_generate
+            interpretation = llm_generate(prompt, num_predict=200, temperature=0.4, timeout=30)
+            interpretation = interpretation.strip().strip('"').strip("'")
             interpretation = " ".join(interpretation.split())[:600]
         except Exception as e:
             log.warning(f"[CTO] Trove interpretation LLM failed: {e}")
@@ -1784,16 +1745,9 @@ def run_cto_daily_brief():
         )
         commentary = "No new structural signals to act on today."
         try:
-            ollama_host = os.getenv("OLLAMA_HOST", "http://localhost:11434")
-            resp = requests.post(
-                f"{ollama_host}/api/generate",
-                json={"model": "gemma2:9b", "prompt": prompt, "stream": False,
-                      "options": {"num_predict": 160, "temperature": 0.3}},
-                timeout=30,
-            )
-            resp.raise_for_status()
-            raw = resp.json().get("response", "").strip().strip('"').strip("'")
-            raw = " ".join(raw.split())
+            from llm_config import llm_generate
+            raw = llm_generate(prompt, num_predict=160, temperature=0.3, timeout=30)
+            raw = " ".join(raw.strip().strip('"').strip("'").split())
             if raw:
                 commentary = raw[:500]
         except Exception as e:
@@ -1920,15 +1874,9 @@ def run_synthesis():
             f"Recent per-agent outputs (last 4h):\n{logs_block}\n"
         )
 
-        ollama_host = os.getenv("OLLAMA_HOST", "http://localhost:11434")
-        r = requests.post(
-            f"{ollama_host}/api/generate",
-            json={"model": "gemma2:9b", "prompt": prompt, "stream": False,
-                  "options": {"num_predict": 160, "temperature": 0.2}},
-            timeout=45,
-        )
-        r.raise_for_status()
-        brief = r.json().get("response", "").strip().strip('"').strip("'")
+        from llm_config import llm_generate
+        brief = llm_generate(prompt, num_predict=160, temperature=0.2, timeout=45)
+        brief = brief.strip().strip('"').strip("'")
         brief = brief.split("\n")[0].strip()[:500]
 
         if not brief or "PRICE" not in brief.upper():
@@ -1948,8 +1896,8 @@ def run_synthesis():
         log.info(f"[Synthesis] {brief}")
         write_log("Synthesis", brief, "synthesis")
     except requests.Timeout:
-        log.error("[Synthesis] Ollama timeout")
-        write_log("Synthesis", "Ollama timeout after 45s", "synthesis", "timeout")
+        log.error("[Synthesis] LLM timeout")
+        write_log("Synthesis", "LLM timeout after 45s", "synthesis", "timeout")
     except Exception as e:
         log.error(f"[Synthesis] {e}")
         write_log("Synthesis", str(e), "synthesis", "error")
@@ -2004,16 +1952,9 @@ def _compute_georisk():
         "plausible retail impact; HIGH = immediate supply-chain or consumer-demand shock.\n\n"
         f"RECENT GEO-TAGGED HEADLINES ({len(geo_hits)} hits):\n{lines}\n"
     )
-    ollama_host = os.getenv("OLLAMA_HOST", "http://localhost:11434")
-    r = requests.post(
-        f"{ollama_host}/api/generate",
-        json={"model": "gemma2:9b", "prompt": prompt, "stream": False,
-              "options": {"num_predict": 120, "temperature": 0.3}},
-        timeout=45,
-    )
-    r.raise_for_status()
-    brief = r.json().get("response", "").strip().strip('"').strip("'")
-    brief = brief.split("\n")[0].strip()[:400]
+    from llm_config import llm_generate
+    brief = llm_generate(prompt, num_predict=120, temperature=0.3, timeout=45)
+    brief = brief.strip().strip('"').strip("'").split("\n")[0].strip()[:400]
     level = "LOW"
     for candidate in ("HIGH", "MEDIUM", "LOW"):
         if brief.upper().startswith(candidate):
@@ -2231,15 +2172,8 @@ def run_daily_briefing():
         waiting_txt = f"Break above ${resistance:.2f} with follow-through volume."
         risk_txt    = f"A close below ${support:.2f} cancels the setup."
         try:
-            ollama_host = os.getenv("OLLAMA_HOST", "http://localhost:11434")
-            resp = requests.post(
-                f"{ollama_host}/api/generate",
-                json={"model": "gemma2:9b", "prompt": prompt, "stream": False,
-                      "options": {"num_predict": 250, "temperature": 0.3}},
-                timeout=30,
-            )
-            resp.raise_for_status()
-            text = resp.json().get("response", "").strip()
+            from llm_config import llm_generate
+            text = llm_generate(prompt, num_predict=250, temperature=0.3, timeout=30).strip()
             # Parse labelled sections
             for line in text.splitlines():
                 s = line.strip()
@@ -2347,16 +2281,9 @@ def run_daily_huddle():
             "Wait for confluence — only act when Trendy, Pattern, and Futurist all align."
         )
         try:
-            ollama_host = os.getenv("OLLAMA_HOST", "http://localhost:11434")
-            resp = requests.post(
-                f"{ollama_host}/api/generate",
-                json={"model": "gemma2:9b", "prompt": prompt, "stream": False,
-                      "options": {"num_predict": 80, "temperature": 0.4}},
-                timeout=30,
-            )
-            resp.raise_for_status()
-            raw = resp.json().get("response", "").strip().strip('"').strip("'")
-            raw = " ".join(raw.split())
+            from llm_config import llm_generate
+            raw = llm_generate(prompt, num_predict=80, temperature=0.4, timeout=30)
+            raw = " ".join(raw.strip().strip('"').strip("'").split())
             if raw:
                 focus_txt = raw[:160]
         except Exception as e:
