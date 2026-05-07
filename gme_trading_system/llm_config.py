@@ -1,14 +1,11 @@
 """LLM configuration and routing.
 
-Single-local-model setup:
-  - Gemma 2:9b (local Ollama)  — All agents
-  - Gemini Flash (Google)      — Cloud fallback for Ollama outages / 429s
-  - Gemini Pro (Google)        — Final fallback
+Default: Gemma 2:9b local → Gemini Flash → Gemini Pro.
 
-We previously routed Futurist/CTO/Boss to DeepSeek-r1:8b for deeper reasoning,
-but loading two models in one Ollama runner caused VRAM thrash and request
-queue starvation. Pinning everything to Gemma keeps the runner hot and
-predictable.
+STREAM_MODE=1 flips the chain to cloud-primary: Gemini Flash → Pro. This is
+for live OBS streams where Ollama's 9 GB resident footprint pushes a 16 GB
+Mac into swap and inference latency blows up. Cloud calls cost fractions of
+a cent each; far cheaper than a stuttering stream. Unset to return local.
 """
 import os
 import logging
@@ -52,10 +49,21 @@ gemini_pro = LLM(
 )
 
 
+# ── Stream mode ────────────────────────────────────────────────────────────────
+
+STREAM_MODE = os.getenv("STREAM_MODE", "").strip() in {"1", "true", "yes", "on"}
+if STREAM_MODE:
+    log.info("[llm_config] STREAM_MODE=on — cloud-primary (Gemini Flash → Pro). "
+             "Local Ollama stays idle and auto-unloads after ~5 min.")
+
+
 # ── Routing function ───────────────────────────────────────────────────────────
 
 def get_llm_for_agent(agent_name: str) -> LLM:
-    """All agents route to Gemma 2:9b. Cloud fallback is Gemini Flash → Pro."""
+    """Primary LLM for an agent. STREAM_MODE flips local Gemma → cloud Flash."""
+    if STREAM_MODE:
+        log.info(f"[llm_config] {agent_name} → Gemini Flash (stream mode)")
+        return gemini_flash
     log.info(f"[llm_config] {agent_name} → Gemma 2:9b")
     return gemma_local
 
@@ -63,8 +71,18 @@ def get_llm_for_agent(agent_name: str) -> LLM:
 # ── Fallback chain (for ResilientAgent) ────────────────────────────────────────
 
 def get_llm_fallback_chain(agent_name: str) -> list:
-    """Return ordered list of LLMs to try if primary fails: Gemma → Flash → Pro."""
+    """Return ordered list of LLMs to try if primary fails.
+
+    Default:    Gemma → Flash → Pro
+    Stream:     Flash → Pro  (no local; Ollama is what we're freeing)
+    """
+    has_gemini = bool(os.getenv("GOOGLE_API_KEY"))
+    if STREAM_MODE:
+        chain = [gemini_flash]
+        if has_gemini:
+            chain.append(gemini_pro)
+        return chain
     chain = [gemma_local]
-    if os.getenv("GOOGLE_API_KEY"):
+    if has_gemini:
         chain.extend([gemini_flash, gemini_pro])
     return chain
