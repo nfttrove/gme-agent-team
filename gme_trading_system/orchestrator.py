@@ -2484,7 +2484,7 @@ class TradingSystemOrchestrator:
         # by which point Yahoo's daily bar is finalized for the session.
         self.scheduler.add_job(run_history_overwrite, CronTrigger(day_of_week="mon-fri", hour=16, minute=40, timezone=ET), id="history_overwrite")
         self.scheduler.add_job(run_intraday_aggregation, IntervalTrigger(minutes=5), id="aggregator_intraday")
-        self.scheduler.add_job(run_voice_forwarder, IntervalTrigger(minutes=10), id="voice_forwarder")
+        self.scheduler.add_job(run_voice_forwarder, IntervalTrigger(minutes=1), id="voice_forwarder")
         self.scheduler.add_job(run_standup_report,    CronTrigger(hour=16, minute=0,  timezone=ET), id="standup_close")
 
         # Learning sessions — agents review their own performance and adapt
