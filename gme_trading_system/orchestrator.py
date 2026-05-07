@@ -42,6 +42,7 @@ from safe_kickoff import safe_kickoff, safe_kickoff_with_fallback, CrewTimeout
 from db_maintenance import enable_wal_mode
 from signal_manager import SignalManager
 from notifier import notify_signal_alert
+import signal_gate
 from models.agent_outputs import FuturistPrediction
 
 load_dotenv()
@@ -195,7 +196,6 @@ def _live_intraday_volume(symbol: str) -> float | None:
         return None
 
 
-@active_window_required
 def _volume_regime(conn: sqlite3.Connection, symbol: str = "GME") -> dict:
     """Session-relative volume regime, computed deterministically.
 
@@ -777,6 +777,9 @@ def run_futurist_prediction_signal():
 
             # Log signal and notify (only if confidence is actionable)
             if prediction.confidence >= 0.60 and prediction.stop_loss and prediction.take_profit:
+                gate = signal_gate.evaluate("Futurist", DB_PATH)
+                gated = gate["decision"] != "EMIT"
+
                 manager = SignalManager(DB_PATH)
                 alert_id = manager.log_alert(
                     agent_name="Futurist",
@@ -786,8 +789,16 @@ def run_futurist_prediction_signal():
                     entry_price=prediction.predicted_price * 0.99,
                     stop_loss=prediction.stop_loss,
                     take_profit=prediction.take_profit,
-                    reasoning=prediction.reasoning[:500],
+                    reasoning=(f"[{gate['decision']}] " if gated else "") + prediction.reasoning[:480],
+                    paper_trade=not gated,
                 )
+                if gated:
+                    log.info(f"[Futurist] gate={gate['decision']} · {gate['reason']} — Telegram + paper trade suppressed")
+                    write_log("Futurist",
+                              f"GATE {gate['decision']} · {gate['reason']} · {summary[:200]}",
+                              "prediction_signal", "gated")
+                    metrics.snapshot()
+                    return
                 try:
                     notify_signal_alert(
                         agent_name="Futurist",
@@ -885,6 +896,9 @@ def run_trendy_signal():
                 stop_loss = round(signal.resistance_level * 1.03, 2)
                 take_profit = signal.support_level
 
+            gate = signal_gate.evaluate("Trendy", DB_PATH)
+            gated = gate["decision"] != "EMIT"
+
             manager = SignalManager(DB_PATH)
             alert_id = manager.log_alert(
                 agent_name="Trendy",
@@ -894,8 +908,16 @@ def run_trendy_signal():
                 entry_price=entry_price,
                 stop_loss=stop_loss,
                 take_profit=take_profit,
-                reasoning=signal.reasoning[:500],
+                reasoning=(f"[{gate['decision']}] " if gated else "") + signal.reasoning[:480],
+                paper_trade=not gated,
             )
+            if gated:
+                log.info(f"[Trendy] gate={gate['decision']} · {gate['reason']} — Telegram + paper trade suppressed")
+                write_log("Trendy",
+                          f"GATE {gate['decision']} · {gate['reason']} · {narrative[:200]}",
+                          "trend_signal", "gated")
+                metrics.snapshot()
+                return
             try:
                 notify_signal_alert(
                     agent_name="Trendy",
@@ -1019,6 +1041,9 @@ def run_pattern_signal():
                 stop_loss = round(signal.breakout_level * 1.04, 2)
                 take_profit = round(signal.breakout_level * 0.94, 2)
 
+            gate = signal_gate.evaluate("Pattern", DB_PATH)
+            gated = gate["decision"] != "EMIT"
+
             manager = SignalManager(DB_PATH)
             alert_id = manager.log_alert(
                 agent_name="Pattern",
@@ -1028,8 +1053,16 @@ def run_pattern_signal():
                 entry_price=entry_price,
                 stop_loss=stop_loss,
                 take_profit=take_profit,
-                reasoning=signal.reasoning[:500],
+                reasoning=(f"[{gate['decision']}] " if gated else "") + signal.reasoning[:480],
+                paper_trade=not gated,
             )
+            if gated:
+                log.info(f"[Pattern] gate={gate['decision']} · {gate['reason']} — Telegram + paper trade suppressed")
+                write_log("Pattern",
+                          f"GATE {gate['decision']} · {gate['reason']} · {narrative[:200]}",
+                          "pattern_signal", "gated")
+                metrics.snapshot()
+                return
             try:
                 notify_signal_alert(
                     agent_name="Pattern",
@@ -1178,6 +1211,9 @@ def run_intraday_pattern_signal():
                 stop_loss = round(signal.breakout_level * (1 + _INTRADAY_STOP_PCT), 2)
                 take_profit = round(signal.breakout_level * (1 - _INTRADAY_TARGET_PCT), 2)
 
+            gate = signal_gate.evaluate("Pattern Intraday", DB_PATH)
+            gated = gate["decision"] != "EMIT"
+
             manager = SignalManager(DB_PATH)
             alert_id = manager.log_alert(
                 agent_name="Pattern Intraday",
@@ -1187,8 +1223,16 @@ def run_intraday_pattern_signal():
                 entry_price=entry_price,
                 stop_loss=stop_loss,
                 take_profit=take_profit,
-                reasoning=signal.reasoning[:500],
+                reasoning=(f"[{gate['decision']}] " if gated else "") + signal.reasoning[:480],
+                paper_trade=not gated,
             )
+            if gated:
+                log.info(f"[Pattern Intraday] gate={gate['decision']} · {gate['reason']} — Telegram + paper trade suppressed")
+                write_log("Pattern Intraday",
+                          f"GATE {gate['decision']} · {gate['reason']} · {narrative[:200]}",
+                          "intraday_pattern_signal", "gated")
+                metrics.snapshot()
+                return
             try:
                 notify_signal_alert(
                     agent_name="Pattern Intraday",
@@ -1357,15 +1401,20 @@ def run_daily_aggregation():
         log.error(f"[Aggregator] {e}")
 
 
-@active_window_required
 def run_intraday_aggregation():
     """Re-aggregate today's ticks into daily_candles so mid-day readers
-    (Trendy, Pattern, Futurist) see current-day data instead of yesterday's."""
+    (Trendy, Pattern, Futurist) see current-day data instead of yesterday's.
+
+    Intentionally NOT @active_window_required: pre-market ticks should produce
+    a (partial) candle so agents reading daily_candles before 08:30 ET don't
+    see yesterday's row. The aggregator is pure SQL — it does DELETE+INSERT
+    atomically and rewrites itself on each run as more ticks arrive."""
     try:
         import daily_aggregator
         daily_aggregator.aggregate_day()
     except Exception as e:
         log.error(f"[Aggregator-intraday] {e}")
+        write_log("Aggregator", str(e), "intraday_aggregation", "error")
 
 
 def run_history_overwrite():

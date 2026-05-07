@@ -678,6 +678,17 @@ def handle_command(text: str, user: str = "team"):
                         f"  <b>{r['agent_name']}</b> (n={n}): dir {hit_str} · TP {tp_str} · {verdict}"
                     )
 
+            # ── Gate status ───────────────────────────────────────────────
+            try:
+                import signal_gate
+                lines.append("\n<b>🚦 Gate Status</b>")
+                for agent in ("Pattern Intraday", "Futurist", "Trendy", "Pattern"):
+                    g = signal_gate.evaluate(agent)
+                    icon = {"EMIT": "✅", "SHADOW": "⚠️", "SUPPRESS": "⛔"}[g["decision"]]
+                    lines.append(f"  {icon} <b>{agent}</b>: {g['decision']} · {g['reason']}")
+            except Exception as e:
+                log.warning(f"[/standup] gate status failed: {e}")
+
             # ── Agent runs ────────────────────────────────────────────────
             if activity:
                 lines.append("\n<b>Agent Runs (24h)</b>")

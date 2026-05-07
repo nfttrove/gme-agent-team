@@ -28,8 +28,15 @@ class SignalManager:
         take_profit: Optional[float] = None,
         reasoning: str = "",
         telegram_message_id: Optional[int] = None,
+        paper_trade: bool = True,
     ) -> str:
-        """Log a signal alert. Returns alert_id."""
+        """Log a signal alert. Returns alert_id.
+
+        paper_trade=False writes the row but skips opening a hypothetical
+        trade — used by the signal_gate when an agent is in SHADOW/SUPPRESS
+        so calibration can still score accuracy without polluting the team's
+        win-rate stats with known-bad signals.
+        """
         alert_id = str(uuid.uuid4())
         timestamp = datetime.now(ET).isoformat()
 
@@ -59,7 +66,7 @@ class SignalManager:
 
             # Auto-open a paper trade for every actionable signal so we get
             # real win-rate data without manual /executed logging.
-            if entry_price and stop_loss and take_profit:
+            if paper_trade and entry_price and stop_loss and take_profit:
                 try:
                     from paper_trader import open_paper_trade
                     open_paper_trade(conn, alert_id, agent_name, signal_type,
