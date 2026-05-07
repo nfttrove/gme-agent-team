@@ -42,12 +42,17 @@ def evaluate(agent_name: str, db_path: str = DB_PATH) -> dict:
         # signal_scores is created lazily by calibration.py — fall back to
         # EMIT if it doesn't exist yet (first runs after fresh deploy).
         try:
+            # Exclude flat windows (baseline == end_price). When a signal's 4h
+            # window sits after the 16:00 ET close, ticks don't move and the
+            # validator scores them as "wrong direction" by default, biasing
+            # hit-rate down. Cleaner to drop them here than re-grade history.
             row = conn.execute(
                 f"""
                 SELECT COUNT(*) AS n, COALESCE(AVG(directional_hit), 0) AS hit_rate
                 FROM signal_scores
                 WHERE agent_name = ?
                   AND validated_at > datetime('now', '-{LOOKBACK_DAYS} days')
+                  AND baseline_price != end_price
                 """,
                 (agent_name,),
             ).fetchone()
