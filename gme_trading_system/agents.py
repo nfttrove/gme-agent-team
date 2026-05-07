@@ -1,5 +1,5 @@
 from crewai import Agent
-from llm_config import gemma_local, get_llm_for_agent
+from llm_config import gemma_local, gemini_flash, get_llm_for_agent, STREAM_MODE
 import logging
 from mission import OPERATIVE_DIRECTIVE
 from pe_playbook import ANTI_PATTERNS, GME_STRUCTURAL_THESIS, GME_IMMUNITY_CHECKS, PLAYBOOK_SIGNALS
@@ -24,13 +24,15 @@ class ResilientAgent(Agent):
             agent_name (str): Agent role/name for routing (e.g., "Futurist", "Valerie")
             **kwargs: Standard Agent parameters (role, goal, backstory, etc.)
         """
-        # Select LLM based on agent reasoning needs
+        # Select LLM based on agent reasoning needs. Unnamed agents (briefing_agent,
+        # CrewAI delegate helpers, etc.) must still honor STREAM_MODE — otherwise they
+        # hit Ollama directly and starve the local runner during streams.
         if agent_name:
             selected_llm = get_llm_for_agent(agent_name)
             log.info(f"[ResilientAgent] {agent_name} routed to {selected_llm.model}")
         else:
-            selected_llm = gemma_local  # Default fallback
-            log.warning("[ResilientAgent] No agent_name provided; defaulting to Gemma 2:9b")
+            selected_llm = gemini_flash if STREAM_MODE else gemma_local
+            log.info(f"[ResilientAgent] (unnamed) routed to {selected_llm.model}")
 
         # Disable tool use (local LLMs don't support tools)
         kwargs.setdefault("tools", [])
