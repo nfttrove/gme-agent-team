@@ -109,11 +109,15 @@ def llm_generate(prompt: str, num_predict: int = 200, temperature: float = 0.2,
         if not api_key:
             raise RuntimeError("STREAM_MODE on but GOOGLE_API_KEY missing")
         genai.configure(api_key=api_key)
+        # Gemini 2.5 Flash uses internal "thinking" tokens that count toward
+        # max_output_tokens. At Ollama-sized num_predict (~80) the thinking
+        # budget consumes everything and the visible response is empty/truncated.
+        # Use the lite tier (no thinking) and give generous headroom anyway.
         model = genai.GenerativeModel(
-            "gemini-2.5-flash",
+            "gemini-2.5-flash-lite",
             generation_config={
                 "temperature": temperature,
-                "max_output_tokens": num_predict,
+                "max_output_tokens": max(num_predict * 4, 512),
             },
         )
         resp = model.generate_content(prompt, request_options={"timeout": timeout})
