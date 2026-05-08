@@ -281,7 +281,8 @@ def notify_daily_summary(pnl: float, win_rate: float, trades: int,
 
 
 def notify_periodic_brief(price: float, pct_change: float, consensus: str,
-                         top_signal: str, geo_risk: str, prediction: str) -> bool:
+                         top_signal: str, geo_risk: str, prediction: str,
+                         options: str = "") -> bool:
     """Send a 4-hour intelligence digest (human-readable)."""
     ts = datetime.now(ET).strftime("%I:%M %p")
     msg = (
@@ -292,6 +293,8 @@ def notify_periodic_brief(price: float, pct_change: float, consensus: str,
         f"📰 <b>TOP SIGNAL</b>: {top_signal}\n"
         f"🌍 <b>GEOPOLITICAL RISK</b>: {geo_risk}"
     )
+    if options:
+        msg += f"\n📐 <b>OPTIONS</b>: {options}"
     return _send(msg)
 
 

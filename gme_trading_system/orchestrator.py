@@ -2044,6 +2044,20 @@ def run_periodic_brief():
         ).fetchone()
         geo_risk = georisk['content'][:80] if georisk else "No geopolitical alerts"
 
+        # Latest options snapshot — recompute Δ against live price (snapshot Δ is stale Tue–Fri)
+        options_str = ""
+        opts = conn.execute(
+            "SELECT max_pain_strike, net_oi_bias, expiration "
+            "FROM options_snapshots ORDER BY timestamp DESC LIMIT 1"
+        ).fetchone()
+        if opts and opts['max_pain_strike']:
+            delta = (price - opts['max_pain_strike']) if price else 0.0
+            sign = '+' if delta >= 0 else ''
+            options_str = (
+                f"max pain ${opts['max_pain_strike']:.2f} "
+                f"(Δ{sign}{delta:.2f}) · OI: {opts['net_oi_bias']} · exp {opts['expiration']}"
+            )
+
         conn.close()
 
         notify_periodic_brief(
@@ -2052,7 +2066,8 @@ def run_periodic_brief():
             consensus=consensus,
             top_signal=top_signal,
             geo_risk=geo_risk,
-            prediction=prediction
+            prediction=prediction,
+            options=options_str,
         )
         write_log("Briefer", "4-hour digest sent", "periodic_brief")
         log.info("[Briefer] 4-hour digest sent to Telegram")
