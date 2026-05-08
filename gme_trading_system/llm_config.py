@@ -136,3 +136,44 @@ def llm_generate(prompt: str, num_predict: int = 200, temperature: float = 0.2,
     )
     r.raise_for_status()
     return r.json().get("response", "").strip()
+
+
+# ── Grounded generate (Gemini Flash + Google Search) ──────────────────────────
+
+def llm_generate_grounded(prompt: str, num_predict: int = 200, temperature: float = 0.2,
+                          timeout: int = 45) -> str:
+    """Like llm_generate, but routes through Gemini 2.5 Flash with Google Search
+    grounding when USE_GEMINI_GROUNDING is on. Falls back to llm_generate on
+    flag-off or any error so callers never have to handle two paths.
+
+    Free tier: 1,500 grounded calls/day. Newsie + GeoRisk together use ~31/day,
+    so this stays free in practice; only token usage bills (~3-5p/day total).
+    Lite doesn't support grounding — uses full Flash 2.5.
+    """
+    flag = os.getenv("USE_GEMINI_GROUNDING", "").strip().lower()
+    if flag not in {"1", "true", "yes", "on"}:
+        return llm_generate(prompt, num_predict, temperature, timeout)
+    try:
+        from google import genai as google_genai
+        from google.genai import types as genai_types
+        api_key = os.getenv("GOOGLE_API_KEY", "")
+        if not api_key:
+            raise RuntimeError("USE_GEMINI_GROUNDING set but GOOGLE_API_KEY missing")
+        client = google_genai.Client(api_key=api_key)
+        resp = client.models.generate_content(
+            model="gemini-2.5-flash",
+            contents=prompt,
+            config=genai_types.GenerateContentConfig(
+                temperature=temperature,
+                max_output_tokens=max(num_predict * 4, 512),
+                tools=[genai_types.Tool(google_search=genai_types.GoogleSearch())],
+            ),
+        )
+        text = (resp.text or "").strip()
+        if not text:
+            log.warning("[grounded] empty response, falling back to llm_generate")
+            return llm_generate(prompt, num_predict, temperature, timeout)
+        return text
+    except Exception as e:
+        log.warning(f"[grounded] failed ({e}), falling back to llm_generate")
+        return llm_generate(prompt, num_predict, temperature, timeout)

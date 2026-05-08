@@ -395,10 +395,10 @@ def run_news():
                 f"Composite sentiment: {composite:+.2f} ({label}) across {len(scored)} headlines.\n"
                 f"Top headlines:\n{top_lines}\n"
             )
-            from llm_config import llm_generate
+            from llm_config import llm_generate_grounded
             narrative = ""
             try:
-                narrative = llm_generate(prompt, num_predict=120, temperature=0.5, timeout=30)
+                narrative = llm_generate_grounded(prompt, num_predict=120, temperature=0.5, timeout=30)
                 narrative = narrative.strip().strip('"').strip("'")
                 narrative = narrative.split("\n")[0].strip()[:400]
             except Exception as e:
@@ -2023,8 +2023,8 @@ def _compute_georisk():
         "plausible retail impact; HIGH = immediate supply-chain or consumer-demand shock.\n\n"
         f"RECENT GEO-TAGGED HEADLINES ({len(geo_hits)} hits):\n{lines}\n"
     )
-    from llm_config import llm_generate
-    brief = llm_generate(prompt, num_predict=120, temperature=0.3, timeout=45)
+    from llm_config import llm_generate_grounded
+    brief = llm_generate_grounded(prompt, num_predict=120, temperature=0.3, timeout=45)
     brief = brief.strip().strip('"').strip("'").split("\n")[0].strip()[:400]
     level = "LOW"
     for candidate in ("HIGH", "MEDIUM", "LOW"):
