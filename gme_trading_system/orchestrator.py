@@ -1050,11 +1050,17 @@ def run_pattern_signal():
 
 # Intraday parameters chosen by the task spec — daily detector uses 0.60 conf
 # and ±4%/±6% R/R; intraday is noisier so we raise the bar.
-_INTRADAY_PATTERN_CONFIDENCE_FLOOR = 0.70
+# 2026-05-08: bumped floor 0.70 → 0.80 after 7-day audit showed 80–90% conf
+# bucket had 16% directional hit rate. Floor alone wasn't enough — the same
+# (pattern_type, direction, level) was re-emitting on every 5-min bar, so we
+# also dedupe within a 4-hour rolling window (see _intraday_dedupe_recent).
+_INTRADAY_PATTERN_CONFIDENCE_FLOOR = 0.80
 _INTRADAY_STOP_PCT = 0.015   # ±1.5% stop
 _INTRADAY_TARGET_PCT = 0.025  # ±2.5% target
 _INTRADAY_LOOKBACK_BARS = 60  # ~5 hours of 5-min bars
 _INTRADAY_AGG_LOOKBACK_MINUTES = 360  # aggregate the last 6 hours of ticks
+_INTRADAY_DEDUPE_WINDOW_HOURS = 4  # don't re-emit same setup within this window
+_INTRADAY_DEDUPE_LEVEL_TOL = 0.015  # ±1.5% breakout-level tolerance for "same setup"
 
 
 def _fetch_intraday_candles(lookback_bars: int = _INTRADAY_LOOKBACK_BARS) -> list[dict]:
@@ -1079,6 +1085,60 @@ def _fetch_intraday_candles(lookback_bars: int = _INTRADAY_LOOKBACK_BARS) -> lis
         return rows
     finally:
         conn.close()
+
+
+def _intraday_dedupe_recent(pattern_type: str, direction: str, level: float) -> dict | None:
+    """Return the most recent Pattern Intraday alert within the dedupe window
+    that matches (pattern_type, direction) and whose entry_price is within
+    ``_INTRADAY_DEDUPE_LEVEL_TOL`` of ``level``. Returns ``None`` if no match,
+    meaning this signal is "novel" and should emit.
+
+    The detector re-fires the same setup on every 5-min bar while price stays
+    near the breakout level, so without this we get clusters of 3–12 identical
+    emits per setup. Match by reasoning prefix (e.g. "breakdown detected") and
+    entry_price (== breakout_level on emit), since neither is a column.
+    """
+    import re
+    conn = sqlite3.connect(DB_PATH)
+    try:
+        cur = conn.execute(
+            f"""
+            SELECT created_at, reasoning, entry_price, stop_loss
+            FROM signal_alerts
+            WHERE agent_name = 'Pattern Intraday'
+              AND created_at > datetime('now', '-{_INTRADAY_DEDUPE_WINDOW_HOURS} hours')
+            ORDER BY created_at DESC
+            """,
+        )
+        rows = cur.fetchall()
+    except sqlite3.OperationalError:
+        return None
+    finally:
+        conn.close()
+
+    pat_lower = pattern_type.lower()
+    for created_at, reasoning, entry_price, stop_loss in rows:
+        if entry_price is None or stop_loss is None:
+            continue
+        # Strip optional [EMIT]/[SHADOW]/[SUPPRESS] prefix the gate adds.
+        text = re.sub(r"^\[\w+\]\s*", "", reasoning or "").lower()
+        m = re.match(r"([a-z]+(?:\s+[a-z]+)?)\s+detected", text)
+        if not m:
+            continue
+        if m.group(1) != pat_lower:
+            continue
+        prior_dir = "DOWN" if stop_loss > entry_price else "UP"
+        if prior_dir != direction:
+            continue
+        if abs(entry_price - level) / max(level, 0.01) > _INTRADAY_DEDUPE_LEVEL_TOL:
+            continue
+        return {
+            "created_at": created_at,
+            "entry_price": entry_price,
+            "pattern_type": pat_lower,
+            "direction": prior_dir,
+        }
+    return None
 
 
 def _compute_intraday_pattern_signal():
@@ -1160,6 +1220,17 @@ def run_intraday_pattern_signal():
 
             if (signal.pattern_type == "none"
                     or signal.confidence < _INTRADAY_PATTERN_CONFIDENCE_FLOOR):
+                metrics.snapshot()
+                return
+
+            dupe = _intraday_dedupe_recent(
+                signal.pattern_type, signal.breakout_direction, signal.breakout_level,
+            )
+            if dupe is not None:
+                msg = (f"dedup · same {dupe['pattern_type']} {dupe['direction']} "
+                       f"@ ~${dupe['entry_price']:.2f} emitted at {dupe['created_at']}")
+                log.info(f"[Pattern Intraday] {msg}")
+                write_log("Pattern Intraday", msg, "intraday_pattern_signal", "deduped")
                 metrics.snapshot()
                 return
 
