@@ -1332,8 +1332,7 @@ def handle_command(text: str, user: str = "team"):
             "/status — system heartbeat\n"
             "/help — full command list\n\n"
             "Push alerts arrive in the public channel. Search for the "
-            "channel link or ask the owner to share it.\n\n"
-            "<i>Signals, not advice. Trade your own thesis.</i>"
+            "channel link or ask the owner to share it."
         )
 
     elif cmd == "/help":

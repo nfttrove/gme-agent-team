@@ -123,7 +123,7 @@ def _format(v: Voice, content: str, ts: str) -> str:
         time_part = hhmm if ts_date == str(date.today()) else f"{ts_date[5:]} {hhmm}"
     else:
         time_part = ts
-    return f"{v.emoji} <b>{v.label}</b> <i>{time_part}</i>\n{safe}"
+    return f"{v.emoji} <i>{time_part}</i>\n{safe}"
 
 
 def forward_pending(db_path: str = DB_PATH) -> dict[str, int]:

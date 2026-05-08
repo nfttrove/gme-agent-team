@@ -60,18 +60,12 @@ AGENT_EMOJI = {
 
 _ENABLED = bool(TELEGRAM_TOKEN and TELEGRAM_CHAT_ID)
 
-# Appended to every outbound push so the broadcast carries a minimum-effort
-# disclaimer once the channel is public. One line keeps the message dense.
-_DISCLAIMER_FOOTER = "\n\n<i>Signals, not advice. Trade your own thesis.</i>"
-
 
 def _send(text: str, parse_mode: str = "HTML") -> bool:
     """Send a Telegram message to both public channel and owner DM. Returns True if at least one succeeds."""
     if not _ENABLED:
         log.info(f"[notify] Telegram not configured. Message would have been:\n{text}")
         return False
-    if parse_mode == "HTML" and _DISCLAIMER_FOOTER not in text:
-        text = text + _DISCLAIMER_FOOTER
     breaker = get_breaker("telegram")
     success = False
     # Send to both public channel and owner DM
@@ -377,8 +371,7 @@ def notify_signal_alert(agent_name: str, signal_type: str, confidence: float,
         emoji = "📌"
 
     agent_icon = AGENT_EMOJI.get(agent_name, "")
-    name_display = f"{agent_icon} {agent_name}".strip()
-    msg = f"{emoji} <b>SIGNAL ALERT</b> — {name_display}\n\n"
+    msg = f"{emoji} <b>SIGNAL ALERT</b> {agent_icon}\n\n"
     msg += f"<b>{signal_type.upper().replace('_', ' ')}</b>\n"
     if cal_meta.get("cold_start") or abs(stated_conf - confidence) < 0.005:
         msg += f"Confidence: <b>{confidence:.0%}</b> {severity}\n\n"
