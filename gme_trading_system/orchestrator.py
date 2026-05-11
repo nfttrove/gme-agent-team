@@ -2433,6 +2433,45 @@ def run_periodic_brief():
         write_log("Briefer", str(e), "periodic_brief", "error")
 
 
+# Day-of-week intros for the daily strategy brief. Each tuple is
+# (header_tag_shown_to_team, extra_line_added_to_Gemma_FACTS_block).
+_DAY_INTROS = {
+    0: (  # Monday
+        "Monday — first day",
+        "First trading day after the weekend; gap-risk and weekend news context apply.",
+    ),
+    1: (  # Tuesday
+        "Tuesday — confirmation",
+        "Monday's move is in the books; today tests whether it holds or reverses.",
+    ),
+    2: (  # Wednesday
+        "Wednesday — pulse",
+        "Mid-week — focus on whether this week's thesis is still intact.",
+    ),
+    3: (  # Thursday
+        "Thursday — pre-opex",
+        "Tomorrow is weekly options expiry; max-pain pressure starts building today.",
+    ),
+    4: (  # Friday
+        "Friday — opex day",
+        "Weekly options expire today; max pain and the weekly close matter.",
+    ),
+    5: ("Saturday", ""),  # not normally invoked; safe defaults
+    6: ("Sunday", ""),
+}
+
+
+def _day_intro(today_date):
+    """Return (header_tag, fact_line) for today's daily brief.
+
+    First-Friday-of-the-month appends an NFP-day note.
+    """
+    tag, line = _DAY_INTROS.get(today_date.weekday(), ("", ""))
+    if today_date.weekday() == 4 and today_date.day <= 7:
+        line = (line + " First Friday — NFP at 08:30 may move the market before the open.").strip()
+    return tag, line
+
+
 def run_daily_briefing():
     """10:00 AM ET — ELI5 strategy briefing sent to Telegram after market opens.
 
@@ -2440,8 +2479,12 @@ def run_daily_briefing():
     daily_candles + signal_alerts. Gemma only fills the narrative fragments
     (pattern description, waiting-for, risk). Prevents the 'sideways on an
     up day' hallucination the previous CrewAI version produced.
+
+    Day-of-week intro tag and a £5k progress line are appended deterministically
+    around the Gemma-filled core — the bypass pattern is preserved.
     """
-    from datetime import datetime
+    from datetime import date, datetime
+    from target_progress import compute_progress, format_one_liner
     log.info("[Briefing] === Daily Strategy Brief ===")
     write_log("Briefing", "Composing daily strategy brief", "daily_brief", "running")
     try:
@@ -2522,6 +2565,10 @@ def run_daily_briefing():
             signal_lines.append(f"Futurist (forecast): conf {int(futurist['confidence']*100)}% — {futurist['reasoning'][:120]}")
         signals_blob = "\n".join(signal_lines) if signal_lines else "(no fresh signals in last 24h)"
 
+        today = date.today()
+        day_tag, day_line = _day_intro(today)
+        day_fact_line = f"- {day_line}\n" if day_line else ""
+
         prompt = (
             "You are writing a plain-English trading brief for a non-technical CEO. "
             "Output EXACTLY three short labelled sections, no preamble, no markdown, "
@@ -2530,8 +2577,9 @@ def run_daily_briefing():
             f"- GME is currently ${current:.2f}, {direction} ({pct_vs_prev:+.1f}% vs prior close).\n"
             f"- Today's intraday range: ${day_low:.2f} to ${day_high:.2f}.\n"
             f"- Support ${support:.2f}, resistance ${resistance:.2f}.\n"
-            f"- Team confidence: {team_conf}%.\n\n"
-            f"AGENT SIGNALS (last 24h):\n{signals_blob}\n\n"
+            f"- Team confidence: {team_conf}%.\n"
+            f"{day_fact_line}"
+            f"\nAGENT SIGNALS (last 24h):\n{signals_blob}\n\n"
             "WRITE THESE THREE SECTIONS (fill brackets only, keep labels exact):\n"
             "PATTERN: [one sentence describing the chart pattern or price behavior, "
             "plain English, no jargon — if Pattern agent called a named formation use it]\n"
@@ -2562,6 +2610,26 @@ def run_daily_briefing():
                     "team is leaning in but wants confirmation" if team_conf >= 55 else \
                     "team is cautious, no strong edge"
 
+        # ---------- £5k progress (deterministic — separate connection scope) ----------
+        try:
+            conn2 = sqlite3.connect(DB_PATH)
+            pnl_row = conn2.execute(
+                "SELECT COALESCE(SUM(pnl), 0) FROM trade_decisions "
+                "WHERE status='closed' AND paper_trade=1 AND pnl IS NOT NULL"
+            ).fetchone()
+            conn2.close()
+            realised_usd = float(pnl_row[0]) if pnl_row else 0.0
+        except Exception as e:
+            log.warning(f"[Briefing] PnL read failed for 5k tracker: {e}")
+            realised_usd = 0.0
+        progress = compute_progress(
+            realised_pnl_gbp=max(0.0, realised_usd) * USD_GBP_RATE,
+            today=today,
+        )
+        progress_line = format_one_liner(progress)
+
+        header = f"<b>📋 DAILY STRATEGY BRIEF — {day_tag}</b>" if day_tag else "<b>📋 DAILY STRATEGY BRIEF</b>"
+
         brief = (
             f"📍 MARKET: GME is at ${current:.2f}. It is {direction} today "
             f"({pct_vs_prev:+.1f}% vs prior close).\n\n"
@@ -2570,13 +2638,14 @@ def run_daily_briefing():
             f"Today's range: ${day_low:.2f} to ${day_high:.2f}.\n\n"
             f"⏳ WAITING FOR: {waiting_txt}\n\n"
             f"⚠️ RISK: {risk_txt}\n\n"
-            f"🔮 CONFIDENCE: {team_conf}% — {conf_tone}."
+            f"🔮 CONFIDENCE: {team_conf}% — {conf_tone}.\n\n"
+            f"🎯 5K BY 2026-05-31: {progress_line}"
         )
 
         write_log("Briefing", brief[:2000], "daily_brief")
         from notifier import notify
-        notify(f"<b>📋 DAILY STRATEGY BRIEF</b>\n\n{brief}")
-        log.info(f"[Briefing] Brief sent — {direction} {pct_vs_prev:+.1f}% conf={team_conf}%")
+        notify(f"{header}\n\n{brief}")
+        log.info(f"[Briefing] Brief sent — {day_tag or 'no-tag'} {direction} {pct_vs_prev:+.1f}% conf={team_conf}%")
     except Exception as e:
         log.error(f"[Briefing] {e}")
         write_log("Briefing", str(e), "daily_brief", "error")
@@ -2886,9 +2955,11 @@ class TradingSystemOrchestrator:
         # Weekly coffee nudge — Sundays 10:00 AM ET
         self.scheduler.add_job(run_sunday_support_message, CronTrigger(day_of_week="sun", hour=10, minute=0, timezone=ET), id="sunday_support")
 
-        # @mygmebot promo broadcast — twice daily Mon-Fri (post-open + pre-close)
-        self.scheduler.add_job(run_promo_broadcast, CronTrigger(day_of_week="mon-fri", hour=10, minute=0,  timezone=ET), id="promo_morning")
-        self.scheduler.add_job(run_promo_broadcast, CronTrigger(day_of_week="mon-fri", hour=15, minute=30, timezone=ET), id="promo_afternoon")
+        # NOTE: The twice-daily run_promo_broadcast cron entries (10:00 + 15:30)
+        # were removed — they duplicated context already in /briefing and
+        # /standup_close. The function itself stays for ad-hoc /force promo
+        # invocation; re-add a single cron entry here if a scheduled promo
+        # becomes wanted again.
 
         # Social monitor — scan tracked accounts every 15 minutes during market hours
         self.scheduler.add_job(run_social_scan, IntervalTrigger(minutes=15), id="social")

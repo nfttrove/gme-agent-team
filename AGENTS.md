@@ -97,9 +97,15 @@ Every signal emitted to Telegram carries a 0.0–1.0 confidence score. The team 
 
 ### Briefing — Strategy Briefing Officer
 - **Cadence:** invoked by the `/brief` Telegram command and the 10:00 ET cron
-- **Reads:** latest Synthesis, last Trendy + Futurist, Newsie
+- **Reads:** latest Synthesis, last Trendy + Futurist, Newsie; closed paper trades for £5k tracker
 - **Writes:** Telegram brief message
 - **Why it exists:** the polished human-readable "what's happening" digest
+- **Day-of-week character** — header tag and a Gemma-prompt context line vary by weekday:
+  Monday (first day / weekend gap-risk), Tuesday (confirmation), Wednesday (mid-week pulse),
+  Thursday (pre-opex), Friday (opex day). First-Friday-of-month appends an NFP note. See
+  `_day_intro()` in [orchestrator.py](gme_trading_system/orchestrator.py).
+- **£5k tracker** — every brief ends with a one-liner: earned / target / days-left / daily-burn,
+  computed by [target_progress.py](gme_trading_system/target_progress.py) from closed paper-trade PnL.
 
 ---
 
