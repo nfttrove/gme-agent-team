@@ -174,6 +174,16 @@ These are documented so a future maintainer doesn't waste time rediscovering the
 3. **`twitter_monitor.py`, `sec_scanner.py`, `insider_buys.py`, `options_feed.py`** — defined modules with no wiring in `orchestrator.py`. May be invoked via Telegram commands or be partially built; needs runtime investigation before deciding to wire or delete.
 4. **Two pre-existing test failures** as noted above. Not regressions from recent cleanup commits.
 5. **No Telegram bot supervisor.** If `telegram_bot.py` crashes, alerts stop. Either add a launchd plist or accept the manual restart cost.
+6. **Pattern Intraday / Futurist directional hit rates suspiciously low.** As of 2026-05-11 the active fade-side lessons in `.agent/memory/semantic/lessons.jsonl` claim:
+   - Pattern Intraday `intraday_pattern_signal`: **14% directional hit over n=134** (19/134)
+   - Futurist `price_prediction`: **26% directional hit over n=65** (17/65)
+
+   A genuine 50/50 process has a probability < 1e-15 of producing ≤14% over n=134, so this is almost certainly **not noise**. Two hypotheses, in order of likelihood:
+
+   1. **Direction-label bug in `signal_scorer`.** Somewhere between the signal's emitted direction (e.g. `signal_type='pattern_signal'` with bullish/bearish framing) and `signal_scores.directional_hit`, the polarity may be inverted. If true, Synthesis has been **inverting correct signals for weeks** — the system looks worse than it is.
+   2. **Real anti-edge.** The pattern detector might systematically find setups that misfire (e.g. counter-trend bounces that fail in the prevailing trend). Possible but unusual at this magnitude.
+
+   Audit path when investigating: `gme_trading_system/signal_scorer.py` → trace how `directional_hit` is set against the signal's intended direction; compare a hand-picked sample of `signal_alerts` rows to the corresponding `signal_scores` row and verify the polarity matches the price move between `entry_price` and `end_price`. Until resolved, the two fade-side lessons remain active in Synthesis, so consensus inverts Pattern Intraday and Futurist's directional calls — fine if the lessons are correct, an own-goal if hypothesis 1 holds.
 
 ## Rolling back
 
