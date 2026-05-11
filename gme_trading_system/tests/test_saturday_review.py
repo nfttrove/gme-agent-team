@@ -280,6 +280,151 @@ class TestSaturdayReview:
         msg = captured_telegram[0]
         assert "4 candidates pending review" in msg
 
+    def test_trove_section_appears_when_snapshots_exist(
+        self, empty_db, captured_telegram, stub_llm, stub_candidates, reset_breakers,
+    ):
+        """
+        Given the trove_score_history table has at least one snapshot
+        When run_saturday_review fires
+        Then a 🔍 TROVE DEEP VALUE section appears in the brief with each
+        ticker's score, stars, and price.
+
+        Why this matters: this is the operator-requested weekly Trove digest.
+        If the section silently stops appearing because trove_history's schema
+        drifted or the cron stopped writing, this test catches it.
+        """
+        # Given
+        from trove_history import SCHEMA as TROVE_SCHEMA
+        conn = sqlite3.connect(empty_db)
+        conn.executescript(TROVE_SCHEMA)
+        conn.executescript(
+            """
+            INSERT INTO trove_score_history
+                (ticker, score_date, score, rating, pillar_a, pillar_b,
+                 pillar_c, pillar_d, price_at_score)
+            VALUES
+                ('CART', date('now'), 69.5, '★★★★☆', 20, 18, 16, 15, 40.85),
+                ('GME',  date('now'), 65.4, '★★★★☆', 20, 17, 14, 14, 23.88);
+            """
+        )
+        conn.commit()
+        conn.close()
+
+        # When
+        orchestrator.run_saturday_review()
+
+        # Then
+        msg = captured_telegram[0]
+        assert "TROVE DEEP VALUE" in msg
+        assert "CART" in msg
+        assert "GME" in msg
+        assert "69.5" in msg
+        assert "$40.85" in msg
+        assert "★★★★☆" in msg
+
+    def test_trove_section_shows_week_over_week_deltas_when_prior_snapshot_exists(
+        self, empty_db, captured_telegram, stub_llm, stub_candidates, reset_breakers,
+    ):
+        """
+        Given two Trove snapshots: today and 7 days ago, with score changes
+        When run_saturday_review fires
+        Then each ticker's line includes a delta tag like '↑ +1.5 vs last week'
+        or '↓ -2.0 vs last week'.
+
+        Why this matters: the week-over-week delta is the whole point of
+        running this weekly — operators need to spot rank shifts, not stare
+        at a static current snapshot.
+        """
+        from trove_history import SCHEMA as TROVE_SCHEMA
+        conn = sqlite3.connect(empty_db)
+        conn.executescript(TROVE_SCHEMA)
+        conn.executescript(
+            """
+            INSERT INTO trove_score_history
+                (ticker, score_date, score, rating, pillar_a, pillar_b,
+                 pillar_c, pillar_d, price_at_score)
+            VALUES
+                -- 7 days ago: CART=68.0, GME=66.4
+                ('CART', date('now','-7 days'), 68.0, '★★★★☆', 20, 17, 16, 15, 40.0),
+                ('GME',  date('now','-7 days'), 66.4, '★★★★☆', 20, 18, 14, 14, 24.5),
+                -- today: CART rose 1.5, GME fell 1.0
+                ('CART', date('now'), 69.5, '★★★★☆', 20, 18, 16, 15, 40.85),
+                ('GME',  date('now'), 65.4, '★★★★☆', 20, 17, 14, 14, 23.88);
+            """
+        )
+        conn.commit()
+        conn.close()
+
+        orchestrator.run_saturday_review()
+        msg = captured_telegram[0]
+
+        # CART rose → up arrow + positive delta
+        assert "↑ +1.5 vs last week" in msg
+        # GME fell → down arrow + negative delta
+        assert "↓ -1.0 vs last week" in msg
+        # Neither line should still say 'first weekly snapshot' once we have history
+        assert "first weekly snapshot" not in msg
+
+    def test_trove_section_marks_new_entries(
+        self, empty_db, captured_telegram, stub_llm, stub_candidates, reset_breakers,
+    ):
+        """
+        Given a prior snapshot exists for some tickers but a new ticker joined
+        the watchlist between then and today
+        When run_saturday_review fires
+        Then the new ticker's line is tagged '(new entry)' rather than
+        falsely showing a delta of 0.0.
+        """
+        from trove_history import SCHEMA as TROVE_SCHEMA
+        conn = sqlite3.connect(empty_db)
+        conn.executescript(TROVE_SCHEMA)
+        conn.executescript(
+            """
+            INSERT INTO trove_score_history
+                (ticker, score_date, score, rating, pillar_a, pillar_b,
+                 pillar_c, pillar_d, price_at_score)
+            VALUES
+                ('GME',  date('now','-7 days'), 66.0, '★★★★☆', 20, 18, 14, 14, 24.5),
+                ('GME',  date('now'),           65.4, '★★★★☆', 20, 17, 14, 14, 23.88),
+                ('ALGN', date('now'),           65.2, '★★★★☆', 20, 16, 15, 14, 165.95);
+            """
+        )
+        conn.commit()
+        conn.close()
+
+        orchestrator.run_saturday_review()
+        msg = captured_telegram[0]
+        assert "ALGN" in msg
+        assert "(new entry)" in msg
+
+    def test_trove_section_omitted_when_history_empty(
+        self, empty_db, captured_telegram, stub_llm, stub_candidates, reset_breakers,
+    ):
+        """
+        Given trove_score_history has no rows yet (fresh deployment)
+        When run_saturday_review fires
+        Then the TROVE section is omitted entirely (not 'TROVE: no data').
+
+        Why this matters: empty scaffolding is noise. The bypass-pattern
+        discipline is 'show what's there, don't fabricate sections'.
+        """
+        # Given — table exists but is empty
+        from trove_history import SCHEMA as TROVE_SCHEMA
+        conn = sqlite3.connect(empty_db)
+        conn.executescript(TROVE_SCHEMA)
+        conn.close()
+
+        # When
+        orchestrator.run_saturday_review()
+
+        # Then
+        msg = captured_telegram[0]
+        assert "TROVE DEEP VALUE" not in msg
+        # The two surrounding sections must still appear so we know the brief
+        # didn't fall over while skipping Trove.
+        assert "THIS WEEK" in msg
+        assert "LESSONS" in msg
+
     def test_when_llm_narrative_fails_then_fallback_focus_line_appears(
         self, empty_db, captured_telegram, stub_candidates, reset_breakers, monkeypatch,
     ):

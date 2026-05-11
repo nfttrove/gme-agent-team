@@ -133,7 +133,7 @@ Beyond the 12 agents, the orchestrator runs:
 - `learning_debrief` at 16:30 ET — closes out the day's signals
 - `lesson_producer` at 16:35 ET — promotes patterns to lesson candidates
 - `weekly_review` Fri 17:00 ET — `learner.weekly_strategy_review()`, parameter adaptation
-- `saturday_review` Sat 09:00 ET — Telegram digest: week's trades + PnL, signal hit rate, lesson candidates, system health (no personal-target figures)
+- `saturday_review` Sat 09:00 ET — Telegram digest: week's trades + PnL, signal hit rate, Trove deep-value rankings (with week-over-week deltas once a prior snapshot exists), lesson candidates, system health (no personal-target figures)
 - `monday_digest` Mon 08:00 ET — pre-open weekend digest: news since Fri close, GeoRisk weekend events, gap-risk vs Fri close (does NOT replace 09:00 huddle)
 - `nightly_maintenance` at 03:00 ET — DB backup + WAL checkpoint + retention purge
 

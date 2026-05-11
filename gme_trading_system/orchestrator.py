@@ -1579,6 +1579,72 @@ def run_weekly_review():
         write_log("Learner", str(e), "weekly_review", "error")
 
 
+def _compose_trove_section(conn, top_n: int = 8) -> str:
+    """Build the TROVE DEEP VALUE block for the Saturday review.
+
+    Pulls the latest snapshot from trove_score_history, optionally compares
+    to the closest snapshot from 5–8 days prior, and renders one line per
+    ticker with score, stars, price, and a week-over-week delta tag.
+
+    Returns "" if the table is empty or unreachable — the brief composer
+    will then omit the section entirely (no 'TROVE: no data' scaffolding).
+    """
+    try:
+        latest_date_row = conn.execute(
+            "SELECT MAX(score_date) FROM trove_score_history"
+        ).fetchone()
+        latest_date = latest_date_row[0] if latest_date_row else None
+        if not latest_date:
+            return ""
+
+        latest = conn.execute(
+            "SELECT ticker, score, rating, price_at_score "
+            "FROM trove_score_history WHERE score_date = ? "
+            "ORDER BY score DESC LIMIT ?",
+            (latest_date, top_n),
+        ).fetchall()
+        if not latest:
+            return ""
+
+        # Find the most recent prior snapshot 5–8 days back. 5d window absorbs
+        # weekday/weekend cron drift; 8d ceiling keeps us comparing against a
+        # genuinely prior week, not last Thursday.
+        prior_date_row = conn.execute(
+            "SELECT MAX(score_date) FROM trove_score_history "
+            "WHERE score_date <= date(?, '-5 days') "
+            "AND score_date >= date(?, '-8 days')",
+            (latest_date, latest_date),
+        ).fetchone()
+        prior_date = prior_date_row[0] if prior_date_row else None
+
+        prior_by_ticker: dict[str, float] = {}
+        if prior_date:
+            for t, s in conn.execute(
+                "SELECT ticker, score FROM trove_score_history WHERE score_date = ?",
+                (prior_date,),
+            ).fetchall():
+                prior_by_ticker[t] = float(s)
+
+        lines = ["<b>🔍 TROVE DEEP VALUE</b> — top of the watchlist"]
+        for ticker, score, rating, price in latest:
+            price_str = f"${float(price):.2f}" if price is not None else "—"
+            if ticker in prior_by_ticker:
+                delta = float(score) - prior_by_ticker[ticker]
+                arrow = "↑" if delta > 0.05 else "↓" if delta < -0.05 else "→"
+                tag = f"({arrow} {delta:+.1f} vs last week)"
+            elif prior_date:
+                tag = "(new entry)"
+            else:
+                tag = "(first weekly snapshot)"
+            lines.append(
+                f"• {ticker:<5} {float(score):.1f}  {rating}  {price_str}  {tag}"
+            )
+        return "\n".join(lines)
+    except Exception as e:
+        log.warning(f"[SatReview] trove section failed: {e}")
+        return ""
+
+
 def run_saturday_review():
     """Saturday 09:00 ET — week-in-review digest sent to Telegram.
 
@@ -1643,6 +1709,9 @@ def run_saturday_review():
                 datetime.now(ET) - datetime.fromisoformat(r["last_ts"]).replace(tzinfo=ET)
             ).total_seconds() > 24 * 3600
         ]
+
+        # ---------- 5. Trove deep-value scores (rendered while conn is open) ----------
+        trove_section = _compose_trove_section(conn)
 
         conn.close()
 
@@ -1711,9 +1780,15 @@ def run_saturday_review():
         if stale_agents:
             system_line += f" Stale (>24h): {', '.join(stale_agents)}."
 
+        # Render Trove section only if we got non-empty content; keeps the
+        # brief clean on first-deploy boots before the daily Trove cron has
+        # populated trove_score_history.
+        trove_block = f"{trove_section}\n\n" if trove_section else ""
+
         brief = (
             f"📅 <b>SATURDAY REVIEW</b> — week of {week_start} to {week_end}\n\n"
             f"<b>THIS WEEK</b>\n{this_week_line}\n{preds_line}\n{top_line}\n\n"
+            f"{trove_block}"
             f"<b>LESSONS</b>\n"
             f"• {n_candidates} candidate{'' if n_candidates == 1 else 's'} pending review (/candidates)\n\n"
             f"<b>SYSTEM</b>\n{system_line}\n\n"
