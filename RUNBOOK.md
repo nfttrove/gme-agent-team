@@ -100,6 +100,28 @@ python -c "from circuit_breaker import get_breaker; get_breaker('telegram').half
 
 Breakers wrap: telegram, supabase, finnhub, sec, newsapi, twitter. They open after 5 consecutive failures, retry after 60s.
 
+### Briefs show a stale price / TradingView webhooks have gone quiet
+
+Symptoms: every Synthesis brief carries the same `$X.XX rising` line, `/status` shows a low `Ticks today`, the most recent `price_ticks` row is more than a few minutes old during market hours.
+
+Diagnose:
+
+```bash
+# Last 5 ticks — should be ~15s apart during market hours
+sqlite3 gme_trading_system/agent_memory.db \
+  "SELECT timestamp, close, source FROM price_ticks ORDER BY timestamp DESC LIMIT 5;"
+
+# Is ngrok still up and forwarding to logger_daemon?
+curl -s http://localhost:4040/api/tunnels | grep -E "public_url|rate1"
+
+# Logger daemon healthy?
+curl -s http://localhost:8765/health
+```
+
+Most likely cause: the **TradingView alert paused** (free-tier alerts can pause after each trigger; pro-tier can hit plan limits). Log into TradingView, find the GME alert, re-arm it. The orchestrator will resume on the next webhook.
+
+**Backup feed (since 2026-05-11):** `yahoo_finance_feed.start_yahoo_feed()` is started by `TradingSystemOrchestrator.start()` and writes a Yahoo Finance quote every 5 min via `INSERT OR IGNORE` on `(symbol, timestamp)`. TradingView always wins the same-second race; Yahoo only fills gaps. If you see a `source='yahoo'` row in `price_ticks`, that's the fallback doing its job — usually a sign TradingView is silent.
+
 ### Orchestrator hangs
 
 Crews can deadlock if Gemma stops responding. The orchestrator wraps `crew.kickoff()` in a `ThreadPoolExecutor` with a 180–600s timeout per agent, so a hang in one cycle shouldn't take down the scheduler. If it does:

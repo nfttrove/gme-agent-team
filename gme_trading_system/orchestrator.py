@@ -38,6 +38,7 @@ from market_hours import is_market_open, market_hours_required, is_active_window
 from learner import AgentLearner
 from telegram_bot import start_bot_thread
 from supabase_sync import start_sync_thread
+from yahoo_finance_feed import start_yahoo_feed
 from safe_kickoff import safe_kickoff, safe_kickoff_with_fallback, CrewTimeout
 from db_maintenance import enable_wal_mode
 from signal_manager import SignalManager
@@ -2960,6 +2961,10 @@ class TradingSystemOrchestrator:
         # runner at once and starving any user /commands queued in Telegram.
         start_bot_thread()
         start_sync_thread()
+        # Yahoo Finance fallback poller — fills price_ticks every 5 min when
+        # TradingView webhooks go quiet. INSERT OR IGNORE on UNIQUE(symbol,
+        # timestamp) so primary TradingView data wins when both fire.
+        start_yahoo_feed()
         log.info("[startup] Bot online — deferring scheduler 60s to keep Ollama free for queued /commands")
         time.sleep(60)
         self.scheduler.start()
