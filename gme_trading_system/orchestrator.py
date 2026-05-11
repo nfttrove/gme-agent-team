@@ -361,8 +361,15 @@ def run_news():
     with metrics.cycle("news"):
         try:
             from tools import NewsAPITool
-            articles = NewsAPITool()._run("GME")
-            articles = [a for a in articles if a.get("headline") and "error" not in a]
+            from news_filter import filter_articles
+            raw = NewsAPITool()._run("GME")
+            raw = [a for a in raw if a.get("headline") and "error" not in a]
+            # Disambiguate the GME ticker: Global/Graduate Medical Equipment/Education
+            # share the three letters and pollute the sentiment composite.
+            articles = filter_articles(raw)
+            dropped = len(raw) - len(articles)
+            if dropped:
+                log.info(f"[Newsie] dropped {dropped} non-GameStop GME articles")
             if not articles:
                 write_log("Newsie", "no articles returned from news sources", "news", "error")
                 return
