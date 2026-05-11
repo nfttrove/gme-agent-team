@@ -107,9 +107,21 @@ def apply_to_confidence(stated_conf: float,
     effective_conf is clamped to [0.0, 1.0]. The original stated_conf is never
     mutated — callers can show both ("stated 80% / calibrated 57%") if they
     want transparency.
+
+    Cold-start dampening: new agents (< 10 resolved signals) have their
+    multiplier blended toward 0.5, spreading uncertainty across early signals.
+    Example: new agent at 80% stated, 2 samples → blend factor toward 0.5x →
+    effective ~50%, not 80%.
     """
     cal = get_agent_calibration(agent_name, db_path=db_path)
-    eff = max(0.0, min(1.0, stated_conf * cal["multiplier"]))
+    multiplier = cal["multiplier"]
+
+    # Cold-start dampening: blend toward 0.5x for agents with < 10 samples
+    if cal["sample_size"] < 10 and not cal["cold_start"]:
+        damping_ramp = cal["sample_size"] / 10.0  # 0.0→1.0 as samples go 0→10
+        multiplier = damping_ramp * multiplier + (1 - damping_ramp) * 0.5
+
+    eff = max(0.0, min(1.0, stated_conf * multiplier))
     return eff, cal
 
 

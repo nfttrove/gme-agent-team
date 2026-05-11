@@ -373,12 +373,18 @@ def notify_signal_alert(agent_name: str, signal_type: str, confidence: float,
     agent_icon = AGENT_EMOJI.get(agent_name, "")
     msg = f"{emoji} <b>SIGNAL ALERT</b> {agent_icon}\n\n"
     msg += f"<b>{signal_type.upper().replace('_', ' ')}</b>\n"
-    if cal_meta.get("cold_start") or abs(stated_conf - confidence) < 0.005:
+    if cal_meta.get("cold_start"):
+        # New agent — show confidence and explain we're still gathering data
+        msg += f"Confidence: <b>{confidence:.0%}</b> {severity}\n"
+        msg += f"<i>New agent ({cal_meta['sample_size']}/{5} calibration samples)</i>\n\n"
+    elif abs(stated_conf - confidence) < 0.005:
+        # No significant adjustment — show as-is
         msg += f"Confidence: <b>{confidence:.0%}</b> {severity}\n\n"
     else:
-        msg += (f"Confidence: <b>{confidence:.0%}</b> {severity} "
-                f"<i>(stated {stated_conf:.0%}, ×{cal_meta['multiplier']:.2f} "
-                f"cal on n={cal_meta['sample_size']})</i>\n\n")
+        # Significant calibration applied — show the adjustment and why
+        hit_rate = cal_meta.get("hit_rate", 0)
+        msg += (f"Confidence: <b>{confidence:.0%}</b> {severity}\n"
+                f"<i>Calibrated from {stated_conf:.0%} (hit rate {hit_rate:.0%} on {cal_meta['sample_size']} signals)</i>\n\n")
 
     # Risk/reward setup
     if entry_price and stop_loss and take_profit:
