@@ -320,15 +320,16 @@ def make_synthesis_task(agent, price_str: str, agent_logs_str: str) -> Task:
             "  - CTO: structural bias (GREEN/YELLOW/RED)\n"
             "  - Social: any tracked account posts (or 'none')\n"
             "  - SafetyGate: PASS or BLOCK\n\n"
-            "Count bullish vs bearish signals: ≥60% bullish → CONSENSUS: BULLISH; "
-            "≥60% bearish → CONSENSUS: BEARISH; otherwise → NEUTRAL.\n\n"
-            "Return ONE line in this exact format:\n"
-            "PRICE: $XX.XX [trend] | DATA: [clean/degraded] | NEWS: [sentiment, score] | "
-            "PATTERN: [type, bias] | TREND: [direction, strength] | "
-            "PREDICTION: [bias, confidence] | STRUCTURAL: [status] | SOCIAL: [alert or none] | "
-            "GATE: [PASS/BLOCK] | CONSENSUS: [BULLISH/BEARISH/NEUTRAL] [X]%"
+            "Consensus pct = share of non-n/a agents agreeing with the direction (e.g. 4 of 6 bearish = 67%).\n"
+            "If NEWS is neutral, you MUST cite a reason in parens (e.g. 'NEWS: neutral 0.0 (no catalysts)') — never bare 'neutral'.\n\n"
+            "Return ONE line. Labels UPPERCASE; directional values UPPERCASE; front-load CONSENSUS:\n"
+            "CONSENSUS: [BULLISH/BEARISH/NEUTRAL] [X]% | PRICE: $XX.XX [trend] | "
+            "TREND: [DIRECTION, strength] | PREDICTION: [BIAS, confidence] | "
+            "STRUCTURAL: [GREEN/YELLOW/RED] | DATA: [clean/degraded] | "
+            "NEWS: [sentiment] [score] | PATTERN: [type, bias] | SOCIAL: [alert or none] | "
+            "GATE: [PASS/BLOCK]"
         ),
-        expected_output="PRICE: $0.00 unknown | DATA: degraded | NEWS: neutral 0.0 | PATTERN: unknown | TREND: unknown | PREDICTION: HOLD | STRUCTURAL: unknown | SOCIAL: none | GATE: BLOCK no_data | CONSENSUS: NEUTRAL 50%",
+        expected_output="CONSENSUS: NEUTRAL 50% | PRICE: $0.00 UNKNOWN | TREND: UNKNOWN | PREDICTION: HOLD | STRUCTURAL: UNKNOWN | DATA: degraded | NEWS: neutral 0.0 (no data) | PATTERN: unknown | SOCIAL: none | GATE: BLOCK no_data",
         agent=agent,
     )
 

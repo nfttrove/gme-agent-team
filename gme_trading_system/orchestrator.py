@@ -628,10 +628,11 @@ def _compute_trendy_signal():
         "Schema (all fields required):\n"
         '{"trend_direction": "UP"|"DOWN"|"SIDEWAYS", "confidence": <0.0-1.0>, '
         '"support_level": <float>, "resistance_level": <float>, '
-        '"reasoning": "<one sentence citing specific indicator values, max 220 chars>", '
+        '"reasoning": "<trader-terse, <=15 words, cite specific indicator values. '
+        'FORBIDDEN phrases: \'directional conviction\', \'lack of\', \'indicating\'>", '
         '"severity": "HIGH"|"MEDIUM"|"LOW"}\n\n'
         "Rules: UP requires price > VWAP AND price > EMA21. DOWN requires price < VWAP AND price < EMA21. "
-        "Otherwise SIDEWAYS. Confidence ≤ 0.55 if EMAs disagree or RSI in 45-55. "
+        "Otherwise SIDEWAYS. Confidence <= 0.55 if EMAs disagree or RSI in 45-55. "
         f"support_level MUST equal {support_hint}, resistance_level MUST equal {resistance_hint}. severity=HIGH if confidence>=0.75."
     )
 
@@ -645,9 +646,11 @@ def _compute_trendy_signal():
     except Exception as e:
         return None, f"validation error: {e} | raw={raw[:300]}"
 
+    from message_formatters import tighten_prose
+    reasoning_clean = tighten_prose(signal.reasoning)[:220]
     narrative = (
         f"{signal.trend_direction} (conf={signal.confidence:.0%}) · "
-        f"S=${signal.support_level:.2f} R=${signal.resistance_level:.2f} · {signal.reasoning[:220]}"
+        f"S=${signal.support_level:.2f} R=${signal.resistance_level:.2f} · {reasoning_clean}"
     )
     return signal, narrative
 
@@ -2321,32 +2324,76 @@ def run_synthesis():
             ).fetchone()
             if row and row[0]:
                 per_agent[name] = row[0][:250].replace("\n", " ").strip()
-        conn.close()
 
         if not per_agent:
+            conn.close()
             write_log("Synthesis", "no recent agent logs in last 4h", "synthesis", "error")
+            return
+
+        # Dedup gate (mirrors Chatty at line ~296): skip LLM call if the input
+        # signature hasn't materially changed since last Synthesis cycle.
+        # State key = rounded price + direction + per-agent fingerprint.
+        import hashlib
+        agent_fingerprint = hashlib.md5(
+            repr(sorted(per_agent.items())).encode("utf-8")
+        ).hexdigest()[:12]
+        price_bucket = round(float(fact['price']), 1)
+        state_key = f"{price_bucket}|{fact['direction']}|{agent_fingerprint}"
+        last_state = conn.execute(
+            "SELECT content FROM agent_logs WHERE agent_name='Synthesis' "
+            "AND task_type='synthesis_state' ORDER BY id DESC LIMIT 1"
+        ).fetchone()
+        conn.close()
+        if last_state and last_state[0] == state_key:
+            log.info(f"[Synthesis] state unchanged ({state_key}) — skipping")
+            write_log("Synthesis", "state unchanged; no new brief", "synthesis", "skipped")
             return
 
         logs_block = "\n".join(f"  {name}: {content}" for name, content in per_agent.items())
         # PRICE token is pre-formatted from market fact — LLM must use it verbatim
         price_token = f"${fact['price']:.2f} {fact['direction'].lower()}"
+        # Volume regime as a comparative anchor for the LLM (rec #6)
+        try:
+            vol_conn = sqlite3.connect(DB_PATH)
+            vol_info = _volume_regime(vol_conn, "GME")
+            vol_conn.close()
+            vol_anchor = f"vol {vol_info['label']} ({vol_info['ratio']:.2f}x avg)"
+        except Exception:
+            vol_anchor = "vol n/a"
         prompt = (
-            "You are the team's Synthesis agent. Produce ONE line summarising the current consensus, "
-            "in this EXACT format (keep labels, replace bracketed values):\n"
-            f"PRICE: {price_token} | DATA: [clean/degraded] | NEWS: [bullish/bearish/neutral, score] | "
-            "TREND: [up/down/sideways] | PREDICTION: [bias, confidence%] | "
-            "STRUCTURAL: [GREEN/YELLOW/RED] | CONSENSUS: [BULLISH/BEARISH/NEUTRAL] [XX]%\n\n"
-            "Rules: use ONLY the data below, do not invent. If an agent is missing, write 'n/a'. "
-            f"Use the PRICE token EXACTLY as given: '{price_token}' — do NOT change the direction. "
-            "Consensus = majority of the non-n/a directional signals. No preamble, no markdown, no quotes.\n\n"
+            "You are the team's Synthesis agent. Produce a TWO-LINE consensus brief, "
+            "in this EXACT format (keep labels uppercase, replace bracketed values):\n"
+            f"NOW: PRICE: {price_token} | DATA: [clean/degraded] (one-word reason) | "
+            "NEWS: [bullish/bearish/neutral] [score] (one-word reason) | STRUCTURAL: [GREEN/YELLOW/RED] (one-word reason)\n"
+            "NEXT: CONSENSUS: [BULLISH/BEARISH/NEUTRAL] [XX]% (X/Y agents; TopAgent NN%) | "
+            "TREND: [UP/DOWN/SIDEWAYS] [strength] | PREDICTION: [BIAS] [confidence%]\n\n"
+            "Rules:\n"
+            "  * Labels UPPERCASE. Directional values (BULLISH/BEARISH/NEUTRAL/UP/DOWN/SIDEWAYS/GREEN/YELLOW/RED) UPPERCASE.\n"
+            "  * Use ONLY the data below, do not invent. If an agent is missing, write 'n/a'.\n"
+            f"  * Use the PRICE token EXACTLY as given: '{price_token}' — do NOT change the direction.\n"
+            "  * Consensus pct = share of non-n/a agents agreeing with the direction. Always include '(X/Y agents; TopAgent NN%)'.\n"
+            "    Example: 'CONSENSUS: BEARISH 67% (4/6 agents; Futurist 78%)' means 4 of 6 non-n/a agents are bearish,\n"
+            "    and Futurist had the highest stated confidence at 78%. Pick TopAgent from non-n/a agents.\n"
+            "  * Parenthetical reasons go AFTER the canonical value, not in place of it.\n"
+            "    DATA: clean (no gaps) or DATA: degraded (1 feed down).\n"
+            "    STRUCTURAL: YELLOW (consolidating) or STRUCTURAL: RED (debt-heavy).\n"
+            "  * If NEWS is neutral, you MUST cite a reason in parens: 'NEWS: neutral 0.0 (no catalysts)'.\n"
+            "    Never bare 'neutral'.\n"
+            "  * NOW = current observations (what IS). NEXT = forecast / consensus call (what we EXPECT).\n"
+            "  * Exactly two lines: one starting with 'NOW:' and one starting with 'NEXT:'. No blank line between.\n"
+            "  * No preamble, no markdown, no quotes, no emoji.\n\n"
             f"{fact['prompt_line']}\n"
+            f"Current volume regime: {vol_anchor}\n"
             f"Recent per-agent outputs (last 4h):\n{logs_block}\n"
         )
 
         from llm_config import llm_generate
-        brief = llm_generate(prompt, num_predict=160, temperature=0.2, timeout=45)
+        brief = llm_generate(prompt, num_predict=220, temperature=0.2, timeout=45)
         brief = brief.strip().strip('"').strip("'")
-        brief = brief.split("\n")[0].strip()[:500]
+        # Keep up to the first two non-empty lines (NOW: and NEXT:). Drop trailing
+        # commentary the LLM sometimes appends. Falls back to single-line gracefully.
+        lines = [ln.strip() for ln in brief.split("\n") if ln.strip()][:2]
+        brief = "\n".join(lines)[:500]
 
         if not brief or "PRICE" not in brief.upper():
             write_log("Synthesis", f"malformed brief: {brief[:200]}", "synthesis", "error")
@@ -2362,8 +2409,15 @@ def run_synthesis():
             flags=re.IGNORECASE,
         )
 
+        # Post-LLM normalization: enforce label/value capitalization and trim verbose prose
+        from message_formatters import normalize_synthesis_capitalization, tighten_prose
+        brief = normalize_synthesis_capitalization(brief)
+        brief = tighten_prose(brief)
+
         log.info(f"[Synthesis] {brief}")
         write_log("Synthesis", brief, "synthesis")
+        # Record state_key for the next cycle's dedup check
+        write_log("Synthesis", state_key, "synthesis_state")
     except requests.Timeout:
         log.error("[Synthesis] LLM timeout")
         write_log("Synthesis", "LLM timeout after 45s", "synthesis", "timeout")
