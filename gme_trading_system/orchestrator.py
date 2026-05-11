@@ -1765,14 +1765,8 @@ def run_saturday_review():
         week_start = (date.today() - timedelta(days=6)).isoformat()
         week_end = date.today().isoformat()
 
-        if n_trades:
-            this_week_line = (
-                f"• {n_trades} paper trades, {wins}W/{n_trades - wins}L "
-                f"({win_rate:.0f}%), PnL ${week_pnl_usd:+,.0f}"
-            )
-        else:
-            this_week_line = "• No closed paper trades this week."
-
+        # Paper-trade open/close stats are private — see _standup for the
+        # owner-only view. The Saturday review is signals-focused.
         preds_line = (
             f"• {n_preds} predictions scored, avg error {avg_err:.1f}%"
             if n_preds else "• No predictions scored this week."
@@ -1781,6 +1775,12 @@ def run_saturday_review():
         top_line = (
             f"• Top signal generator: {top_agent[0]} ({top_agent[1]} signals)"
             if top_agent else "• No agents emitted signals this week."
+        )
+
+        n_signals_total = sum(n for _, n in signal_counts) if signal_counts else 0
+        signals_line = (
+            f"• {n_signals_total} signals emitted across {len(signal_counts)} agent(s)"
+            if signal_counts else "• No signals emitted this week."
         )
 
         system_line = (
@@ -1798,7 +1798,7 @@ def run_saturday_review():
 
         brief = (
             f"📅 <b>SATURDAY REVIEW</b> — week of {week_start} to {week_end}\n\n"
-            f"<b>THIS WEEK</b>\n{this_week_line}\n{preds_line}\n{top_line}\n\n"
+            f"<b>THIS WEEK</b>\n{signals_line}\n{top_line}\n{preds_line}\n\n"
             f"{trove_block}"
             f"<b>LESSONS</b>\n"
             f"• {n_candidates} candidate{'' if n_candidates == 1 else 's'} pending review (/candidates)\n\n"
@@ -1809,9 +1809,12 @@ def run_saturday_review():
         write_log("SatReview", brief[:2000], "saturday_review")
         from notifier import notify
         notify(brief)
+        # Internal log retains paper-trade stats for the operator's eyes
+        # (orchestrator log only — never sent to Telegram).
         log.info(
-            f"[SatReview] sent — trades={n_trades} win_rate={win_rate:.0f}% "
-            f"pnl=${week_pnl_usd:+.0f} candidates={n_candidates}"
+            f"[SatReview] sent — signals={n_signals_total} preds={n_preds} "
+            f"candidates={n_candidates} (private: trades={n_trades} "
+            f"win_rate={win_rate:.0f}% pnl=${week_pnl_usd:+.0f})"
         )
     except Exception as e:
         log.error(f"[SatReview] {e}")

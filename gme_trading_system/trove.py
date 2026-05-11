@@ -53,6 +53,8 @@ DEFAULT_WATCHLIST = [
     "CVS",
     # Retail with director purchases
     "BBY","KSS","M",
+    # M&A watch (GameStop non-binding offer to acquire — 2026-05)
+    "EBAY",
 ]
 
 

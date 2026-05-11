@@ -134,13 +134,13 @@ class TestSaturdayReview:
         self, empty_db, captured_telegram, stub_llm, stub_candidates, reset_breakers,
     ):
         """
-        Given a fresh DB with no trades, predictions, or signals
+        Given a fresh DB with no signals or predictions
         When run_saturday_review fires
         Then a Telegram message is still sent, gracefully reporting zeros.
 
         Why this matters: the first Saturday after deployment WILL run against
-        a near-empty DB. The brief must degrade to 'no trades this week' rather
-        than crash on division-by-zero or stop the scheduler.
+        a near-empty DB. The brief must degrade to 'no signals' rather than
+        crash on division-by-zero or stop the scheduler.
         """
         # Given / When
         orchestrator.run_saturday_review()
@@ -149,30 +149,36 @@ class TestSaturdayReview:
         assert len(captured_telegram) == 1
         msg = captured_telegram[0]
         assert "SATURDAY REVIEW" in msg
-        assert "No closed paper trades this week" in msg
+        assert "No signals emitted this week" in msg
         assert "No predictions scored this week" in msg
-        assert "No agents emitted signals this week" in msg
 
-    def test_when_week_has_trades_then_brief_reports_win_rate_and_pnl(
+    def test_brief_does_not_leak_paper_trade_open_close_stats(
         self, empty_db, captured_telegram, stub_llm, stub_candidates, reset_breakers,
     ):
         """
-        Given a week with 3 closed paper trades, all profitable
+        Given a week with 3 closed paper trades in the DB
         When run_saturday_review fires
-        Then the brief reports the trade count, win rate, and net PnL.
+        Then paper-trade open/close counts, win rate, and PnL MUST NOT
+        appear in the broadcast — they're private operator data.
+
+        Why this matters: the bot is signals-only. Paper-trade outcomes
+        belong in the owner-only /standup view, never in the broadcast
+        brief. A regression that re-adds the line is exactly what this
+        test catches.
         """
-        # Given
+        # Given — three closed paper trades exist in the DB
         _seed_week_of_activity(empty_db)
 
         # When
         orchestrator.run_saturday_review()
 
-        # Then
-        assert len(captured_telegram) == 1
+        # Then — none of the trade-outcome strings should appear
         msg = captured_telegram[0]
-        assert "3 paper trades" in msg
-        assert "100%" in msg  # all 3 PnLs positive
-        assert "+$54" in msg or "$+54" in msg  # 30 + 4 + 20 = 54
+        assert "paper trades" not in msg.lower()
+        assert "win rate" not in msg.lower()
+        assert "100%" not in msg
+        assert "$+54" not in msg and "+$54" not in msg
+        assert "W/" not in msg  # the W/L bucket format from the old line
 
     def test_brief_does_not_leak_private_5k_target(
         self, empty_db, captured_telegram, stub_llm, stub_candidates, reset_breakers,
