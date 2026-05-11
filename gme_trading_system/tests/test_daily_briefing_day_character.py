@@ -225,16 +225,18 @@ class TestDailyBriefingWithDayCharacter:
         msg = captured_telegram[0]
         assert "Friday — opex day" in msg
 
-    def test_brief_contains_5k_progress_line(
+    def test_brief_does_not_leak_private_5k_target(
         self, empty_db, captured_telegram, stub_llm, freeze_today,
     ):
         """
-        Given any day's brief
+        Given the daily brief is the team-facing broadcast
         When run_daily_briefing fires
-        Then the brief contains the £5K BY 2026-05-31 line and a 'days left' figure.
+        Then the brief MUST NOT contain the personal £5k target — that lives
+        in /progress, an owner-only Telegram command.
 
-        Why this matters: with 20 days to the deadline as of 2026-05-11,
-        the daily brief must keep the goal in the team's view, every day.
+        Why this matters: the £5k figure is a private monthly goal. The
+        broadcast must stay focused on the trade. If a future refactor
+        re-adds the line, this test fails immediately.
         """
         # Given
         freeze_today(date(2026, 5, 11))
@@ -245,42 +247,9 @@ class TestDailyBriefingWithDayCharacter:
 
         # Then
         msg = captured_telegram[0]
-        assert "5K BY 2026-05-31" in msg
-        assert "days left" in msg
-
-    def test_5k_line_reflects_realised_pnl_from_closed_trades(
-        self, empty_db, captured_telegram, stub_llm, freeze_today,
-    ):
-        """
-        Given two closed paper trades totalling $100 net PnL
-        When run_daily_briefing fires
-        Then the £5k line shows ~£79 earned (100 USD * 0.79 default rate).
-
-        Why this matters: the daily brief is where the team SEES whether
-        the tracker is computing real numbers — a stale or zero number
-        means the bypass to trade_decisions has broken.
-        """
-        # Given
-        freeze_today(date(2026, 5, 11))
-        _seed_minimal_price_facts(empty_db)
-        conn = sqlite3.connect(empty_db)
-        conn.executescript(
-            """
-            INSERT INTO trade_decisions (order_id, action, symbol, pnl, status, paper_trade, timestamp)
-            VALUES
-                ('o-a', 'buy', 'GME', 60.00, 'closed', 1, datetime('now', '-2 days')),
-                ('o-b', 'buy', 'GME', 40.00, 'closed', 1, datetime('now', '-1 day'));
-            """
-        )
-        conn.commit()
-        conn.close()
-
-        # When
-        orchestrator.run_daily_briefing()
-
-        # Then
-        msg = captured_telegram[0]
-        assert "£79" in msg  # 100 USD * 0.79 default rate
+        assert "£5K" not in msg
+        assert "5K BY 2026-05-31" not in msg
+        assert "deadline" not in msg.lower()
 
     def test_first_friday_brief_prompt_includes_nfp_context(
         self, empty_db, captured_telegram, freeze_today, monkeypatch,

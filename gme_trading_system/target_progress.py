@@ -1,10 +1,16 @@
 """
 £5k-by-2026-05-31 progress calculator.
 
+This is a *private* signal — surfaced on demand via the /progress Telegram
+command, never in the broadcast briefs. The team chat stays focused on
+trading; the operator checks progress privately.
+
 Pure module: no DB, no network, no IO. The caller passes realised PnL in GBP
-and the function returns a `TargetProgress` snapshot. Kept pure so the daily
-brief and Saturday review can both render it consistently and tests stay fast.
+and the function returns a `TargetProgress` snapshot. Kept pure so tests
+stay fast and the helper can be reused from any caller (telegram_bot, future
+internal-only digests, learning hooks).
 """
+import os
 from dataclasses import dataclass
 from datetime import date
 from math import inf
@@ -13,6 +19,10 @@ from math import inf
 TARGET_GBP_DEFAULT = 5000.0
 START_DATE_DEFAULT = date(2026, 1, 1)
 DEADLINE_DEFAULT = date(2026, 5, 31)
+
+# Rough USD→GBP for converting trade_decisions.pnl (USD) into the target unit.
+# Override via env when a live FX feed lands.
+USD_GBP_RATE = float(os.getenv("USD_GBP_RATE", "0.79"))
 
 
 @dataclass(frozen=True)

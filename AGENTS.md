@@ -97,15 +97,15 @@ Every signal emitted to Telegram carries a 0.0–1.0 confidence score. The team 
 
 ### Briefing — Strategy Briefing Officer
 - **Cadence:** invoked by the `/brief` Telegram command and the 10:00 ET cron
-- **Reads:** latest Synthesis, last Trendy + Futurist, Newsie; closed paper trades for £5k tracker
+- **Reads:** latest Synthesis, last Trendy + Futurist, Newsie
 - **Writes:** Telegram brief message
 - **Why it exists:** the polished human-readable "what's happening" digest
 - **Day-of-week character** — header tag and a Gemma-prompt context line vary by weekday:
   Monday (first day / weekend gap-risk), Tuesday (confirmation), Wednesday (mid-week pulse),
   Thursday (pre-opex), Friday (opex day). First-Friday-of-month appends an NFP note. See
   `_day_intro()` in [orchestrator.py](gme_trading_system/orchestrator.py).
-- **£5k tracker** — every brief ends with a one-liner: earned / target / days-left / daily-burn,
-  computed by [target_progress.py](gme_trading_system/target_progress.py) from closed paper-trade PnL.
+- **No personal targets in the broadcast** — the £5k-by-deadline tracker is private and
+  reachable only via the owner-only `/progress` command (see below).
 
 ---
 
@@ -133,7 +133,7 @@ Beyond the 12 agents, the orchestrator runs:
 - `learning_debrief` at 16:30 ET — closes out the day's signals
 - `lesson_producer` at 16:35 ET — promotes patterns to lesson candidates
 - `weekly_review` Fri 17:00 ET — `learner.weekly_strategy_review()`, parameter adaptation
-- `saturday_review` Sat 09:00 ET — Telegram digest: week's trades + PnL, signal hit rate, £5k progress, lesson candidates, system health
+- `saturday_review` Sat 09:00 ET — Telegram digest: week's trades + PnL, signal hit rate, lesson candidates, system health (no personal-target figures)
 - `monday_digest` Mon 08:00 ET — pre-open weekend digest: news since Fri close, GeoRisk weekend events, gap-risk vs Fri close (does NOT replace 09:00 huddle)
 - `nightly_maintenance` at 03:00 ET — DB backup + WAL checkpoint + retention purge
 

@@ -111,14 +111,15 @@ launchctl kickstart -k gui/$(id -u)/com.gme.orchestrator
 
 ### Tests fail with `pillar_D` or `signal_scorer` errors
 
-Pre-existing failures unrelated to recent commits — `test_trove_default_watchlist` (Trove pillar_D bug) and `test_signal_scorer_detects_sl_first_touch_as_loss` (calibration scoring). Baseline as of the Saturday-review change is **161 passed, 2 failed**. If you see *new* failures, investigate.
+Pre-existing failures unrelated to recent commits — `test_trove_default_watchlist` (Trove pillar_D bug) and `test_signal_scorer_detects_sl_first_touch_as_loss` (calibration scoring). Current baseline is **180 passed, 2 failed**. If you see *new* failures, investigate.
 
-### £5k tracker shows the wrong number
+### `/progress` (private £5k tracker) shows the wrong number
 
-The `🎯 £5K BY 2026-05-31` line on the Saturday review and (soon) daily brief is computed from `trade_decisions.pnl` (USD, paper trades) multiplied by `USD_GBP_RATE` (default 0.79). Two known limitations:
+`/progress` is an owner-only Telegram command (see `OWNER_ONLY_COMMANDS` in [telegram_bot.py](gme_trading_system/telegram_bot.py)). It sums closed paper-trade PnL from `trade_decisions`, converts USD→GBP via the `USD_GBP_RATE` constant in [target_progress.py](gme_trading_system/target_progress.py), and renders the earned / target / days-left / daily-burn one-liner.
 
-- **No live FX feed.** Set `USD_GBP_RATE=0.81` (or whatever the current spot is) in `.env` to override.
-- **Week-only PnL on Saturday review.** v1 surfaces the week's contribution against the target, not lifetime PnL — the schema has no explicit "tracking start date" yet. If you want lifetime, add a `target_started_at` row to `bot_settings` and extend the SQL in `run_saturday_review`.
+- **No live FX feed.** Default rate is 0.79. Set `USD_GBP_RATE=0.81` (or current spot) in `.env` to override.
+- **Lifetime PnL, not period-bounded.** The handler reads every `status='closed' AND paper_trade=1` row. If you want a tracking start date (e.g. count only trades after a particular date), extend the SQL — there's no `target_started_at` marker in the schema yet.
+- **Why it's private and not in the broadcast briefs.** The £5k is a personal monthly goal. Public briefs (`run_daily_briefing`, `run_saturday_review`) intentionally omit it; only `/progress` exposes it, only to the owner's chat_id.
 
 ### DB growing too large
 

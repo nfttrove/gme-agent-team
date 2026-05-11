@@ -64,6 +64,7 @@ OWNER_ONLY_COMMANDS = {
     "/frequency",                                  # changes alert cadence
     "/candidates", "/graduate", "/reject",         # lesson lifecycle
     "/update",                                     # supabase sync
+    "/progress",                                   # private £5k tracker (never broadcast)
     # LLM/external-API eaters — each call costs 20s+ of local Gemma or a
     # paid-tier API hit. A bored stranger holding the key down DOSes the
     # actual signal agents. Open these later behind rate limits if demand.
@@ -587,6 +588,32 @@ def handle_command(text: str, user: str = "team"):
             _reply("\n".join(lines))
         except Exception as e:
             _reply(f"Agent log error: {e}")
+
+    elif cmd == "/progress":
+        # Private £5k-by-deadline tracker. Owner-only — never goes to the
+        # broadcast channel. Reads closed paper-trade PnL and renders the
+        # earned / target / days-left / daily-burn one-liner.
+        try:
+            from datetime import date
+            from target_progress import compute_progress, format_one_liner, USD_GBP_RATE
+            conn = sqlite3.connect(DB_PATH)
+            row = conn.execute(
+                "SELECT COALESCE(SUM(pnl), 0) FROM trade_decisions "
+                "WHERE status='closed' AND paper_trade=1 AND pnl IS NOT NULL"
+            ).fetchone()
+            conn.close()
+            realised_usd = float(row[0]) if row else 0.0
+            progress = compute_progress(
+                realised_pnl_gbp=max(0.0, realised_usd) * USD_GBP_RATE,
+                today=date.today(),
+            )
+            pace_icon = "🟢" if progress.on_track else "🟡"
+            _reply(
+                f"<b>🎯 Personal target — £5k by 2026-05-31</b>\n"
+                f"{pace_icon} {format_one_liner(progress)}"
+            )
+        except Exception as e:
+            _reply(f"Progress lookup error: {e}")
 
     elif cmd == "/standup":
         try:
@@ -1358,7 +1385,8 @@ def handle_command(text: str, user: str = "team"):
             "/graduate &lt;short_id&gt; — promote a staged candidate to active lesson\n"
             "/reject &lt;short_id&gt; — drop a staged candidate\n\n"
             "<b>Settings:</b>\n"
-            "/frequency [low|medium|high] — notification level\n\n"
+            "/frequency [low|medium|high] — notification level\n"
+            "/progress — your private £5k-by-deadline tracker (owner-only)\n\n"
             "<b>☕ Support:</b>\n"
             "/supportme — buy-me-a-coffee / PayPal link\n"
             "/promo — broadcast the @mygmebot promo card now\n\n"

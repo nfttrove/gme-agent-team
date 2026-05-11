@@ -198,6 +198,91 @@ def test_frequency_set(seeded_db, captured_sends):
     assert telegram_bot._get_frequency() == "high"
 
 
+def test_progress_is_owner_only(seeded_db):
+    """
+    Given the bot's permissions set
+    When checking /progress
+    Then it is registered as an owner-only command.
+
+    Why this matters: /progress shows the private £5k tracker. If a future
+    refactor accidentally drops it from OWNER_ONLY_COMMANDS, the bot would
+    answer the tracker query for any chat that messages it.
+    """
+    assert "/progress" in telegram_bot.OWNER_ONLY_COMMANDS
+
+
+def test_progress_renders_tracker_line(seeded_db, captured_sends):
+    """
+    Given closed paper trades summing to $100 PnL in the DB
+    When /progress is invoked by the owner
+    Then the reply shows the personal-target tracker with a GBP figure and
+    days-left count.
+
+    Why this matters: this is the only place the £5k figure is visible.
+    If the SQL aggregation or the target_progress import breaks, the owner
+    has no fallback view of progress.
+    """
+    # Given — augment seeded_db's trade_decisions schema with the columns
+    # /progress reads (the slim seeded fixture omits pnl/status/paper_trade).
+    conn = sqlite3.connect(seeded_db)
+    conn.executescript(
+        """
+        DROP TABLE IF EXISTS trade_decisions;
+        CREATE TABLE trade_decisions (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            order_id TEXT, action TEXT, symbol TEXT,
+            pnl REAL, status TEXT, paper_trade INTEGER, timestamp TEXT
+        );
+        INSERT INTO trade_decisions (order_id, action, symbol, pnl, status, paper_trade, timestamp)
+        VALUES ('o1', 'buy', 'GME', 60.0, 'closed', 1, datetime('now', '-2 days')),
+               ('o2', 'buy', 'GME', 40.0, 'closed', 1, datetime('now', '-1 day'));
+        """
+    )
+    conn.commit()
+    conn.close()
+
+    # When
+    telegram_bot.handle_command("/progress")
+
+    # Then
+    assert captured_sends
+    msg = captured_sends[0]
+    assert "Personal target" in msg
+    assert "£5,000" in msg
+    assert "£79" in msg          # 100 USD * default 0.79 rate
+    assert "days left" in msg
+
+
+def test_progress_handles_empty_db_gracefully(seeded_db, captured_sends):
+    """
+    Given no trade_decisions rows at all
+    When /progress is invoked
+    Then the reply still renders £0 earned, not a crash or empty message.
+    """
+    # Given — wipe the seeded trade row, replace table with empty richer schema
+    conn = sqlite3.connect(seeded_db)
+    conn.executescript(
+        """
+        DROP TABLE IF EXISTS trade_decisions;
+        CREATE TABLE trade_decisions (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            order_id TEXT, pnl REAL, status TEXT, paper_trade INTEGER, timestamp TEXT
+        );
+        """
+    )
+    conn.commit()
+    conn.close()
+
+    # When
+    telegram_bot.handle_command("/progress")
+
+    # Then
+    assert captured_sends
+    msg = captured_sends[0]
+    assert "£0" in msg
+    assert "Progress lookup error" not in msg
+
+
 def test_frequency_invalid(seeded_db, captured_sends):
     telegram_bot.handle_command("/frequency bogus")
     # Invalid level falls through to "show current" — shouldn't raise.

@@ -174,23 +174,25 @@ class TestSaturdayReview:
         assert "100%" in msg  # all 3 PnLs positive
         assert "+$54" in msg or "$+54" in msg  # 30 + 4 + 20 = 54
 
-    def test_brief_contains_5k_progress_line(
+    def test_brief_does_not_leak_private_5k_target(
         self, empty_db, captured_telegram, stub_llm, stub_candidates, reset_breakers,
     ):
         """
-        Given any state of the DB
+        Given the Saturday review is the team-facing weekly digest
         When run_saturday_review fires
-        Then the brief includes the £5K BY 2026-05-31 progress line.
+        Then the brief MUST NOT contain the personal £5k target — that lives
+        in /progress, an owner-only command.
 
-        Why this matters: with 20 days to the deadline as of 2026-05-11, the
-        tracker is the headline metric. If a future refactor accidentally
-        decouples target_progress from the brief, this test fails loud.
+        Why this matters: the £5k figure is a private monthly goal. Including
+        it in the broadcast leaks personal context the team doesn't need. A
+        future contributor restoring it 'because the tests still pass' would
+        regress the privacy boundary — this test names the invariant.
         """
         orchestrator.run_saturday_review()
         msg = captured_telegram[0]
-        assert "£5K BY 2026-05-31" in msg
-        assert "£" in msg  # at minimum some GBP figure rendered
-        assert "days left" in msg
+        assert "£5K" not in msg
+        assert "5K BY 2026-05-31" not in msg
+        assert "deadline" not in msg.lower()
 
     def test_top_agent_is_named_when_signals_exist(
         self, empty_db, captured_telegram, stub_llm, stub_candidates, reset_breakers,

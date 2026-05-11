@@ -1546,11 +1546,6 @@ def run_weekly_review():
         write_log("Learner", str(e), "weekly_review", "error")
 
 
-# Rough USD→GBP for the £5k tracker. Realised PnL in trade_decisions is USD
-# (GME-denominated paper trades). Override via env when a live FX feed lands.
-USD_GBP_RATE = float(os.getenv("USD_GBP_RATE", "0.79"))
-
-
 def run_saturday_review():
     """Saturday 09:00 ET — week-in-review digest sent to Telegram.
 
@@ -1561,7 +1556,6 @@ def run_saturday_review():
     """
     from datetime import date, timedelta
     from circuit_breaker import list_breakers
-    from target_progress import compute_progress, format_one_liner
     from lesson_producer import list_staged_candidates
 
     log.info("[SatReview] === Saturday week-in-review ===")
@@ -1619,16 +1613,7 @@ def run_saturday_review():
 
         conn.close()
 
-        # ---------- 5. £5k progress ----------
-        progress = compute_progress(
-            realised_pnl_gbp=max(0.0, week_pnl_usd) * USD_GBP_RATE,
-            today=date.today(),
-        )
-        # Note: this is week PnL not cumulative — for v1 we surface the week
-        # contribution against the target; full lifetime PnL requires a start-
-        # date marker that doesn't exist in the schema yet. RUNBOOK tracks this.
-
-        # ---------- 6. Lesson candidates ----------
+        # ---------- 5. Lesson candidates ----------
         try:
             candidates = list_staged_candidates()
         except Exception as e:
@@ -1696,7 +1681,6 @@ def run_saturday_review():
         brief = (
             f"📅 <b>SATURDAY REVIEW</b> — week of {week_start} to {week_end}\n\n"
             f"<b>THIS WEEK</b>\n{this_week_line}\n{preds_line}\n{top_line}\n\n"
-            f"<b>🎯 £5K BY 2026-05-31</b>\n{format_one_liner(progress)}\n\n"
             f"<b>LESSONS</b>\n"
             f"• {n_candidates} candidate{'' if n_candidates == 1 else 's'} pending review (/candidates)\n\n"
             f"<b>SYSTEM</b>\n{system_line}\n\n"
@@ -2480,11 +2464,10 @@ def run_daily_briefing():
     (pattern description, waiting-for, risk). Prevents the 'sideways on an
     up day' hallucination the previous CrewAI version produced.
 
-    Day-of-week intro tag and a £5k progress line are appended deterministically
-    around the Gemma-filled core — the bypass pattern is preserved.
+    Day-of-week intro tag is appended deterministically around the Gemma-filled
+    core — the bypass pattern is preserved.
     """
     from datetime import date, datetime
-    from target_progress import compute_progress, format_one_liner
     log.info("[Briefing] === Daily Strategy Brief ===")
     write_log("Briefing", "Composing daily strategy brief", "daily_brief", "running")
     try:
@@ -2610,24 +2593,6 @@ def run_daily_briefing():
                     "team is leaning in but wants confirmation" if team_conf >= 55 else \
                     "team is cautious, no strong edge"
 
-        # ---------- £5k progress (deterministic — separate connection scope) ----------
-        try:
-            conn2 = sqlite3.connect(DB_PATH)
-            pnl_row = conn2.execute(
-                "SELECT COALESCE(SUM(pnl), 0) FROM trade_decisions "
-                "WHERE status='closed' AND paper_trade=1 AND pnl IS NOT NULL"
-            ).fetchone()
-            conn2.close()
-            realised_usd = float(pnl_row[0]) if pnl_row else 0.0
-        except Exception as e:
-            log.warning(f"[Briefing] PnL read failed for 5k tracker: {e}")
-            realised_usd = 0.0
-        progress = compute_progress(
-            realised_pnl_gbp=max(0.0, realised_usd) * USD_GBP_RATE,
-            today=today,
-        )
-        progress_line = format_one_liner(progress)
-
         header = f"<b>📋 DAILY STRATEGY BRIEF — {day_tag}</b>" if day_tag else "<b>📋 DAILY STRATEGY BRIEF</b>"
 
         brief = (
@@ -2638,8 +2603,7 @@ def run_daily_briefing():
             f"Today's range: ${day_low:.2f} to ${day_high:.2f}.\n\n"
             f"⏳ WAITING FOR: {waiting_txt}\n\n"
             f"⚠️ RISK: {risk_txt}\n\n"
-            f"🔮 CONFIDENCE: {team_conf}% — {conf_tone}.\n\n"
-            f"🎯 5K BY 2026-05-31: {progress_line}"
+            f"🔮 CONFIDENCE: {team_conf}% — {conf_tone}."
         )
 
         write_log("Briefing", brief[:2000], "daily_brief")
