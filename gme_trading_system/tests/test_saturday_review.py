@@ -397,6 +397,45 @@ class TestSaturdayReview:
         assert "ALGN" in msg
         assert "(new entry)" in msg
 
+    def test_trove_section_shows_all_tickers_not_just_top_n(
+        self, empty_db, captured_telegram, stub_llm, stub_candidates, reset_breakers,
+    ):
+        """
+        Given a snapshot contains many more tickers than the old 8-row cap
+        When run_saturday_review fires
+        Then every ticker in the snapshot appears in the brief — including
+        low-scoring ones — not just the top 8.
+
+        Why this matters: operator requested visibility on the full watchlist
+        (where the bottom is, not just who passed the deep-value gate).
+        A regression to a row cap would silently hide most of the list.
+        """
+        from trove_history import SCHEMA as TROVE_SCHEMA
+        conn = sqlite3.connect(empty_db)
+        conn.executescript(TROVE_SCHEMA)
+        # Seed 12 tickers with descending scores — past the old top_n=8 cap
+        rows = [
+            (f"T{i:02d}", f"date('now')", 80 - i * 5, "★★★★☆" if i < 3 else "★★☆☆☆")
+            for i in range(12)
+        ]
+        for ticker, _, score, rating in rows:
+            conn.execute(
+                "INSERT INTO trove_score_history "
+                "(ticker, score_date, score, rating, pillar_a, pillar_b, "
+                " pillar_c, pillar_d, price_at_score) "
+                "VALUES (?, date('now'), ?, ?, 20, 17, 14, 14, 25.0)",
+                (ticker, score, rating),
+            )
+        conn.commit()
+        conn.close()
+
+        orchestrator.run_saturday_review()
+        msg = captured_telegram[0]
+
+        # Every single one should appear, including the 12th (lowest-score)
+        for i in range(12):
+            assert f"T{i:02d}" in msg, f"T{i:02d} missing from brief"
+
     def test_trove_section_omitted_when_history_empty(
         self, empty_db, captured_telegram, stub_llm, stub_candidates, reset_breakers,
     ):

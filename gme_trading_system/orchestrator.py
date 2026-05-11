@@ -1579,12 +1579,15 @@ def run_weekly_review():
         write_log("Learner", str(e), "weekly_review", "error")
 
 
-def _compose_trove_section(conn, top_n: int = 8) -> str:
+def _compose_trove_section(conn, top_n: int | None = None) -> str:
     """Build the TROVE DEEP VALUE block for the Saturday review.
 
     Pulls the latest snapshot from trove_score_history, optionally compares
     to the closest snapshot from 5–8 days prior, and renders one line per
     ticker with score, stars, price, and a week-over-week delta tag.
+
+    `top_n=None` (default) shows every ticker in the snapshot. Pass a
+    positive int to cap (used only by tests that want a smaller subset).
 
     Returns "" if the table is empty or unreachable — the brief composer
     will then omit the section entirely (no 'TROVE: no data' scaffolding).
@@ -1597,12 +1600,20 @@ def _compose_trove_section(conn, top_n: int = 8) -> str:
         if not latest_date:
             return ""
 
-        latest = conn.execute(
-            "SELECT ticker, score, rating, price_at_score "
-            "FROM trove_score_history WHERE score_date = ? "
-            "ORDER BY score DESC LIMIT ?",
-            (latest_date, top_n),
-        ).fetchall()
+        if top_n is None:
+            latest = conn.execute(
+                "SELECT ticker, score, rating, price_at_score "
+                "FROM trove_score_history WHERE score_date = ? "
+                "ORDER BY score DESC",
+                (latest_date,),
+            ).fetchall()
+        else:
+            latest = conn.execute(
+                "SELECT ticker, score, rating, price_at_score "
+                "FROM trove_score_history WHERE score_date = ? "
+                "ORDER BY score DESC LIMIT ?",
+                (latest_date, top_n),
+            ).fetchall()
         if not latest:
             return ""
 
@@ -2097,11 +2108,17 @@ def run_cto_trove_score():
 
 
 def run_trove_history_log():
-    """9:15 AM ET — log every ticker scoring >= 65 to trove_score_history."""
+    """9:15 AM ET — log EVERY watchlist ticker to trove_score_history.
+
+    Previously gated at score >= 65 (the 'investment-grade deep value' bar).
+    Now logs everyone so the Saturday review can show the full ranking,
+    not just companies that already cleared the bar. Database growth is
+    negligible (~40 rows/day × 365 = ~15k rows/year, UNIQUE-constrained).
+    """
     log.info("[trove_history] daily log run")
     try:
         from trove_history import log_daily_scores
-        result = log_daily_scores(threshold=65.0)
+        result = log_daily_scores(threshold=0.0)
         write_log("CTO", f"trove_history log: {result}", "trove_history", "ok")
     except Exception as e:
         log.error(f"[trove_history] log failed: {e}")
