@@ -126,7 +126,8 @@ Beyond the 12 agents, the orchestrator runs:
 - `standup_report` at 11:00 + 16:00 ET — win-rate updates
 - `learning_debrief` at 16:30 ET — closes out the day's signals
 - `lesson_producer` at 16:35 ET — promotes patterns to lesson candidates
-- `weekly_review` Fri 17:00 ET
+- `weekly_review` Fri 17:00 ET — `learner.weekly_strategy_review()`, parameter adaptation
+- `saturday_review` Sat 09:00 ET — Telegram digest: week's trades + PnL, signal hit rate, £5k progress, lesson candidates, system health
 - `nightly_maintenance` at 03:00 ET — DB backup + WAL checkpoint + retention purge
 
 See [gme_trading_system/orchestrator.py](gme_trading_system/orchestrator.py) line ~2530 onward for the full schedule.

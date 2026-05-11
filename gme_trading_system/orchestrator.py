@@ -1546,6 +1546,175 @@ def run_weekly_review():
         write_log("Learner", str(e), "weekly_review", "error")
 
 
+# Rough USD→GBP for the £5k tracker. Realised PnL in trade_decisions is USD
+# (GME-denominated paper trades). Override via env when a live FX feed lands.
+USD_GBP_RATE = float(os.getenv("USD_GBP_RATE", "0.79"))
+
+
+def run_saturday_review():
+    """Saturday 09:00 ET — week-in-review digest sent to Telegram.
+
+    Bypass pattern: every number below is computed deterministically from the
+    DB and the circuit-breaker registry. Gemma only writes the one-line
+    next-week focus. Same discipline as run_daily_briefing — facts locked,
+    narrative filled.
+    """
+    from datetime import date, timedelta
+    from circuit_breaker import list_breakers
+    from target_progress import compute_progress, format_one_liner
+    from lesson_producer import list_staged_candidates
+
+    log.info("[SatReview] === Saturday week-in-review ===")
+    write_log("SatReview", "Composing weekly digest", "saturday_review", "running")
+
+    try:
+        conn = sqlite3.connect(DB_PATH)
+        conn.row_factory = sqlite3.Row
+
+        # ---------- 1. Week's paper trades ----------
+        trade_rows = conn.execute(
+            "SELECT pnl FROM trade_decisions "
+            "WHERE datetime(timestamp) > datetime('now', '-7 days') "
+            "AND status='closed' AND paper_trade=1 AND pnl IS NOT NULL"
+        ).fetchall()
+        pnls = [float(r["pnl"]) for r in trade_rows]
+        n_trades = len(pnls)
+        wins = sum(1 for p in pnls if p > 0)
+        win_rate = (wins / n_trades * 100) if n_trades else 0
+        week_pnl_usd = sum(pnls)
+
+        # ---------- 2. Week's scored predictions ----------
+        pred_rows = conn.execute(
+            "SELECT error_pct FROM predictions "
+            "WHERE datetime(timestamp) > datetime('now', '-7 days') "
+            "AND actual_price IS NOT NULL AND error_pct IS NOT NULL"
+        ).fetchall()
+        n_preds = len(pred_rows)
+        avg_err = (
+            sum(abs(float(r["error_pct"])) for r in pred_rows) / n_preds
+            if n_preds else 0
+        )
+
+        # ---------- 3. Signals by agent ----------
+        signal_rows = conn.execute(
+            "SELECT agent_name, COUNT(*) AS n FROM signal_alerts "
+            "WHERE datetime(timestamp) > datetime('now', '-7 days') "
+            "GROUP BY agent_name ORDER BY n DESC"
+        ).fetchall()
+        signal_counts = [(r["agent_name"], int(r["n"])) for r in signal_rows]
+        top_agent = signal_counts[0] if signal_counts else None
+
+        # ---------- 4. Agent freshness (last run in past 24h, active-window only) ----------
+        recency_rows = conn.execute(
+            "SELECT agent_name, MAX(timestamp) AS last_ts FROM agent_logs "
+            "WHERE datetime(timestamp) > datetime('now', '-3 days') "
+            "GROUP BY agent_name"
+        ).fetchall()
+        stale_agents = [
+            r["agent_name"] for r in recency_rows
+            if r["last_ts"] and (
+                datetime.now(ET) - datetime.fromisoformat(r["last_ts"]).replace(tzinfo=ET)
+            ).total_seconds() > 24 * 3600
+        ]
+
+        conn.close()
+
+        # ---------- 5. £5k progress ----------
+        progress = compute_progress(
+            realised_pnl_gbp=max(0.0, week_pnl_usd) * USD_GBP_RATE,
+            today=date.today(),
+        )
+        # Note: this is week PnL not cumulative — for v1 we surface the week
+        # contribution against the target; full lifetime PnL requires a start-
+        # date marker that doesn't exist in the schema yet. RUNBOOK tracks this.
+
+        # ---------- 6. Lesson candidates ----------
+        try:
+            candidates = list_staged_candidates()
+        except Exception as e:
+            log.warning(f"[SatReview] candidate read failed: {e}")
+            candidates = []
+        n_candidates = len(candidates)
+
+        # ---------- 7. System health ----------
+        breakers = list_breakers()
+        open_breakers = [name for name, b in breakers.items() if b["state"] != "closed"]
+
+        # ---------- 8. Gemma fills next-week focus only ----------
+        prompt = (
+            "You are writing the closing line of a weekly trading review for a "
+            "non-technical CEO. Output ONE short sentence stating what to watch "
+            "next week given these facts. No preamble, no markdown, no quotes, "
+            "under 140 chars.\n\n"
+            f"- This week: {n_trades} closed paper trades, {win_rate:.0f}% win rate, "
+            f"PnL ${week_pnl_usd:+,.0f}\n"
+            f"- Predictions scored: {n_preds}, avg abs error {avg_err:.1f}%\n"
+            f"- Top signal generator: {top_agent[0] if top_agent else 'none'}\n"
+            f"- Lesson candidates pending: {n_candidates}\n"
+            f"- Open circuit breakers: {len(open_breakers)}\n"
+        )
+        focus_txt = "Watch for confluence between Pattern and Futurist on the open."
+        try:
+            from llm_config import llm_generate
+            raw = llm_generate(prompt, num_predict=80, temperature=0.4, timeout=30)
+            raw = " ".join((raw or "").strip().strip('"').strip("'").split())
+            if raw:
+                focus_txt = raw[:160]
+        except Exception as e:
+            log.warning(f"[SatReview] LLM focus line failed ({e}), using fallback")
+
+        # ---------- 9. Compose the Telegram message ----------
+        week_start = (date.today() - timedelta(days=6)).isoformat()
+        week_end = date.today().isoformat()
+
+        if n_trades:
+            this_week_line = (
+                f"• {n_trades} paper trades, {wins}W/{n_trades - wins}L "
+                f"({win_rate:.0f}%), PnL ${week_pnl_usd:+,.0f}"
+            )
+        else:
+            this_week_line = "• No closed paper trades this week."
+
+        preds_line = (
+            f"• {n_preds} predictions scored, avg error {avg_err:.1f}%"
+            if n_preds else "• No predictions scored this week."
+        )
+
+        top_line = (
+            f"• Top signal generator: {top_agent[0]} ({top_agent[1]} signals)"
+            if top_agent else "• No agents emitted signals this week."
+        )
+
+        system_line = (
+            f"All circuit breakers closed."
+            if not open_breakers
+            else f"⚠️ Open breakers: {', '.join(open_breakers)}."
+        )
+        if stale_agents:
+            system_line += f" Stale (>24h): {', '.join(stale_agents)}."
+
+        brief = (
+            f"📅 <b>SATURDAY REVIEW</b> — week of {week_start} to {week_end}\n\n"
+            f"<b>THIS WEEK</b>\n{this_week_line}\n{preds_line}\n{top_line}\n\n"
+            f"<b>🎯 £5K BY 2026-05-31</b>\n{format_one_liner(progress)}\n\n"
+            f"<b>LESSONS</b>\n"
+            f"• {n_candidates} candidate{'' if n_candidates == 1 else 's'} pending review (/candidates)\n\n"
+            f"<b>SYSTEM</b>\n{system_line}\n\n"
+            f"<b>NEXT WEEK</b>\n{focus_txt}"
+        )
+
+        write_log("SatReview", brief[:2000], "saturday_review")
+        from notifier import notify
+        notify(brief)
+        log.info(
+            f"[SatReview] sent — trades={n_trades} win_rate={win_rate:.0f}% "
+            f"pnl=${week_pnl_usd:+.0f} candidates={n_candidates}"
+        )
+    except Exception as e:
+        log.error(f"[SatReview] {e}")
+        write_log("SatReview", str(e), "saturday_review", "error")
+
+
 def run_options_update():
     """Monday 8:30 AM ET — fetch options chain and compute max pain for the week."""
     log.info("[Options] Computing weekly max pain...")
@@ -2579,6 +2748,9 @@ class TradingSystemOrchestrator:
         # the producer mines signal_scores for new graduated lessons.
         self.scheduler.add_job(run_lesson_producer,  CronTrigger(hour=16, minute=35, timezone=ET), id="lesson_producer")
         self.scheduler.add_job(run_weekly_review,    CronTrigger(day_of_week="fri", hour=17, minute=0, timezone=ET), id="weekly_review")
+        # Saturday week-in-review digest — outside trading hours by design,
+        # team reads the week's performance + £5k tracker over coffee.
+        self.scheduler.add_job(run_saturday_review,  CronTrigger(day_of_week="sat", hour=9,  minute=0, timezone=ET), id="saturday_review")
 
         # CTO structural intelligence — PE playbook monitoring and short side research
         self.scheduler.add_job(run_cto_daily_brief,    CronTrigger(hour=9,  minute=5,  timezone=ET),                   id="cto_brief")

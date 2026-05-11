@@ -111,7 +111,14 @@ launchctl kickstart -k gui/$(id -u)/com.gme.orchestrator
 
 ### Tests fail with `pillar_D` or `signal_scorer` errors
 
-Pre-existing failures unrelated to recent commits — `test_trove_default_watchlist` (Trove pillar_D bug) and `test_signal_scorer_detects_sl_first_touch_as_loss` (calibration scoring). Baseline is **144 passed, 2 failed**. If you see *new* failures, investigate.
+Pre-existing failures unrelated to recent commits — `test_trove_default_watchlist` (Trove pillar_D bug) and `test_signal_scorer_detects_sl_first_touch_as_loss` (calibration scoring). Baseline as of the Saturday-review change is **161 passed, 2 failed**. If you see *new* failures, investigate.
+
+### £5k tracker shows the wrong number
+
+The `🎯 £5K BY 2026-05-31` line on the Saturday review and (soon) daily brief is computed from `trade_decisions.pnl` (USD, paper trades) multiplied by `USD_GBP_RATE` (default 0.79). Two known limitations:
+
+- **No live FX feed.** Set `USD_GBP_RATE=0.81` (or whatever the current spot is) in `.env` to override.
+- **Week-only PnL on Saturday review.** v1 surfaces the week's contribution against the target, not lifetime PnL — the schema has no explicit "tracking start date" yet. If you want lifetime, add a `target_started_at` row to `bot_settings` and extend the SQL in `run_saturday_review`.
 
 ### DB growing too large
 
