@@ -1514,35 +1514,41 @@ def _query_notebook_lm(question: str) -> str | None:
 
     Returns synthesized response if successful, None to fall back to other LLMs.
     Gracefully handles billing errors (402) by falling back.
+
+    Uses the modern google.genai SDK via llm_config.llm_generate_gemini —
+    the legacy `google.generativeai` package was deprecated 2026-04.
     """
     try:
-        import google.generativeai as genai
-        api_key = os.getenv("GOOGLE_API_KEY")
-        if not api_key:
+        if not os.getenv("GOOGLE_API_KEY"):
             return None
 
-        genai.configure(api_key=api_key)
+        from llm_config import llm_generate_gemini
 
-        # Curated GameStop notebook IDs
+        # Curated GameStop notebook IDs (currently unused — placeholder for
+        # future Notebook LM API binding; today we just route the prompt
+        # through Gemini Flash for evidence-based answers).
         notebooks = {
             "primary": "74adb871-cae3-4a33-8a9b-ae3ec4160d0b",
             "secondary": "5ffcf2d6-7bda-4792-a801-454e44de0f36",
         }
 
         responses = {}
-        for name, nb_id in notebooks.items():
+        for name, _nb_id in notebooks.items():
             try:
-                response = genai.GenerativeModel("gemini-2.5-flash").generate_content(
+                text = llm_generate_gemini(
                     f"""You are analyzing curated GameStop documents from our {name} collection.
 Answer this question based on the provided materials:
 
 Question: {question}
 
 Provide a factual, evidence-based response citing the documents where applicable.
-Keep it brief (2-3 sentences max)."""
+Keep it brief (2-3 sentences max).""",
+                    model="gemini-2.5-flash",
+                    num_predict=200,
+                    temperature=0.3,
                 )
-                if response and response.text:
-                    responses[name] = response.text.strip()
+                if text:
+                    responses[name] = text
             except Exception as e:
                 err = str(e)
                 if "402" in err or "Insufficient Balance" in err:
@@ -1554,9 +1560,9 @@ Keep it brief (2-3 sentences max)."""
             return None
 
         # Synthesize insights from both notebooks
-        combined = "\n".join(responses.values())
-        synthesis = genai.GenerativeModel("gemini-2.5-flash").generate_content(
-            f"""You've gathered insights from two curated GameStop research collections:
+        try:
+            synthesis = llm_generate_gemini(
+                f"""You've gathered insights from two curated GameStop research collections:
 
 Primary collection: {responses.get('primary', '(no response)')}
 
@@ -1565,17 +1571,21 @@ Secondary collection: {responses.get('secondary', '(no response)')}
 Original question: {question}
 
 Synthesize these perspectives into one coherent, evidence-based answer for a trader.
-Highlight any conflicts or different angles. Keep it brief for Telegram (1-2 short paragraphs max)."""
-        )
-
-        if synthesis and synthesis.text:
-            return synthesis.text.strip()
+Highlight any conflicts or different angles. Keep it brief for Telegram (1-2 short paragraphs max).""",
+                model="gemini-2.5-flash",
+                num_predict=300,
+                temperature=0.3,
+            )
+            if synthesis:
+                return synthesis
+        except Exception as e:
+            err = str(e)
+            if "402" in err or "Insufficient Balance" in err:
+                log.warning(f"[tgbot] Notebook LM synthesis: Google API billing error — skipping to free LLMs")
+                return None
+            log.debug(f"[tgbot] Notebook LM synthesis failed: {e}")
     except Exception as e:
-        err = str(e)
-        if "402" in err or "Insufficient Balance" in err:
-            log.warning(f"[tgbot] Notebook LM synthesis: Google API billing error — skipping to free LLMs")
-            return None
-        log.debug(f"[tgbot] Notebook LM synthesis failed: {e}")
+        log.debug(f"[tgbot] Notebook LM outer failure: {e}")
 
     return None
 
@@ -1614,12 +1624,15 @@ Think: Bloomberg terminal meets a knowledgeable friend who reads a lot."""
     # Try Gemini Flash (paid fallback, only if local models fail)
     if os.getenv("GOOGLE_API_KEY"):
         try:
-            import google.generativeai as genai
-            genai.configure(api_key=os.getenv("GOOGLE_API_KEY"))
-            model = genai.GenerativeModel("gemini-2.5-flash")
-            response = model.generate_content(f"{system_prompt}\n\n{user_message}")
+            from llm_config import llm_generate_gemini
+            text = llm_generate_gemini(
+                f"{system_prompt}\n\n{user_message}",
+                model="gemini-2.5-flash",
+                num_predict=400,
+                temperature=0.4,
+            )
             log.info("[tgbot] Response from Gemini Flash")
-            return response.text.strip()
+            return text
         except Exception as e:
             log.debug(f"[tgbot] Gemini failed: {e}")
 

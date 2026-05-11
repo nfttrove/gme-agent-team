@@ -104,24 +104,12 @@ def llm_generate(prompt: str, num_predict: int = 200, temperature: float = 0.2,
     or API error so the caller can log + fall back.
     """
     if STREAM_MODE:
-        import google.generativeai as genai
-        api_key = os.getenv("GOOGLE_API_KEY", "")
-        if not api_key:
-            raise RuntimeError("STREAM_MODE on but GOOGLE_API_KEY missing")
-        genai.configure(api_key=api_key)
-        # Gemini 2.5 Flash uses internal "thinking" tokens that count toward
-        # max_output_tokens. At Ollama-sized num_predict (~80) the thinking
-        # budget consumes everything and the visible response is empty/truncated.
-        # Use the lite tier (no thinking) and give generous headroom anyway.
-        model = genai.GenerativeModel(
-            "gemini-2.5-flash-lite",
-            generation_config={
-                "temperature": temperature,
-                "max_output_tokens": max(num_predict * 4, 512),
-            },
+        return llm_generate_gemini(
+            prompt,
+            model="gemini-2.5-flash-lite",
+            num_predict=num_predict,
+            temperature=temperature,
         )
-        resp = model.generate_content(prompt, request_options={"timeout": timeout})
-        return (resp.text or "").strip()
 
     import requests
     r = requests.post(
@@ -136,6 +124,47 @@ def llm_generate(prompt: str, num_predict: int = 200, temperature: float = 0.2,
     )
     r.raise_for_status()
     return r.json().get("response", "").strip()
+
+
+# ── Gemini direct call via the modern google.genai SDK ────────────────────────
+
+def llm_generate_gemini(
+    prompt: str,
+    model: str = "gemini-2.5-flash-lite",
+    num_predict: int = 200,
+    temperature: float = 0.2,
+) -> str:
+    """Direct Gemini call via the modern google.genai SDK.
+
+    Use when you specifically want Gemini (not the local-vs-cloud route
+    that llm_generate's STREAM_MODE switch decides). Single helper so
+    every call site uses the new SDK consistently — the legacy
+    `google.generativeai` package was deprecated as of 2026-04.
+
+    `model='gemini-2.5-flash-lite'` is the cost-optimised default; pass
+    `'gemini-2.5-flash'` for the full-tier model when you need grounding
+    or higher quality. The lite tier disables internal "thinking" tokens,
+    which is what we want for short generations (~80 num_predict) where
+    thinking budget would otherwise eat the visible response.
+
+    Returns the raw text response (whitespace-stripped). Raises on API
+    error so the caller can log + fall back.
+    """
+    from google import genai as google_genai
+    from google.genai import types as genai_types
+    api_key = os.getenv("GOOGLE_API_KEY", "")
+    if not api_key:
+        raise RuntimeError("llm_generate_gemini called but GOOGLE_API_KEY missing")
+    client = google_genai.Client(api_key=api_key)
+    resp = client.models.generate_content(
+        model=model,
+        contents=prompt,
+        config=genai_types.GenerateContentConfig(
+            temperature=temperature,
+            max_output_tokens=max(num_predict * 4, 512),
+        ),
+    )
+    return (resp.text or "").strip()
 
 
 # ── Grounded generate (Gemini Flash + Google Search) ──────────────────────────
