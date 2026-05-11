@@ -128,6 +128,7 @@ Beyond the 12 agents, the orchestrator runs:
 - `lesson_producer` at 16:35 ET — promotes patterns to lesson candidates
 - `weekly_review` Fri 17:00 ET — `learner.weekly_strategy_review()`, parameter adaptation
 - `saturday_review` Sat 09:00 ET — Telegram digest: week's trades + PnL, signal hit rate, £5k progress, lesson candidates, system health
+- `monday_digest` Mon 08:00 ET — pre-open weekend digest: news since Fri close, GeoRisk weekend events, gap-risk vs Fri close (does NOT replace 09:00 huddle)
 - `nightly_maintenance` at 03:00 ET — DB backup + WAL checkpoint + retention purge
 
 See [gme_trading_system/orchestrator.py](gme_trading_system/orchestrator.py) line ~2530 onward for the full schedule.

@@ -1728,6 +1728,123 @@ def run_options_update():
         write_log("Options", str(e), "max_pain", "error")
 
 
+def run_monday_weekend_digest():
+    """Monday 08:00 ET — pre-open digest of weekend news + gap risk.
+
+    The 09:00 huddle doesn't currently surface weekend news in time — by the
+    open the team has had no chance to read it. This brief lands an hour
+    before the bell with what broke since Friday's close.
+
+    Bypass pattern: news headlines and GeoRisk logs are pulled raw, the gap
+    estimate is arithmetic, Gemma only fills the one-line 'what to watch'
+    closer. Falls back to a hardcoded line if Gemma is unavailable.
+    """
+    log.info("[MondayDigest] === Pre-open weekend digest ===")
+    write_log("MondayDigest", "Composing weekend digest", "monday_digest", "running")
+
+    try:
+        conn = sqlite3.connect(DB_PATH)
+        conn.row_factory = sqlite3.Row
+
+        # ---------- 1. News since Friday's close (~3 days window for Mon morning) ----------
+        news_rows = conn.execute(
+            "SELECT headline, source, sentiment_score, sentiment_label, summary "
+            "FROM news_analysis "
+            "WHERE datetime(timestamp) > datetime('now', '-3 days') "
+            "ORDER BY timestamp DESC LIMIT 10"
+        ).fetchall()
+        n_news = len(news_rows)
+
+        # ---------- 2. GeoRisk over the weekend ----------
+        geo_rows = conn.execute(
+            "SELECT content, status FROM agent_logs "
+            "WHERE task_type='georisk' "
+            "AND datetime(timestamp) > datetime('now', '-3 days') "
+            "ORDER BY timestamp DESC LIMIT 3"
+        ).fetchall()
+        latest_geo = geo_rows[0]["content"][:200] if geo_rows else None
+
+        # ---------- 3. Gap risk — pre-market tick vs Friday close ----------
+        last_tick = conn.execute(
+            "SELECT close, timestamp FROM price_ticks WHERE symbol='GME' "
+            "ORDER BY timestamp DESC LIMIT 1"
+        ).fetchone()
+        fri_close_row = conn.execute(
+            "SELECT close FROM daily_candles WHERE symbol='GME' "
+            "ORDER BY date DESC LIMIT 1"
+        ).fetchone()
+        conn.close()
+
+        if last_tick and fri_close_row and float(fri_close_row["close"]):
+            current = float(last_tick["close"])
+            fri_close = float(fri_close_row["close"])
+            gap_pct = ((current - fri_close) / fri_close) * 100
+            if gap_pct > 0.5:
+                gap_direction = "gap up"
+            elif gap_pct < -0.5:
+                gap_direction = "gap down"
+            else:
+                gap_direction = "flat open"
+            gap_line = (
+                f"GME ${current:.2f} vs Fri close ${fri_close:.2f} "
+                f"({gap_pct:+.1f}%) — {gap_direction}"
+            )
+        else:
+            gap_line = "Gap risk: pre-market quote unavailable."
+
+        # ---------- 4. Top news headlines (deterministic — no Gemma rewriting) ----------
+        if news_rows:
+            headlines = []
+            for r in news_rows[:5]:
+                hl = (r["headline"] or "")[:120]
+                label = r["sentiment_label"] or "neutral"
+                headlines.append(f"• [{label}] {hl}")
+            news_block = "\n".join(headlines)
+        else:
+            news_block = "• No news flagged since Friday close."
+
+        # ---------- 5. Gemma narrative for "what to watch" ----------
+        prompt = (
+            "You are writing the closing line of a Monday pre-open weekend "
+            "digest for a GME trading crew. Output ONE short sentence on what "
+            "to watch at the open given these facts. No preamble, no markdown, "
+            "no quotes, under 140 chars.\n\n"
+            f"- News items since Fri close: {n_news}\n"
+            f"- Gap setup: {gap_line}\n"
+            f"- GeoRisk note: {'present' if latest_geo else 'none'}\n"
+        )
+        watch_txt = "Watch the first 30-min range — fade extremes, follow continuation."
+        try:
+            from llm_config import llm_generate
+            raw = llm_generate(prompt, num_predict=80, temperature=0.4, timeout=30)
+            raw = " ".join((raw or "").strip().strip('"').strip("'").split())
+            if raw:
+                watch_txt = raw[:160]
+        except Exception as e:
+            log.warning(f"[MondayDigest] LLM watch line failed ({e}), using fallback")
+
+        # ---------- 6. Compose ----------
+        geo_section = (
+            f"\n\n<b>GEORISK</b>\n{latest_geo}" if latest_geo else ""
+        )
+        brief = (
+            f"🌅 <b>MONDAY WEEKEND DIGEST</b>\n\n"
+            f"<b>GAP SETUP</b>\n{gap_line}\n\n"
+            f"<b>WEEKEND HEADLINES</b> ({n_news} item{'' if n_news == 1 else 's'})\n"
+            f"{news_block}"
+            f"{geo_section}\n\n"
+            f"<b>WATCH</b>\n{watch_txt}"
+        )
+
+        write_log("MondayDigest", brief[:2000], "monday_digest")
+        from notifier import notify
+        notify(brief)
+        log.info(f"[MondayDigest] sent — news={n_news} gap={gap_line[:60]}")
+    except Exception as e:
+        log.error(f"[MondayDigest] {e}")
+        write_log("MondayDigest", str(e), "monday_digest", "error")
+
+
 @market_hours_required
 def run_social_scan():
     """Every 15 min during market hours — scan Twitter/X for key account posts."""
@@ -2759,6 +2876,9 @@ class TradingSystemOrchestrator:
         self.scheduler.add_job(run_trove_history_resolve, CronTrigger(hour=3, minute=30, timezone=ET),                 id="trove_history_resolve")
         self.scheduler.add_job(run_cto_structural_scan, CronTrigger(day_of_week="sun", hour=8, minute=0, timezone=ET), id="cto_scan")
         self.scheduler.add_job(run_investor_intel_scan, CronTrigger(hour=8, minute=0, timezone=ET),                    id="investor_intel")
+
+        # Monday weekend digest — pre-open news + gap-risk read before the 09:00 huddle
+        self.scheduler.add_job(run_monday_weekend_digest, CronTrigger(day_of_week="mon", hour=8, minute=0, timezone=ET), id="monday_digest")
 
         # Options intelligence — max pain every Monday pre-market
         self.scheduler.add_job(run_options_update, CronTrigger(day_of_week="mon", hour=8, minute=30, timezone=ET), id="options")
