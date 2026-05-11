@@ -307,19 +307,44 @@ def run_commentary():
             write_log("Chatty", "state unchanged; no new comment", "commentary", "skipped")
             return
 
+        # Tight bypass-pattern prompt: list the *only* numbers Gemma may cite,
+        # explicitly separate "today's range" from "5-day range" so they can't
+        # be conflated, and refuse to fabricate support/resistance levels.
+        # Earlier Chatty output ("Buyers reclaim $24.34, testing resistance
+        # near $25.43. Today's range $23.69–$24.34") was Gemma reading the
+        # 5-day range line and labelling it as today's — that's the failure
+        # mode this prompt structure prevents.
+        prev_close_line = (
+            f"  prev close (yesterday): ${fact['prev_close']:.2f}"
+            if fact.get('prev_close') else "  prev close: unavailable"
+        )
+        today_range_line = (
+            f"  today's range: ${fact['today_low']:.2f}-${fact['today_high']:.2f} ({fact['today_ticks']} ticks)"
+            if fact.get('today_low') is not None
+            else "  today's range: no ticks yet today"
+        )
         prompt = (
-            "You are GME's live-stream commentator. Produce ONE punchy insight (max 120 chars) "
-            "grounded in the data below. No preamble, no quotes, no markdown — just the comment. "
-            "Use the volume label as given — do NOT invent your own descriptor. "
-            "Your commentary MUST be consistent with the MARKET FACT direction (don't say "
-            "'bullish price action' when price is FALLING).\n\n"
-            f"{fact['prompt_line']}\n"
-            f"Volume regime: {vol_label} ({vol_ratio:.2f}x session-pro-rated 20d ADV)\n"
-            f"Team consensus: {synthesis_text}\n"
+            "You are GME's live-stream commentator. Produce ONE punchy insight "
+            "(max 120 chars). No preamble, no quotes, no markdown.\n\n"
+            "FACTS — these are the ONLY numbers you may cite:\n"
+            f"  current price: ${price:.2f}\n"
+            f"  direction: {fact['direction']} ({fact['pct_change']:+.2f}% vs prev close)\n"
+            f"{prev_close_line}\n"
+            f"{today_range_line}\n"
+            f"  volume regime: {vol_label} ({vol_ratio:.2f}x 20d ADV)\n"
+            f"  team consensus: {synthesis_text}\n\n"
+            "RULES:\n"
+            "- Cite ONLY the prices above. NEVER invent support/resistance levels.\n"
+            "- If you reference 'today's range', use EXACTLY the today's range numbers — "
+            "do not substitute 5-day or weekly figures.\n"
+            "- Direction must match — never say 'rising'/'rallying' when FALLING.\n"
+            "- Use the volume label verbatim — do NOT substitute synonyms.\n"
         )
 
         from llm_config import llm_generate
-        comment = llm_generate(prompt, num_predict=80, temperature=0.7, timeout=30)
+        # Lower temperature than free-form narrative — Chatty's job is to
+        # describe locked numbers, not to riff.
+        comment = llm_generate(prompt, num_predict=80, temperature=0.3, timeout=30)
         comment = comment.strip().strip('"').strip("'")
         # Collapse to first line — model sometimes adds a second "explanation" line
         comment = comment.split("\n")[0].strip()[:240]
