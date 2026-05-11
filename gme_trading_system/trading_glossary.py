@@ -1,0 +1,135 @@
+"""Trading term glossary for signal explanations.
+
+Provides concise, eloquent definitions of technical trading terms that appear
+in agent signal reasoning. Used for inline emoji-prefix explanations in
+Telegram alerts and detailed `/explain` command responses.
+"""
+import re
+from typing import Optional, Dict, Set
+
+# Curated trading terms with emoji-friendly 1-line definitions
+TRADING_GLOSSARY: Dict[str, str] = {
+    "RSI": "momentum indicator showing when price is overbought (>70) or oversold (<30)",
+    "EMA": "exponential moving average; gives more weight to recent prices",
+    "VWAP": "volume-weighted average price; fair value benchmark using trading volume",
+    "ATR": "average true range; measures volatility magnitude",
+    "MACD": "moving average convergence divergence; momentum oscillator",
+    "Bollinger Bands": "price volatility bands around a moving average",
+    "BB": "price volatility bands around a moving average",
+    "Volume": "number of shares traded; high volume confirms price moves",
+    "Support": "price level where buying interest has historically prevented further decline",
+    "Resistance": "price level where selling pressure has historically prevented further rise",
+    "Oversold": "extreme low momentum, typically bounces or reverses sharply upward",
+    "Overbought": "extreme high momentum, typically pulls back or reverses downward",
+}
+
+# Emoji mappings for different term categories
+TERM_EMOJIS = {
+    "RSI": "📊",
+    "EMA": "📈",
+    "VWAP": "💰",
+    "ATR": "📉",
+    "MACD": "🔄",
+    "Bollinger Bands": "🎯",
+    "BB": "🎯",
+    "Volume": "📢",
+    "Support": "🛡️",
+    "Resistance": "⚡",
+    "Oversold": "⬇️",
+    "Overbought": "⬆️",
+}
+
+
+def get_definition(term: str) -> Optional[str]:
+    """Lookup definition for a term. Returns None if not found."""
+    return TRADING_GLOSSARY.get(term)
+
+
+def detect_terms(text: str) -> Set[str]:
+    """Find all trading terms mentioned in text (case-insensitive).
+
+    Returns a set of term names found in the text.
+    """
+    found = set()
+    text_lower = text.lower()
+
+    # Check each term in glossary (longer terms first to avoid partial matches)
+    for term in sorted(TRADING_GLOSSARY.keys(), key=len, reverse=True):
+        pattern = r'\b' + re.escape(term.lower()) + r'\b'
+        if re.search(pattern, text_lower):
+            found.add(term)
+
+    return found
+
+
+def add_emoji_definitions(text: str) -> str:
+    """Transform text by adding emoji-prefix definitions for trading terms.
+
+    Example:
+        Input:  "RSI oversold, EMA above VWAP"
+        Output: "📊 RSI: momentum indicator — oversold, 📈 EMA: exponential moving
+                 average — above 💰 VWAP: volume-weighted average price"
+
+    Handles:
+    - Term replacement with emoji prefix and definition
+    - Preserves original sentence structure where possible
+    - Multiple occurrences of same term (all get explained)
+    """
+    result = text
+
+    # Process each term found in text
+    terms_found = detect_terms(text)
+
+    for term in sorted(terms_found, key=len, reverse=True):
+        definition = get_definition(term)
+        if not definition:
+            continue
+
+        emoji = TERM_EMOJIS.get(term, "📌")
+
+        # Create replacement: emoji Term: definition
+        replacement = f"{emoji} {term}: {definition}"
+
+        # Replace all occurrences of the term (case-insensitive)
+        pattern = r'\b' + re.escape(term) + r'\b'
+        result = re.sub(pattern, replacement, result, flags=re.IGNORECASE)
+
+    return result
+
+
+def explain_signal_terms(text: str) -> str:
+    """Generate a detailed explanation of terms in signal text for `/explain` command.
+
+    Returns a formatted paragraph explaining all terms found in the signal reasoning.
+
+    Example:
+        Input:  "RSI oversold near support, volume spike confirms"
+        Output: "RSI (momentum indicator showing oversold at <30) near support
+                 (price level where buyers prevent further decline). Volume spike
+                 confirms move has backing from actual trading activity."
+    """
+    terms_found = detect_terms(text)
+
+    if not terms_found:
+        return "No technical terms detected in this signal."
+
+    explanations = []
+    for term in sorted(terms_found):
+        definition = get_definition(term)
+        if definition:
+            explanations.append(f"**{term}**: {definition}")
+
+    return "\n".join(explanations)
+
+
+if __name__ == "__main__":
+    # Test the module
+    test_text = "RSI oversold, EMA above VWAP, volume spike on support"
+    print("Original:")
+    print(test_text)
+    print("\nWith emoji definitions:")
+    print(add_emoji_definitions(test_text))
+    print("\nDetected terms:")
+    print(detect_terms(test_text))
+    print("\nDetailed explanation:")
+    print(explain_signal_terms(test_text))

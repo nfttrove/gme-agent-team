@@ -5,6 +5,8 @@ Commands:
   /help        — full command guide and chat capabilities
   /status      — system health, agents, tick count
   /standup     — agent daily standup (signals, win rates, ROI)
+  /signals [n] — show recent signals with outcomes (default 10, max 25)
+  /explain <id> — detailed breakdown of trading terms in a signal
   /ticks       — price ticks received today
   /freshness   — verify agents are reading current data (not stale tables)
   /agents      — last run time for each agent
@@ -36,6 +38,9 @@ import requests
 from dotenv import load_dotenv
 
 from notifier import _send as _broadcast
+from signal_manager import SignalManager
+from trading_glossary import add_emoji_definitions, explain_signal_terms
+import llm_config
 
 load_dotenv()
 
@@ -791,6 +796,85 @@ def handle_command(text: str, user: str = "team"):
         except Exception as e:
             _reply(f"Signals error: {str(e)[:200]}")
             log.error(f"[tgbot] /signals failed: {e}")
+
+    elif cmd == "/explain":
+        if not args:
+            _reply("Usage: /explain <alert_id>\n\nExample: /explain abc12345\n\nUse /signals to get alert IDs.")
+            return
+        alert_id = args[0]
+        try:
+            signal_mgr = SignalManager(DB_PATH)
+            alert = signal_mgr.get_alert_with_feedback(alert_id)
+
+            if not alert:
+                # Try partial match on alert_id in case user provided shortened ID
+                conn = sqlite3.connect(DB_PATH)
+                conn.row_factory = sqlite3.Row
+                rows = conn.execute(
+                    "SELECT id FROM signal_alerts WHERE id LIKE ?",
+                    (f"{alert_id}%",)
+                ).fetchall()
+                conn.close()
+
+                if rows:
+                    alert = signal_mgr.get_alert_with_feedback(rows[0]["id"])
+
+                if not alert:
+                    _reply(f"❌ Alert <code>{alert_id}</code> not found.")
+                    return
+
+            # Extract and enhance reasoning with emoji definitions
+            reasoning = alert.get("reasoning") or alert.get("alert_reasoning") or ""
+            enhanced_reasoning = add_emoji_definitions(reasoning) if reasoning else "(no reasoning available)"
+
+            # Generate detailed term explanations
+            term_explanations = explain_signal_terms(reasoning) if reasoning else "No technical terms detected."
+
+            # Call Gemini Flash for eloquent context on why these terms matter in this signal
+            if reasoning:
+                prompt = (
+                    f"Briefly explain (1-2 sentences) why these trading terms matter together in this signal context. "
+                    f"Signal reasoning: {reasoning}\n\n"
+                    f"Focus on the setup's conviction, not definitions."
+                )
+                try:
+                    gemini_context = llm_config.llm_generate_gemini(prompt, max_tokens=150)
+                except Exception as e:
+                    log.warning(f"[tgbot] Gemini context failed: {e}")
+                    gemini_context = "(Gemini context unavailable)"
+            else:
+                gemini_context = ""
+
+            # Build response
+            short_id = alert.get("id", alert_id)[:8]
+            entry_price = alert.get("entry_price") or 0.0
+            take_profit = alert.get("take_profit") or 0.0
+            stop_loss = alert.get("stop_loss") or 0.0
+            direction = "🟢 BULLISH" if take_profit > entry_price else "🔴 BEARISH"
+
+            msg_lines = [
+                f"<b>📊 SIGNAL EXPLANATION: {short_id}</b>\n",
+                f"<b>Agent:</b> {alert.get('agent_name', 'unknown')} | {alert.get('signal_type', 'unknown')}\n",
+                f"<b>Direction:</b> {direction}\n",
+                f"<b>Entry:</b> ${entry_price:.2f} | <b>TP:</b> ${take_profit:.2f} | <b>SL:</b> ${stop_loss:.2f}\n",
+                f"<b>Confidence:</b> {alert.get('confidence', 0):.0%}\n",
+            ]
+
+            if term_explanations != "No technical terms detected.":
+                msg_lines.append("\n<b>📖 Trading Terms in This Signal:</b>\n")
+                msg_lines.append(term_explanations)
+
+            if gemini_context:
+                msg_lines.append("\n<b>💡 Why These Terms Matter Together:</b>\n")
+                msg_lines.append(f"<i>{gemini_context}</i>")
+
+            msg_lines.append(f"\n<b>Full Reasoning:</b>\n<i>{enhanced_reasoning[:400]}</i>")
+
+            _reply("\n".join(msg_lines))
+
+        except Exception as e:
+            _reply(f"❌ Explain error: {str(e)[:200]}")
+            log.error(f"[tgbot] /explain failed: {e}")
 
     elif cmd in ("/executed", "/ignored", "/missed", "/close"):
         _reply(

@@ -28,6 +28,7 @@ import requests
 from dotenv import load_dotenv
 
 from circuit_breaker import get_breaker, CircuitOpenError
+from trading_glossary import add_emoji_definitions
 
 ET = ZoneInfo("America/New_York")
 
@@ -398,7 +399,9 @@ def notify_signal_alert(agent_name: str, signal_type: str, confidence: float,
         msg += f"  R/R Ratio: 1:{ratio:.2f}\n\n"
 
     if reasoning:
-        msg += f"<i>Reasoning: {reasoning[:200]}</i>\n\n"
+        # Add emoji-prefix definitions for trading terms in reasoning
+        enhanced_reasoning = add_emoji_definitions(reasoning)
+        msg += f"<i>Reasoning: {enhanced_reasoning[:280]}</i>\n\n"
 
     msg += f"<i>{datetime.now(ET).strftime('%Y-%m-%d %H:%M:%S')}</i>"
     if alert_id:
