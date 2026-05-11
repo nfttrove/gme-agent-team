@@ -52,14 +52,22 @@ class TestWALMode:
         conn.close()
         assert mode == "wal"
 
-    def test_concurrent_read_write_with_wal(self, test_db):
-        """Verify WAL allows concurrent reads while writes are active."""
+    def test_writers_do_not_block_readers_when_wal_is_enabled(self, test_db):
+        """
+        Given a database in WAL mode
+        When a writer is inserting price ticks
+        Then a concurrent reader queries without blocking or raising errors.
+
+        This is what lets the orchestrator's many short writes (every 5 min from
+        Valerie, Chatty, aggregator_intraday, …) coexist with the Telegram bot's
+        ad-hoc reads (/status, /signals, /agents) without 'database is locked'.
+        """
         from db_maintenance import enable_wal_mode
         import threading
         import time
 
+        # Given
         enable_wal_mode(test_db)
-
         errors = []
 
         def writer():
@@ -82,21 +90,20 @@ class TestWALMode:
             try:
                 conn = sqlite3.connect(test_db)
                 for _ in range(5):
-                    count = conn.execute("SELECT COUNT(*) FROM price_ticks").fetchone()[0]
+                    conn.execute("SELECT COUNT(*) FROM price_ticks").fetchone()
                     time.sleep(0.1)
                 conn.close()
             except Exception as e:
                 errors.append(f"Reader: {e}")
 
-        threads = [
-            threading.Thread(target=writer),
-            threading.Thread(target=reader),
-        ]
+        # When
+        threads = [threading.Thread(target=writer), threading.Thread(target=reader)]
         for t in threads:
             t.start()
         for t in threads:
             t.join(timeout=5)
 
+        # Then
         assert not errors, f"Concurrent access failed: {errors}"
 
 
