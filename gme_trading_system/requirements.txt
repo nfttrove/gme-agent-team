@@ -1,5 +1,4 @@
 flask
-flask-cors
 supervisor
 crewai>=0.28.0
 crewai-tools
@@ -7,7 +6,6 @@ apscheduler
 pandas
 gitpython
 python-dotenv
-streamlit
 pyyaml
 openai
 google-generativeai
