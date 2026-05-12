@@ -19,6 +19,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 from episodic_integration import extract_synthesis_from_output  # noqa: E402
 from message_formatters import (  # noqa: E402
     clamp_consensus_pct,
+    coerce_news_score,
     coerce_trend_strength,
     escape_html,
     format_consensus,
@@ -361,6 +362,32 @@ class TestGlossaryFooter:
 
 
 # ── SIGNAL row prompt construction (sanity-check the prompt string) ─────────
+
+
+class TestCoerceNewsScore:
+    """LLM sometimes writes 'NEWS: BULLISH 75%' instead of 'NEWS: bullish 0.75'.
+    Pydantic SynthesisBrief.news_sentiment rejects 75.0 (must be -1.0 to 1.0).
+    Coerce percentage form to decimal."""
+
+    def test_positive_percent(self):
+        """Given 'BULLISH 75%', when coercing, then 'BULLISH 0.75'."""
+        assert coerce_news_score("NEWS: BULLISH 75%") == "NEWS: BULLISH 0.75"
+
+    def test_negative_percent(self):
+        """Given '-50%', when coercing, then '-0.50'."""
+        assert coerce_news_score("NEWS: bearish -50%") == "NEWS: bearish -0.50"
+
+    def test_decimal_passes_through(self):
+        """Given 'bullish 0.75', when coercing, then unchanged."""
+        before = "NEWS: bullish 0.75 (analyst action)"
+        assert coerce_news_score(before) == before
+
+    def test_coerced_output_parses(self):
+        """Given coerced output, when running canonical parser, then news_sentiment captured."""
+        coerced = coerce_news_score("PRICE: $23.21 | NEWS: BULLISH 75% (analyst action)")
+        brief = extract_synthesis_from_output(coerced)
+        assert brief is not None
+        assert brief.news_sentiment == 0.75
 
 
 class TestSignalPromptWiring:

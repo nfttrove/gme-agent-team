@@ -2372,7 +2372,7 @@ def run_synthesis():
             "You are the team's Synthesis agent. Produce a THREE-LINE consensus brief that a "
             "retail investor can act on. Use plain English. Format (replace bracketed values):\n"
             f"NOW: PRICE: {price_token} | DATA: [clean/degraded] ([reason]) | "
-            "NEWS: [bullish/bearish/neutral] [score] ([reason]) | STRUCTURAL: [GREEN/YELLOW/RED] ([reason])\n"
+            "NEWS: [bullish/bearish/neutral] [score -1.0 to 1.0] ([reason]) | STRUCTURAL: [GREEN/YELLOW/RED] ([reason])\n"
             "NEXT: CONSENSUS: [BULLISH/BEARISH/NEUTRAL] [XX]% (X/Y agents; TopAgent NN%) | "
             "TREND: [UP/DOWN/SIDEWAYS] [0.0-1.0] | PREDICTION: [BIAS] [confidence 0.0-1.0]\n"
             "SIGNAL: [BUY/SELL/HOLD/WAIT] @ $[entry] (stop $[stop], target $[target]) — [one-sentence plain-English reason]\n\n"
@@ -2383,6 +2383,8 @@ def run_synthesis():
             "  * Consensus pct = share of non-n/a agents agreeing with the direction. CAP AT 95% — never write 100%.\n"
             "    Always include '(X/Y agents; TopAgent NN%)'. Example: 'CONSENSUS: BEARISH 67% (4/6 agents; Futurist 78%)'.\n"
             "  * TREND strength must be a NUMBER 0.0-1.0 (e.g. 'TREND: UP 0.7'). Do not write 'strong'/'weak'.\n"
+            "  * NEWS score is a SIGNED DECIMAL between -1.0 (very bearish) and +1.0 (very bullish). NOT a percentage.\n"
+            "    Example: 'NEWS: bullish 0.75 (analyst action)'. Never 'NEWS: BULLISH 75%'.\n"
             "  * Parenthetical reasons MUST come from this closed vocabulary — do not invent:\n"
             f"  {suffix_vocab}\n"
             "  * SIGNAL line: BUY if CONSENSUS bullish and PREDICTION confidence>=0.65. SELL if same threshold bearish.\n"
@@ -2420,16 +2422,18 @@ def run_synthesis():
             flags=re.IGNORECASE,
         )
 
-        # Post-LLM normalization: capitalize, trim prose, coerce trend strength,
-        # cap consensus at 95% to prevent overclaim.
+        # Post-LLM normalization: capitalize, trim prose, coerce trend strength
+        # and NEWS score, cap consensus at 95% to prevent overclaim.
         from message_formatters import (
             clamp_consensus_pct,
+            coerce_news_score,
             coerce_trend_strength,
             normalize_synthesis_capitalization,
             tighten_prose,
         )
         brief = normalize_synthesis_capitalization(brief)
         brief = coerce_trend_strength(brief)
+        brief = coerce_news_score(brief)
         brief = clamp_consensus_pct(brief)
         brief = tighten_prose(brief)
 

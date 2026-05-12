@@ -151,6 +151,34 @@ def coerce_trend_strength(brief: str) -> str:
     )
 
 
+def coerce_news_score(brief: str) -> str:
+    """Convert NEWS scores written as percentages back into the -1.0 to 1.0 range.
+
+    SynthesisBrief.news_sentiment requires a float in [-1.0, 1.0]. If the LLM
+    writes `NEWS: BULLISH 75%`, Pydantic rejects 75.0 and the field drops from
+    episodic memory. This helper rewrites `NN%` to `0.NN` and `-NN%` to `-0.NN`.
+    No-op when the score is already in range.
+    """
+    if not brief:
+        return brief
+
+    def _sub(match):
+        label = match.group("label")
+        sign = match.group("sign") or ""
+        pct = int(match.group("pct"))
+        # Clamp to 100% just in case, then scale to decimal.
+        pct = min(pct, 100)
+        decimal = f"{sign}{pct/100:.2f}"
+        return f"NEWS: {label} {decimal}"
+
+    return re.sub(
+        r"NEWS:\s*(?P<label>\w+)\s+(?P<sign>-?)(?P<pct>\d+)%",
+        _sub,
+        brief,
+        flags=re.IGNORECASE,
+    )
+
+
 def clamp_consensus_pct(brief: str, ceiling: int = 95) -> str:
     """Cap CONSENSUS percentage at `ceiling` so the LLM cannot publish '100%'.
 
