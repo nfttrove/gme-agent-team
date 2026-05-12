@@ -2399,7 +2399,7 @@ def run_synthesis():
         )
 
         from llm_config import llm_generate
-        brief = llm_generate(prompt, num_predict=320, temperature=0.2, timeout=45)
+        brief = llm_generate(prompt, num_predict=320, temperature=0.2, timeout=60)
         brief = brief.strip().strip('"').strip("'")
         # Keep up to the first three non-empty lines (NOW: / NEXT: / SIGNAL:).
         # Drop trailing commentary the LLM sometimes appends.
