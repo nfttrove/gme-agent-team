@@ -360,6 +360,16 @@ class TestGlossaryFooter:
         footer = glossary_footer("RSI low, EMA cross")
         assert " | " in footer
 
+    def test_volume_not_glossed(self):
+        """Volume is referenced qualitatively only; the actual number lives on
+        TradingView, so a 'Volume: number of shares traded' gloss adds noise
+        with no signal. User-requested removal."""
+        text = "Price up, volume elevated, RSI 65 — looks like a breakout."
+        footer = glossary_footer(text)
+        # RSI should still be glossed; Volume should NOT appear in footer
+        assert "RSI:" in footer
+        assert "Volume:" not in footer
+
 
 # ── SIGNAL row prompt construction (sanity-check the prompt string) ─────────
 

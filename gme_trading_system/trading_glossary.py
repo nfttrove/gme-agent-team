@@ -16,7 +16,9 @@ TRADING_GLOSSARY: Dict[str, str] = {
     "MACD": "moving average convergence divergence; momentum oscillator",
     "Bollinger Bands": "price volatility bands around a moving average",
     "BB": "price volatility bands around a moving average",
-    "Volume": "number of shares traded; high volume confirms price moves",
+    # "Volume" intentionally NOT glossed — agents only reference it qualitatively
+    # (vol quiet / elevated / spike) and the actual number lives on TradingView,
+    # so a "Volume: number of shares traded" footer adds noise with no signal.
     "Support": "price level where buying interest has historically prevented further decline",
     "Resistance": "price level where selling pressure has historically prevented further rise",
     "Oversold": "extreme low momentum, typically bounces or reverses sharply upward",
@@ -32,7 +34,6 @@ TERM_EMOJIS = {
     "MACD": "🔄",
     "Bollinger Bands": "🎯",
     "BB": "🎯",
-    "Volume": "📢",
     "Support": "🛡️",
     "Resistance": "⚡",
     "Oversold": "⬇️",
