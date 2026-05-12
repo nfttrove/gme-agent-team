@@ -85,7 +85,17 @@ def init_db():
 
 
 def check_ollama_ready() -> bool:
-    """Verify Ollama is reachable and gemma2:9b is pulled."""
+    """Verify Ollama is reachable and gemma2:9b is pulled — only when STREAM_MODE=0.
+
+    When STREAM_MODE=1 (production default — Gemini Flash is primary, see
+    project_llm_primary_gemini_flash.md), Ollama is unused so this check is
+    skipped. Avoids forcing the user to keep gemma2:9b pulled when running
+    cloud-primary to free local RAM for OBS streaming.
+    """
+    if os.getenv("STREAM_MODE", "").strip() in {"1", "true", "yes", "on"}:
+        log.info("[check_ollama_ready] STREAM_MODE=on — skipping Ollama check (cloud-primary)")
+        return True
+
     ollama_host = os.getenv("OLLAMA_HOST", "http://localhost:11434")
     try:
         response = requests.get(f"{ollama_host}/api/tags", timeout=2)

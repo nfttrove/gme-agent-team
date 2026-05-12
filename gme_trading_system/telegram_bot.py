@@ -1490,6 +1490,19 @@ def handle_command(text: str, user: str = "team"):
         )
 
     elif cmd == "/compare" and args:
+        # Refuse when cloud-primary — /compare exists to A/B two LOCAL models.
+        # With STREAM_MODE=1 it would load gemma2:9b + deepseek-r1:8b into
+        # local RAM, which is exactly the memory pressure we moved off-box
+        # to avoid. Route the question to /ask instead.
+        from llm_config import STREAM_MODE
+        if STREAM_MODE:
+            _reply(
+                "🌥 <b>/compare disabled in cloud mode</b>\n\n"
+                "STREAM_MODE=1 — local Gemma & DeepSeek are not loaded "
+                "(by design, to keep RAM free for OBS).\n\n"
+                "Use <code>/ask &lt;question&gt;</code> for a Gemini Flash answer instead."
+            )
+            return
         _reply("🤔 Comparing Gemma & DeepSeek... (takes ~1 minute)")
         question = " ".join(args)
         try:
