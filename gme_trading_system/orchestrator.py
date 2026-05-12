@@ -2340,24 +2340,12 @@ def run_synthesis():
             write_log("Synthesis", "no recent agent logs in last 4h", "synthesis", "error")
             return
 
-        # Dedup gate (mirrors Chatty at line ~296): skip LLM call if the input
-        # signature hasn't materially changed since last Synthesis cycle.
-        # State key = rounded price + direction + per-agent fingerprint.
-        import hashlib
-        agent_fingerprint = hashlib.md5(
-            repr(sorted(per_agent.items())).encode("utf-8")
-        ).hexdigest()[:12]
-        price_bucket = round(float(fact['price']), 1)
-        state_key = f"{price_bucket}|{fact['direction']}|{agent_fingerprint}"
-        last_state = conn.execute(
-            "SELECT content FROM agent_logs WHERE agent_name='Synthesis' "
-            "AND task_type='synthesis_state' ORDER BY id DESC LIMIT 1"
-        ).fetchone()
         conn.close()
-        if last_state and last_state[0] == state_key:
-            log.info(f"[Synthesis] state unchanged ({state_key}) — skipping")
-            write_log("Synthesis", "state unchanged; no new brief", "synthesis", "skipped")
-            return
+        # Dedup is enforced AFTER the LLM call, on the structured fields of the
+        # brief (consensus_dir, structural_status, trend_dir, signal_action,
+        # price_bucket). Input-side fingerprinting tried to dedup before the LLM
+        # call but missed too many "same-meaning, different wording" cycles, so
+        # the channel saw 4+ identical briefs in a row. See post-LLM block below.
 
         logs_block = "\n".join(f"  {name}: {content}" for name, content in per_agent.items())
         # PRICE token is pre-formatted from market fact — LLM must use it verbatim
@@ -2385,7 +2373,11 @@ def run_synthesis():
             "NEWS: [bullish/bearish/neutral] [score -1.0 to 1.0] ([reason]) | STRUCTURAL: [GREEN/YELLOW/RED] ([reason])\n"
             "NEXT: CONSENSUS: [BULLISH/BEARISH/NEUTRAL] [XX]% (X/Y agents; TopAgent NN%) | "
             "TREND: [UP/DOWN/SIDEWAYS] [0.0-1.0] | PREDICTION: [BIAS] [confidence 0.0-1.0]\n"
-            "SIGNAL: [BUY/SELL/HOLD/WAIT] @ $[entry] (stop $[stop], target $[target]) — [one-sentence plain-English reason]\n\n"
+            "SIGNAL: [BUY/SELL/HOLD/WAIT] [optional entry/stop/target for BUY/SELL only] — [reason]\n\n"
+            "  - BUY format:  SIGNAL: BUY @ $[entry] (stop $[stop], target $[target]) — [reason]\n"
+            "  - SELL format: SIGNAL: SELL @ $[entry] (stop $[stop], target $[target]) — [reason]\n"
+            "  - HOLD format: SIGNAL: HOLD — [reason]  (no price fields)\n"
+            "  - WAIT format: SIGNAL: WAIT — [reason]  (no price fields)\n\n"
             "Rules:\n"
             "  * Labels UPPERCASE. Directional values (BULLISH/BEARISH/NEUTRAL/UP/DOWN/SIDEWAYS/GREEN/YELLOW/RED/BUY/SELL/HOLD/WAIT) UPPERCASE.\n"
             "  * Use ONLY the data below, do not invent. If an agent is missing, write 'n/a'.\n"
@@ -2397,11 +2389,16 @@ def run_synthesis():
             "    Example: 'NEWS: bullish 0.75 (analyst action)'. Never 'NEWS: BULLISH 75%'.\n"
             "  * Parenthetical reasons MUST come from this closed vocabulary — do not invent:\n"
             f"  {suffix_vocab}\n"
+            "  * STRUCTURAL value MUST be exactly GREEN, YELLOW, or RED — never a reason word.\n"
+            "    Correct:   'STRUCTURAL: YELLOW (consolidating)'\n"
+            "    Wrong:     'STRUCTURAL: consolidating (filings-quiet)'  ← color missing\n"
+            "    Wrong:     'STRUCTURAL: filings-quiet (filings-quiet)'   ← color missing, suffix duplicated\n"
             "  * SIGNAL line: BUY if CONSENSUS bullish and PREDICTION confidence>=0.65. SELL if same threshold bearish.\n"
             "    HOLD if you already have a position and conviction is mid (0.5-0.65). WAIT otherwise.\n"
-            "    Entry = current price for BUY/SELL, n/a for HOLD/WAIT.\n"
+            "    Entry = current price for BUY/SELL. OMIT entry/stop/target for HOLD/WAIT — they are noise.\n"
             "    Stop = -3% from entry for BUY, +3% for SELL. Target = +6% for BUY, -6% for SELL.\n"
-            "    Plain-English reason: explain in <=20 words why a retail investor should care, no jargon.\n"
+            "    Reason: <=15 words, plain English, no jargon. NEVER restate the action word ('WAIT for a clearer\n"
+            "    trend' is wrong — the reader already saw WAIT). Describe the WHY, not the WHAT.\n"
             "  * NOW = current observations. NEXT = forecast call. SIGNAL = actionable trade.\n"
             "  * Exactly three lines, each starting with NOW:, NEXT:, SIGNAL:. No blank lines between.\n"
             "  * No preamble, no markdown, no quotes, no emoji.\n\n"
@@ -2447,9 +2444,44 @@ def run_synthesis():
         brief = clamp_consensus_pct(brief)
         brief = tighten_prose(brief)
 
+        # Output-side dedup: build a coarse state_key from the structured
+        # fields of the brief. If the call (consensus direction + structural
+        # status + signal action + rounded price) hasn't changed since last
+        # cycle, suppress the message — only emit on material shifts.
+        from episodic_integration import extract_synthesis_from_output
+        parsed = extract_synthesis_from_output(brief)
+        signal_action = "n/a"
+        m = re.search(r"SIGNAL:\s*(\w+)", brief, flags=re.IGNORECASE)
+        if m:
+            signal_action = m.group(1).upper()
+        if parsed:
+            state_key = (
+                f"{parsed.consensus or 'n/a'}|"
+                f"{parsed.structural_status or 'n/a'}|"
+                f"{parsed.trend_direction or 'n/a'}|"
+                f"{signal_action}|"
+                f"{round(float(fact['price']), 1)}"
+            )
+        else:
+            # Parse failure — fall back to round-trip on brief content so we
+            # don't silence everything, but coarse enough to catch identical text.
+            import hashlib
+            state_key = "unparsed|" + hashlib.md5(brief.encode("utf-8")).hexdigest()[:12]
+
+        conn = sqlite3.connect(DB_PATH)
+        last_state = conn.execute(
+            "SELECT content FROM agent_logs WHERE agent_name='Synthesis' "
+            "AND task_type='synthesis_state' ORDER BY id DESC LIMIT 1"
+        ).fetchone()
+        conn.close()
+        if last_state and last_state[0] == state_key:
+            log.info(f"[Synthesis] state unchanged ({state_key}) — skipping emit")
+            write_log("Synthesis", "state unchanged; no new brief", "synthesis", "skipped")
+            return
+
         log.info(f"[Synthesis] {brief}")
         write_log("Synthesis", brief, "synthesis")
-        # Record state_key for the next cycle's dedup check
+        # Record new state_key for the next cycle's dedup check
         write_log("Synthesis", state_key, "synthesis_state")
     except requests.Timeout:
         log.error("[Synthesis] LLM timeout")

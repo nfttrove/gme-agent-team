@@ -9,20 +9,20 @@ from typing import Optional, Dict, Set
 
 # Curated trading terms with emoji-friendly 1-line definitions
 TRADING_GLOSSARY: Dict[str, str] = {
-    "RSI": "momentum indicator showing when price is overbought (>70) or oversold (<30)",
-    "EMA": "exponential moving average; gives more weight to recent prices",
-    "VWAP": "volume-weighted average price; fair value benchmark using trading volume",
-    "ATR": "average true range; measures volatility magnitude",
-    "MACD": "moving average convergence divergence; momentum oscillator",
-    "Bollinger Bands": "price volatility bands around a moving average",
-    "BB": "price volatility bands around a moving average",
+    "RSI": "momentum gauge; >70 overbought, <30 oversold",
+    "EMA": "recent-weighted moving average",
+    "VWAP": "volume-weighted fair-value benchmark",
+    "ATR": "volatility size",
+    "MACD": "momentum-trend oscillator",
+    "Bollinger Bands": "volatility bands around a moving average",
+    "BB": "volatility bands around a moving average",
     # "Volume" intentionally NOT glossed — agents only reference it qualitatively
     # (vol quiet / elevated / spike) and the actual number lives on TradingView,
     # so a "Volume: number of shares traded" footer adds noise with no signal.
-    "Support": "price level where buying interest has historically prevented further decline",
-    "Resistance": "price level where selling pressure has historically prevented further rise",
-    "Oversold": "extreme low momentum, typically bounces or reverses sharply upward",
-    "Overbought": "extreme high momentum, typically pulls back or reverses downward",
+    "Support": "price floor where buyers usually step in",
+    "Resistance": "price ceiling where sellers usually step in",
+    "Oversold": "stretched downside; bounce likely",
+    "Overbought": "stretched upside; pullback likely",
 }
 
 # Emoji mappings for different term categories
