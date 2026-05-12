@@ -2360,27 +2360,38 @@ def run_synthesis():
             vol_anchor = f"vol {vol_info['label']} ({vol_info['ratio']:.2f}x avg)"
         except Exception:
             vol_anchor = "vol n/a"
+        # Closed vocabulary for parenthetical reasons — prevents hallucinated
+        # "(earnings beat)"-style fabrications. The LLM must pick one of these.
+        suffix_vocab = (
+            "DATA suffixes: (no gaps) | (1 feed down) | (2+ feeds down) | (stale ticks) | (recent gap)\n"
+            "  STRUCTURAL suffixes: (cash-rich) | (consolidating) | (debt-heavy) | (insider-selling) | (filings-quiet)\n"
+            "  NEWS suffixes: (no catalysts) | (earnings event) | (regulatory headline) | (acquisition headline) | "
+            "(insider news) | (macro headline) | (analyst action)"
+        )
         prompt = (
-            "You are the team's Synthesis agent. Produce a TWO-LINE consensus brief, "
-            "in this EXACT format (keep labels uppercase, replace bracketed values):\n"
-            f"NOW: PRICE: {price_token} | DATA: [clean/degraded] (one-word reason) | "
-            "NEWS: [bullish/bearish/neutral] [score] (one-word reason) | STRUCTURAL: [GREEN/YELLOW/RED] (one-word reason)\n"
+            "You are the team's Synthesis agent. Produce a THREE-LINE consensus brief that a "
+            "retail investor can act on. Use plain English. Format (replace bracketed values):\n"
+            f"NOW: PRICE: {price_token} | DATA: [clean/degraded] ([reason]) | "
+            "NEWS: [bullish/bearish/neutral] [score] ([reason]) | STRUCTURAL: [GREEN/YELLOW/RED] ([reason])\n"
             "NEXT: CONSENSUS: [BULLISH/BEARISH/NEUTRAL] [XX]% (X/Y agents; TopAgent NN%) | "
-            "TREND: [UP/DOWN/SIDEWAYS] [strength] | PREDICTION: [BIAS] [confidence%]\n\n"
+            "TREND: [UP/DOWN/SIDEWAYS] [0.0-1.0] | PREDICTION: [BIAS] [confidence 0.0-1.0]\n"
+            "SIGNAL: [BUY/SELL/HOLD/WAIT] @ $[entry] (stop $[stop], target $[target]) — [one-sentence plain-English reason]\n\n"
             "Rules:\n"
-            "  * Labels UPPERCASE. Directional values (BULLISH/BEARISH/NEUTRAL/UP/DOWN/SIDEWAYS/GREEN/YELLOW/RED) UPPERCASE.\n"
+            "  * Labels UPPERCASE. Directional values (BULLISH/BEARISH/NEUTRAL/UP/DOWN/SIDEWAYS/GREEN/YELLOW/RED/BUY/SELL/HOLD/WAIT) UPPERCASE.\n"
             "  * Use ONLY the data below, do not invent. If an agent is missing, write 'n/a'.\n"
             f"  * Use the PRICE token EXACTLY as given: '{price_token}' — do NOT change the direction.\n"
-            "  * Consensus pct = share of non-n/a agents agreeing with the direction. Always include '(X/Y agents; TopAgent NN%)'.\n"
-            "    Example: 'CONSENSUS: BEARISH 67% (4/6 agents; Futurist 78%)' means 4 of 6 non-n/a agents are bearish,\n"
-            "    and Futurist had the highest stated confidence at 78%. Pick TopAgent from non-n/a agents.\n"
-            "  * Parenthetical reasons go AFTER the canonical value, not in place of it.\n"
-            "    DATA: clean (no gaps) or DATA: degraded (1 feed down).\n"
-            "    STRUCTURAL: YELLOW (consolidating) or STRUCTURAL: RED (debt-heavy).\n"
-            "  * If NEWS is neutral, you MUST cite a reason in parens: 'NEWS: neutral 0.0 (no catalysts)'.\n"
-            "    Never bare 'neutral'.\n"
-            "  * NOW = current observations (what IS). NEXT = forecast / consensus call (what we EXPECT).\n"
-            "  * Exactly two lines: one starting with 'NOW:' and one starting with 'NEXT:'. No blank line between.\n"
+            "  * Consensus pct = share of non-n/a agents agreeing with the direction. CAP AT 95% — never write 100%.\n"
+            "    Always include '(X/Y agents; TopAgent NN%)'. Example: 'CONSENSUS: BEARISH 67% (4/6 agents; Futurist 78%)'.\n"
+            "  * TREND strength must be a NUMBER 0.0-1.0 (e.g. 'TREND: UP 0.7'). Do not write 'strong'/'weak'.\n"
+            "  * Parenthetical reasons MUST come from this closed vocabulary — do not invent:\n"
+            f"  {suffix_vocab}\n"
+            "  * SIGNAL line: BUY if CONSENSUS bullish and PREDICTION confidence>=0.65. SELL if same threshold bearish.\n"
+            "    HOLD if you already have a position and conviction is mid (0.5-0.65). WAIT otherwise.\n"
+            "    Entry = current price for BUY/SELL, n/a for HOLD/WAIT.\n"
+            "    Stop = -3% from entry for BUY, +3% for SELL. Target = +6% for BUY, -6% for SELL.\n"
+            "    Plain-English reason: explain in <=20 words why a retail investor should care, no jargon.\n"
+            "  * NOW = current observations. NEXT = forecast call. SIGNAL = actionable trade.\n"
+            "  * Exactly three lines, each starting with NOW:, NEXT:, SIGNAL:. No blank lines between.\n"
             "  * No preamble, no markdown, no quotes, no emoji.\n\n"
             f"{fact['prompt_line']}\n"
             f"Current volume regime: {vol_anchor}\n"
@@ -2388,12 +2399,12 @@ def run_synthesis():
         )
 
         from llm_config import llm_generate
-        brief = llm_generate(prompt, num_predict=220, temperature=0.2, timeout=45)
+        brief = llm_generate(prompt, num_predict=320, temperature=0.2, timeout=45)
         brief = brief.strip().strip('"').strip("'")
-        # Keep up to the first two non-empty lines (NOW: and NEXT:). Drop trailing
-        # commentary the LLM sometimes appends. Falls back to single-line gracefully.
-        lines = [ln.strip() for ln in brief.split("\n") if ln.strip()][:2]
-        brief = "\n".join(lines)[:500]
+        # Keep up to the first three non-empty lines (NOW: / NEXT: / SIGNAL:).
+        # Drop trailing commentary the LLM sometimes appends.
+        lines = [ln.strip() for ln in brief.split("\n") if ln.strip()][:3]
+        brief = "\n".join(lines)[:700]
 
         if not brief or "PRICE" not in brief.upper():
             write_log("Synthesis", f"malformed brief: {brief[:200]}", "synthesis", "error")
@@ -2409,9 +2420,17 @@ def run_synthesis():
             flags=re.IGNORECASE,
         )
 
-        # Post-LLM normalization: enforce label/value capitalization and trim verbose prose
-        from message_formatters import normalize_synthesis_capitalization, tighten_prose
+        # Post-LLM normalization: capitalize, trim prose, coerce trend strength,
+        # cap consensus at 95% to prevent overclaim.
+        from message_formatters import (
+            clamp_consensus_pct,
+            coerce_trend_strength,
+            normalize_synthesis_capitalization,
+            tighten_prose,
+        )
         brief = normalize_synthesis_capitalization(brief)
+        brief = coerce_trend_strength(brief)
+        brief = clamp_consensus_pct(brief)
         brief = tighten_prose(brief)
 
         log.info(f"[Synthesis] {brief}")

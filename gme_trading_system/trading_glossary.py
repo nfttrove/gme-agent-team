@@ -48,14 +48,16 @@ def get_definition(term: str) -> Optional[str]:
 def detect_terms(text: str) -> Set[str]:
     """Find all trading terms mentioned in text (case-insensitive).
 
-    Returns a set of term names found in the text.
+    Also matches indicator-with-period variants like EMA21, EMA50, RSI14
+    (agents commonly write these). The base term is returned in the set.
     """
     found = set()
     text_lower = text.lower()
 
     # Check each term in glossary (longer terms first to avoid partial matches)
     for term in sorted(TRADING_GLOSSARY.keys(), key=len, reverse=True):
-        pattern = r'\b' + re.escape(term.lower()) + r'\b'
+        # Match exact term or term-with-digits-suffix (e.g. EMA, EMA21, RSI14)
+        pattern = r'\b' + re.escape(term.lower()) + r'\d*\b'
         if re.search(pattern, text_lower):
             found.add(term)
 
@@ -95,6 +97,33 @@ def add_emoji_definitions(text: str) -> str:
         result = re.sub(pattern, replacement, result, flags=re.IGNORECASE)
 
     return result
+
+
+def glossary_footer(text: str, max_terms: int = 5) -> str:
+    """Build a compact one-line footer with plain-English glosses for jargon in text.
+
+    Use this for agent_voice forwarding so a retail reader who doesn't know
+    RSI/EMA/VWAP/MACD still understands what the agent is talking about.
+    Returns empty string if no glossary terms detected — keeps non-technical
+    messages unchanged.
+
+    Example:
+        Input:  "Price above VWAP and EMA21, RSI 58, uptrend confirmed."
+        Output: "VWAP: volume-weighted fair-value benchmark | EMA: recent-weighted moving avg | RSI: momentum (>70 overbought, <30 oversold)"
+    """
+    terms = detect_terms(text)
+    if not terms:
+        return ""
+    parts = []
+    for term in sorted(terms, key=len, reverse=True)[:max_terms]:
+        definition = TRADING_GLOSSARY.get(term)
+        if not definition:
+            continue
+        short_def = definition.split(";")[0].split(",")[0].strip()
+        parts.append(f"{term}: {short_def}")
+    if not parts:
+        return ""
+    return "📚 " + " | ".join(parts)
 
 
 def explain_signal_terms(text: str) -> str:

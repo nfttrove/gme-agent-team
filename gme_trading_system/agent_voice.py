@@ -123,7 +123,15 @@ def _format(v: Voice, content: str, ts: str) -> str:
         time_part = hhmm if ts_date == str(date.today()) else f"{ts_date[5:]} {hhmm}"
     else:
         time_part = ts
-    return f"{v.emoji} <i>{time_part}</i>\n{safe}"
+    # Append plain-English glosses for any trading jargon (RSI/EMA/VWAP/MACD/...)
+    # so a non-quant reader can act on the signal. Empty footer when no jargon.
+    try:
+        from trading_glossary import glossary_footer
+        footer = glossary_footer(safe)
+    except Exception:
+        footer = ""
+    body = f"{safe}\n\n<i>{footer}</i>" if footer else safe
+    return f"{v.emoji} <i>{time_part}</i>\n{body}"
 
 
 def forward_pending(db_path: str = DB_PATH) -> dict[str, int]:

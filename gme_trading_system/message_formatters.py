@@ -107,12 +107,70 @@ def normalize_synthesis_capitalization(brief: str) -> str:
     """
     if not brief:
         return brief
-    # Labels — force uppercase
+    # Labels — force uppercase (extended for SIGNAL row labels too)
     for label in ("PRICE", "DATA", "NEWS", "PATTERN", "TREND", "PREDICTION",
-                  "STRUCTURAL", "CONSENSUS", "SOCIAL", "GATE", "NOW", "NEXT"):
+                  "STRUCTURAL", "CONSENSUS", "SOCIAL", "GATE", "NOW", "NEXT",
+                  "SIGNAL"):
         brief = re.sub(rf"\b{label}\b\s*:", f"{label}:", brief, flags=re.IGNORECASE)
-    # Directional words inside CONSENSUS / PREDICTION / TREND — uppercase
+    # Directional words — uppercase. Include SIGNAL actions (BUY/SELL/HOLD/WAIT).
     for word in ("BULLISH", "BEARISH", "NEUTRAL", "UP", "DOWN", "SIDEWAYS",
-                 "GREEN", "YELLOW", "RED", "BUY", "SELL", "HOLD"):
+                 "GREEN", "YELLOW", "RED", "BUY", "SELL", "HOLD", "WAIT"):
         brief = re.sub(rf"\b{word}\b", word, brief, flags=re.IGNORECASE)
     return brief
+
+
+# Map qualitative trend-strength words to numeric strengths so the parser regex
+# `TREND: (\w+) ([\d.]+)` still captures a number even when the LLM disobeys.
+_TREND_STRENGTH_WORDS = {
+    "strong": "0.8",
+    "moderate": "0.6",
+    "weak": "0.4",
+    "flat": "0.2",
+}
+
+
+def coerce_trend_strength(brief: str) -> str:
+    """Replace qualitative trend strengths with numbers.
+
+    `TREND: UP strong` → `TREND: UP 0.8`. Idempotent. No-op when already numeric.
+    """
+    if not brief:
+        return brief
+
+    def _sub(match):
+        direction = match.group(1)
+        word = match.group(2).lower()
+        num = _TREND_STRENGTH_WORDS.get(word, "0.5")
+        return f"TREND: {direction} {num}"
+
+    return re.sub(
+        rf"TREND:\s*(UP|DOWN|SIDEWAYS)\s+({'|'.join(_TREND_STRENGTH_WORDS)})\b",
+        _sub,
+        brief,
+        flags=re.IGNORECASE,
+    )
+
+
+def clamp_consensus_pct(brief: str, ceiling: int = 95) -> str:
+    """Cap CONSENSUS percentage at `ceiling` so the LLM cannot publish '100%'.
+
+    100% reads as overclaim — real teams rarely have unanimous conviction, and
+    the round number erodes reader trust. Clamping to 95 keeps the message
+    honest. The parser captures whatever number remains, so this is safe.
+    """
+    if not brief:
+        return brief
+
+    def _sub(match):
+        direction = match.group("dir")
+        pct = int(match.group("pct"))
+        if pct > ceiling:
+            pct = ceiling
+        return f"CONSENSUS: {direction} {pct}%"
+
+    return re.sub(
+        r"CONSENSUS:\s*(?P<dir>\w+)\s+(?P<pct>\d+)%",
+        _sub,
+        brief,
+        flags=re.IGNORECASE,
+    )

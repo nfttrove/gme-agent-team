@@ -18,6 +18,8 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from episodic_integration import extract_synthesis_from_output  # noqa: E402
 from message_formatters import (  # noqa: E402
+    clamp_consensus_pct,
+    coerce_trend_strength,
     escape_html,
     format_consensus,
     format_data_status,
@@ -27,6 +29,7 @@ from message_formatters import (  # noqa: E402
     normalize_synthesis_capitalization,
     tighten_prose,
 )
+from trading_glossary import glossary_footer  # noqa: E402
 
 
 # ── Golden-output tests for formatters ───────────────────────────────────────
@@ -257,3 +260,137 @@ class TestDailySummaryWording:
         notifier_path = Path(__file__).resolve().parent.parent / "notifier.py"
         text = notifier_path.read_text()
         assert "Daily review done" in text
+
+
+# ── Consensus clamp tests (no more 100% overclaim) ──────────────────────────
+
+
+class TestClampConsensus:
+    """The LLM tends to write 'CONSENSUS: BULLISH 100% (6/6 agents)' — that
+    overclaim erodes reader trust. Clamp at 95%."""
+
+    def test_clamps_100_to_95(self):
+        """Given 100%, when clamping, then 95%."""
+        before = "CONSENSUS: BULLISH 100% (6/6 agents; Futurist 90%)"
+        after = clamp_consensus_pct(before)
+        assert "CONSENSUS: BULLISH 95%" in after
+        assert "100%" not in after
+
+    def test_passes_through_below_ceiling(self):
+        """Given 65%, when clamping, then 65% unchanged."""
+        before = "CONSENSUS: BEARISH 65% (4/6 agents)"
+        assert clamp_consensus_pct(before) == before
+
+    def test_clamps_99_too(self):
+        """Given 99%, when clamping, then 95%."""
+        after = clamp_consensus_pct("CONSENSUS: NEUTRAL 99% (5/5 agents)")
+        assert "95%" in after
+        assert "99%" not in after
+
+    def test_idempotent_at_ceiling(self):
+        """Given 95% already, when clamping, then unchanged."""
+        before = "CONSENSUS: BULLISH 95% (6/6 agents)"
+        assert clamp_consensus_pct(before) == before
+
+
+# ── TREND strength coercion (words → numbers) ───────────────────────────────
+
+
+class TestCoerceTrendStrength:
+    """LLM sometimes writes 'TREND: UP strong' instead of 'TREND: UP 0.7' —
+    that breaks the parser's `\\w+ ([\\d.]+)` regex. Coerce to numbers."""
+
+    @pytest.mark.parametrize("word,expected_num", [
+        ("strong", "0.8"),
+        ("moderate", "0.6"),
+        ("weak", "0.4"),
+        ("flat", "0.2"),
+    ])
+    def test_word_to_number(self, word, expected_num):
+        """Given a qualitative word, when coercing, then mapped to its numeric strength."""
+        before = f"TREND: UP {word}"
+        assert coerce_trend_strength(before) == f"TREND: UP {expected_num}"
+
+    def test_passes_through_numeric(self):
+        """Given numeric strength, when coercing, then unchanged."""
+        before = "TREND: UP 0.7"
+        assert coerce_trend_strength(before) == before
+
+    def test_coerced_output_parses(self):
+        """Given coerced text, when running the canonical parser, then trend_strength is numeric."""
+        coerced = coerce_trend_strength(
+            "PRICE: $23.21 | CONSENSUS: BULLISH 65% | TREND: UP strong | PREDICTION: BULLISH 0.7"
+        )
+        brief = extract_synthesis_from_output(coerced)
+        assert brief is not None
+        assert brief.trend_direction == "UP"
+        assert brief.trend_strength == 0.8
+
+
+# ── Glossary footer tests ───────────────────────────────────────────────────
+
+
+class TestGlossaryFooter:
+    """Plain-English glosses for trading jargon — RSI/EMA/VWAP/MACD/etc."""
+
+    def test_detects_and_explains_terms(self):
+        """Given text with RSI/EMA/VWAP, when building footer, then all three glossed."""
+        text = "Price above VWAP and EMA21, RSI 58, uptrend confirmed."
+        footer = glossary_footer(text)
+        assert footer.startswith("📚")
+        assert "RSI:" in footer
+        assert "EMA:" in footer
+        assert "VWAP:" in footer
+
+    def test_empty_when_no_jargon(self):
+        """Given plain-English text, when building footer, then empty string."""
+        text = "Price up 1.2% on the day."
+        assert glossary_footer(text) == ""
+
+    def test_caps_at_max_terms(self):
+        """Given many terms, when building footer, then capped at max_terms."""
+        text = "RSI, EMA, VWAP, MACD, Bollinger Bands, ATR all aligning."
+        footer = glossary_footer(text, max_terms=3)
+        # 3 terms max; pipe separator gives 2 pipes
+        assert footer.count(" | ") == 2
+
+    def test_pipe_separated(self):
+        """Footer uses | separator (consistent with the rest of the feed)."""
+        footer = glossary_footer("RSI low, EMA cross")
+        assert " | " in footer
+
+
+# ── SIGNAL row prompt construction (sanity-check the prompt string) ─────────
+
+
+class TestSignalPromptWiring:
+    """The SIGNAL row must be specified in the Synthesis prompt with a closed
+    suffix vocabulary and the 95% clamp instruction. These are source-level
+    invariants — if the prompt drifts, the LLM's output drifts with it."""
+
+    def _prompt_source(self):
+        orch_path = Path(__file__).resolve().parent.parent / "orchestrator.py"
+        return orch_path.read_text()
+
+    def test_signal_row_specified(self):
+        """Given orchestrator source, when grepping, then SIGNAL row format present."""
+        src = self._prompt_source()
+        assert "SIGNAL: [BUY/SELL/HOLD/WAIT]" in src
+
+    def test_closed_suffix_vocab_specified(self):
+        """Suffix vocabulary lockdown is wired into the prompt."""
+        src = self._prompt_source()
+        assert "(no catalysts)" in src
+        assert "(earnings event)" in src
+        assert "do not invent" in src.lower()
+
+    def test_95_clamp_instruction_present(self):
+        """The prompt instructs the LLM to cap consensus at 95%."""
+        src = self._prompt_source()
+        assert "CAP AT 95%" in src or "never write 100%" in src
+
+    def test_trend_strength_must_be_numeric(self):
+        """The prompt forbids qualitative trend strength like 'strong'."""
+        src = self._prompt_source()
+        assert "TREND strength" in src
+        assert "NUMBER" in src or "0.0-1.0" in src
