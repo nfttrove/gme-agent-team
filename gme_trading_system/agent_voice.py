@@ -262,6 +262,183 @@ def _try_synthesis_burst(content: str, ts: str) -> str | None:
     return "\n".join(lines)
 
 
+def _split_reasons(prose: str, max_items: int = 3) -> list[str]:
+    """Split agent prose into 2–3 reason bullets, preferring sentence boundaries
+    over commas (commas inside a list like 'VWAP, EMAs, RSI neutral' shouldn't
+    fragment into single-word bullets). Falls back to comma split if no
+    sentences detected. Returns clean, trimmed strings."""
+    import re as _re
+    # Prefer sentence-boundary split (period + space or end)
+    parts = [p.strip().rstrip(".") for p in _re.split(r"\.\s+", prose) if p.strip()]
+    # If only one sentence, fall back to semicolon, then comma (only if it
+    # would give us multiple reasonable chunks — at least 8 chars each)
+    if len(parts) == 1:
+        for sep in [";", ","]:
+            candidate = [p.strip() for p in parts[0].split(sep) if p.strip()]
+            if len(candidate) >= 2 and all(len(c) >= 8 for c in candidate):
+                parts = candidate
+                break
+    return parts[:max_items]
+
+
+def _try_trendy_burst(content: str, ts: str) -> str | None:
+    """Trendy emits: 'SIDEWAYS (conf=45%) · S=$21.71 R=$25.25 · Price below VWAP, EMAs, RSI neutral.'"""
+    import re as _re
+    m = _re.match(
+        r"(UP|DOWN|SIDEWAYS)\s*\(conf=(\d+)%\)\s*·\s*S=\$([\d.]+)\s+R=\$([\d.]+)\s*·\s*(.+)",
+        content.strip(), flags=_re.IGNORECASE | _re.DOTALL
+    )
+    if not m:
+        return None
+    direction = m.group(1).upper()
+    conf = int(m.group(2))
+    support, resistance = float(m.group(3)), float(m.group(4))
+    prose = m.group(5).strip().rstrip(".")
+    dir_emoji = {"UP": "📈", "DOWN": "📉", "SIDEWAYS": "↔️"}[direction]
+    reasons = _split_reasons(prose, 3)
+    lines = [f"📈 TRENDY | {_ny_hhmm(ts)}", "",
+             f"{dir_emoji} {direction} ({conf}%)",
+             f"Support: ${support:.2f} | Resistance: ${resistance:.2f}"]
+    if reasons:
+        lines.append("")
+        lines.extend(f"• {r}" for r in reasons)
+    return "\n".join(lines)
+
+
+def _try_futurist_burst(content: str, ts: str) -> str | None:
+    """Futurist emits: 'BEARISH 1h → $21.95 (conf=55%) · Price below VWAP and EMAs...'"""
+    import re as _re
+    m = _re.match(
+        r"(BULLISH|BEARISH|NEUTRAL)\s+(\w+)\s*[→\->]+\s*\$([\d.]+)\s*\(conf=(\d+)%\)\s*·\s*(.+)",
+        content.strip(), flags=_re.IGNORECASE | _re.DOTALL
+    )
+    if not m:
+        return None
+    direction = m.group(1).upper()
+    horizon = m.group(2)
+    target = float(m.group(3))
+    conf = int(m.group(4))
+    prose = m.group(5).strip().rstrip(".")
+    dir_emoji = {"BULLISH": "🟢", "BEARISH": "🔴", "NEUTRAL": "⚪"}[direction]
+    reasons = _split_reasons(prose, 3)
+    lines = [f"🔮 FUTURIST | {_ny_hhmm(ts)}", "",
+             f"{dir_emoji} {direction} ({conf}%)",
+             f"Target: ${target:.2f} ({horizon})"]
+    if reasons:
+        lines.append("")
+        lines.extend(f"• {r}" for r in reasons)
+    return "\n".join(lines)
+
+
+def _try_pattern_intraday_burst(content: str, ts: str) -> str | None:
+    """Intraday emits: 'breakdown (5m) · DOWN break @ $22.10 (conf=85%) · breakdown detected; watching ...'"""
+    import re as _re
+    m = _re.match(
+        r"(\w+)\s*\((\d+m)\)\s*·\s*(UP|DOWN|FLAT)\s+break\s*@\s*\$([\d.]+)\s*\(conf=(\d+)%\)\s*·\s*(.+)",
+        content.strip(), flags=_re.IGNORECASE | _re.DOTALL
+    )
+    if not m:
+        return None
+    pattern_name = m.group(1)
+    timeframe = m.group(2)
+    direction = m.group(3).upper()
+    level = float(m.group(4))
+    conf = int(m.group(5))
+    prose = m.group(6).strip().rstrip(".")
+    dir_emoji = {"UP": "📈", "DOWN": "📉", "FLAT": "↔️"}[direction]
+    reasons = _split_reasons(prose, 3)
+    lines = [f"⚡ INTRADAY | {_ny_hhmm(ts)}", "",
+             f"{timeframe} | {pattern_name}",
+             f"{dir_emoji} {direction} @ ${level:.2f} ({conf}%)"]
+    if reasons:
+        lines.append("")
+        lines.extend(f"• {r}" for r in reasons)
+    return "\n".join(lines)
+
+
+def _try_pattern_burst(content: str, ts: str) -> str | None:
+    """Daily Pattern emits 'No clean pattern on 30d chart — price $22.32 RSI 40.'
+    or pattern-detection lines similar to intraday. Keep terse."""
+    stripped = content.strip()
+    if stripped.lower().startswith("no clean pattern"):
+        import re as _re
+        price_m = _re.search(r"price\s+\$?([\d.]+)", stripped, flags=_re.IGNORECASE)
+        rsi_m = _re.search(r"RSI\s+(\d+)", stripped, flags=_re.IGNORECASE)
+        lines = [f"🎯 PATTERN | {_ny_hhmm(ts)}", "", "No clean pattern (30d)"]
+        if price_m and rsi_m:
+            lines.append(f"Price: ${float(price_m.group(1)):.2f} | RSI: {rsi_m.group(1)}")
+        return "\n".join(lines)
+    # Fall back to intraday-style parser for detected patterns
+    return _try_pattern_intraday_burst(content, ts)
+
+
+def _try_newsie_burst(content: str, ts: str) -> str | None:
+    """Newsie emits: 'composite=+0.13 (neutral) · 15 articles · <headline>...'"""
+    import re as _re
+    m = _re.match(
+        r"composite=([+-]?\d+\.\d+)\s*\((\w+)\)\s*·\s*(\d+)\s+articles\s*·\s*(.+)",
+        content.strip(), flags=_re.IGNORECASE | _re.DOTALL
+    )
+    if not m:
+        return None
+    score = float(m.group(1))
+    label = m.group(2).upper()
+    n_articles = int(m.group(3))
+    headline = m.group(4).strip()
+    label_emoji = {"BULLISH": "🟢", "BEARISH": "🔴", "NEUTRAL": "⚪",
+                   "POSITIVE": "🟢", "NEGATIVE": "🔴"}.get(label, "⚪")
+    # First sentence, capped at ~120 chars on a word boundary
+    headline_short = headline.split(".")[0].strip()
+    if len(headline_short) > 120:
+        cut = headline_short.rfind(" ", 0, 120)
+        headline_short = headline_short[:cut if cut > 0 else 120].rstrip() + "…"
+    lines = [f"📰 NEWSIE | {_ny_hhmm(ts)}", "",
+             f"{label_emoji} {label} ({score:+.2f}) · {n_articles} articles",
+             f'"{headline_short}"']
+    return "\n".join(lines)
+
+
+def _try_cto_burst(content: str, ts: str) -> str | None:
+    """CTO Trove emits multi-line: 'GME Trove Score: 65.4/100 ★★★★☆ = unchanged ...'"""
+    import re as _re
+    m = _re.search(
+        r"GME Trove Score:\s*([\d.]+)/100\s*([★☆]+)\s*=\s*(\w+)",
+        content, flags=_re.IGNORECASE
+    )
+    if not m:
+        return None
+    score = float(m.group(1))
+    stars = m.group(2)
+    delta = m.group(3)
+    # Optional immunity line: 'Immunity 4/5: ...'
+    imm_m = _re.search(r"Immunity\s+(\d+)/(\d+):\s*(.+?)(?:\n|$)", content, flags=_re.IGNORECASE)
+    immunity_line = None
+    if imm_m:
+        passed, total = imm_m.group(1), imm_m.group(2)
+        failing = [seg.strip() for seg in imm_m.group(3).split("·")
+                   if seg.strip().startswith("✗")]
+        immunity_line = f"Immunity: {passed}/{total}"
+        if failing:
+            immunity_line += f" ({', '.join(failing)})"
+    lines = [f"🛡️ CTO | {_ny_hhmm(ts)}", "",
+             f"Trove Score: {score}/100 {stars} ({delta})"]
+    if immunity_line:
+        lines.append(immunity_line)
+    return "\n".join(lines)
+
+
+_BURST_DISPATCH = {
+    "Synthesis": _try_synthesis_burst,
+    "Trendy": _try_trendy_burst,
+    "Futurist": _try_futurist_burst,
+    "Pattern Intraday": _try_pattern_intraday_burst,
+    "Pattern": _try_pattern_burst,
+    "Newsie": _try_newsie_burst,
+    "CTO": _try_cto_burst,
+    # Chatty deliberately omitted — keeps free prose voice
+}
+
+
 def _format(v: Voice, content: str, ts: str, prev_state: dict | None = None) -> str:
     # Strip HTML-special chars that break Telegram parse_mode=HTML
     safe = (content or "").replace("<", "&lt;").replace(">", "&gt;").strip()
@@ -269,10 +446,14 @@ def _format(v: Voice, content: str, ts: str, prev_state: dict | None = None) -> 
     # Burst-format path for structured-output agents. Returns the full message
     # (with its own header + timestamp) so callers should NOT re-wrap. Falls
     # through to the legacy narrative formatter when None is returned.
-    if v.agent_name == "Synthesis":
-        burst = _try_synthesis_burst(safe, ts)
-        if burst:
-            return burst
+    burst_fn = _BURST_DISPATCH.get(v.agent_name)
+    if burst_fn:
+        try:
+            burst = burst_fn(safe, ts)
+            if burst:
+                return burst
+        except Exception as e:
+            log.warning(f"[voice] burst format failed for {v.agent_name}: {e} — falling through")
 
     # Legacy narrative path (Chatty's prose, Newsie's commentary, etc.)
     # Display-layer transforms — canonical content stays in agent_logs.
