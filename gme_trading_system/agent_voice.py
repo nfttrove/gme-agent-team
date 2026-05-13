@@ -113,9 +113,12 @@ def _is_stale(ts: str, max_age_minutes: int) -> bool:
 def _format(v: Voice, content: str, ts: str, prev_state: dict | None = None) -> str:
     # Strip HTML-special chars that break Telegram parse_mode=HTML
     safe = (content or "").replace("<", "&lt;").replace(">", "&gt;").strip()
-    # Display-layer transforms — canonical content stays in agent_logs:
-    #   1) colorize_status_emojis: prepend 🟢🟡🔴 etc. before status words
-    #   2) decimal_confidence_to_percent: TREND DOWN 0.55 → TREND DOWN 55%
+    # Display-layer transforms — canonical content stays in agent_logs.
+    # ORDER MATTERS: decimal→% must run BEFORE colorize, because colorize
+    # injects an emoji between `TREND:` and the word, which would otherwise
+    # block the decimal regex from matching.
+    #   1) decimal_confidence_to_percent: TREND DOWN 0.55 → TREND DOWN 55%
+    #   2) colorize_status_emojis: prepend 🟢🟡🔴 etc. before status words
     #   3) layout_synthesis_brief: SIGNAL on top (bold), NOW/NEXT as bullets,
     #      optional ⚡ FLIP marker when consensus/signal direction changed
     try:
@@ -124,8 +127,8 @@ def _format(v: Voice, content: str, ts: str, prev_state: dict | None = None) -> 
             decimal_confidence_to_percent,
             layout_synthesis_brief,
         )
-        safe = colorize_status_emojis(safe)
         safe = decimal_confidence_to_percent(safe)
+        safe = colorize_status_emojis(safe)
         safe = layout_synthesis_brief(safe, prev_state=prev_state)
     except Exception:
         pass

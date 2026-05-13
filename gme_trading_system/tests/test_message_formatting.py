@@ -507,6 +507,20 @@ class TestDecimalConfidenceToPercent:
         assert "DOWN 55%" in after
         assert "BEARISH 70%" in after
 
+    def test_must_run_before_colorize(self):
+        """If colorize ran first, decimal regex would skip the emoji and miss.
+        This guards the documented ordering in agent_voice._format()."""
+        # Simulate post-colorize input (emoji between label and word)
+        colorized = "TREND: 📉 DOWN 0.55"
+        # If we ran decimal AFTER colorize, the regex wouldn't match (proves the bug)
+        assert decimal_confidence_to_percent(colorized) == colorized
+        # The correct order: decimal first, then colorize
+        raw = "TREND: DOWN 0.55"
+        from message_formatters import colorize_status_emojis
+        after_decimal = decimal_confidence_to_percent(raw)
+        after_both = colorize_status_emojis(after_decimal)
+        assert "📉 DOWN 55%" in after_both
+
 
 class TestLayoutSynthesisBrief:
     """Reformat 3-line NOW/NEXT/SIGNAL brief into bullet layout, SIGNAL on top."""
