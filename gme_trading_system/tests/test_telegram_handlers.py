@@ -406,6 +406,47 @@ def test_trove_with_tickers(seeded_db, captured_sends, monkeypatch):
     assert "AAPL" in joined and "MSFT" in joined
 
 
+def test_swot_handles_lean_local_schema(seeded_db, captured_sends, monkeypatch):
+    """SWOT should work on old/test DBs without newer optional columns."""
+    conn = sqlite3.connect(seeded_db)
+    conn.execute(
+        "INSERT INTO news_analysis (headline, sentiment_score, timestamp) "
+        "VALUES (?, ?, datetime('now'))",
+        ("GME volume expands into the close", 0.3),
+    )
+    conn.commit()
+    conn.close()
+
+    fake_market = types.ModuleType("market_state")
+    fake_market.get_market_fact = lambda symbol, db_path: {
+        "price": 25.34,
+        "pct_change": 1.2,
+        "timestamp": "2026-04-23T15:38:00Z",
+        "prompt_line": "GME verified range $24.80-$25.60 over the last 5 days.",
+    }
+    fake_market.enforce_levels = lambda text, fact: text
+    monkeypatch.setitem(sys.modules, "market_state", fake_market)
+
+    monkeypatch.setattr(
+        telegram_bot.llm_config,
+        "llm_generate",
+        lambda *a, **k: (
+            "💪 STRENGTHS\n  • Positive news tally and recent Synthesis support.\n"
+            "⚠️ WEAKNESSES\n  • Options snapshot unavailable.\n"
+            "🎯 OPPORTUNITIES\n  • Price can test $25.60 inside the verified range.\n"
+            "☠️ THREATS\n  • Lean local data means conviction stays limited."
+        ),
+        raising=False,
+    )
+
+    telegram_bot.handle_command("/swot")
+
+    joined = "\n".join(captured_sends)
+    assert "GME SWOT" in joined
+    assert "STRENGTHS" in joined
+    assert "OPTIONS" not in joined.upper() or "unavailable" in joined
+
+
 def test_learn_missing_why(captured_sends):
     telegram_bot.handle_command('/learn "foo"')
     assert captured_sends
