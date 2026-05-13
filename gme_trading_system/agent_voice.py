@@ -282,23 +282,39 @@ def _split_reasons(prose: str, max_items: int = 3) -> list[str]:
 
 
 def _try_trendy_burst(content: str, ts: str) -> str | None:
-    """Trendy emits: 'SIDEWAYS (conf=45%) · S=$21.71 R=$25.25 · Price below VWAP, EMAs, RSI neutral.'"""
+    """Trendy emits something like:
+        'SIDEWAYS (conf=45%) · S=$21.71 R=$25.25 · Price below VWAP, EMAs, RSI neutral.'
+
+    Parses field-by-field so a partial match still produces a degraded burst.
+    Returns None only if direction can't be identified (the minimum signal).
+    """
     import re as _re
-    m = _re.match(
-        r"(UP|DOWN|SIDEWAYS)\s*\(conf=(\d+)%\)\s*·\s*S=\$([\d.]+)\s+R=\$([\d.]+)\s*·\s*(.+)",
-        content.strip(), flags=_re.IGNORECASE | _re.DOTALL
-    )
-    if not m:
-        return None
-    direction = m.group(1).upper()
-    conf = int(m.group(2))
-    support, resistance = float(m.group(3)), float(m.group(4))
-    prose = m.group(5).strip().rstrip(".")
+    text = content.strip()
+
+    dir_m = _re.search(r"\b(UP|DOWN|SIDEWAYS)\b", text, flags=_re.IGNORECASE)
+    if not dir_m:
+        return None  # no direction → fall through to legacy
+    direction = dir_m.group(1).upper()
     dir_emoji = {"UP": "📈", "DOWN": "📉", "SIDEWAYS": "↔️"}[direction]
-    reasons = _split_reasons(prose, 3)
-    lines = [f"📈 TRENDY | {_ny_hhmm(ts)}", "",
-             f"{dir_emoji} {direction} ({conf}%)",
-             f"Support: ${support:.2f} | Resistance: ${resistance:.2f}"]
+
+    conf_m = _re.search(r"conf[=:\s]+(\d+)%?", text, flags=_re.IGNORECASE)
+    conf = int(conf_m.group(1)) if conf_m else None
+
+    sup_m = _re.search(r"S=\$?([\d.]+)", text)
+    res_m = _re.search(r"R=\$?([\d.]+)", text)
+
+    # Prose: everything after the last "·"
+    prose = text.rsplit("·", 1)[-1].strip().rstrip(".") if "·" in text else ""
+    reasons = _split_reasons(prose, 3) if prose else []
+
+    header_line = f"{dir_emoji} {direction}" + (f" ({conf}%)" if conf is not None else "")
+    lines = [f"📈 TRENDY | {_ny_hhmm(ts)}", "", header_line]
+    if sup_m and res_m:
+        lines.append(f"Support: ${float(sup_m.group(1)):.2f} | Resistance: ${float(res_m.group(1)):.2f}")
+    elif sup_m:
+        lines.append(f"Support: ${float(sup_m.group(1)):.2f}")
+    elif res_m:
+        lines.append(f"Resistance: ${float(res_m.group(1)):.2f}")
     if reasons:
         lines.append("")
         lines.extend(f"• {r}" for r in reasons)
@@ -306,24 +322,41 @@ def _try_trendy_burst(content: str, ts: str) -> str | None:
 
 
 def _try_futurist_burst(content: str, ts: str) -> str | None:
-    """Futurist emits: 'BEARISH 1h → $21.95 (conf=55%) · Price below VWAP and EMAs...'"""
+    """Futurist emits something like:
+        'BEARISH 1h → $21.95 (conf=55%) · Price below VWAP and EMAs...'
+
+    Parses field-by-field so a partial match still produces a degraded burst.
+    Returns None only if direction can't be identified.
+    """
     import re as _re
-    m = _re.match(
-        r"(BULLISH|BEARISH|NEUTRAL)\s+(\w+)\s*[→\->]+\s*\$([\d.]+)\s*\(conf=(\d+)%\)\s*·\s*(.+)",
-        content.strip(), flags=_re.IGNORECASE | _re.DOTALL
-    )
-    if not m:
+    text = content.strip()
+
+    dir_m = _re.search(r"\b(BULLISH|BEARISH|NEUTRAL)\b", text, flags=_re.IGNORECASE)
+    if not dir_m:
         return None
-    direction = m.group(1).upper()
-    horizon = m.group(2)
-    target = float(m.group(3))
-    conf = int(m.group(4))
-    prose = m.group(5).strip().rstrip(".")
+    direction = dir_m.group(1).upper()
     dir_emoji = {"BULLISH": "🟢", "BEARISH": "🔴", "NEUTRAL": "⚪"}[direction]
-    reasons = _split_reasons(prose, 3)
-    lines = [f"🔮 FUTURIST | {_ny_hhmm(ts)}", "",
-             f"{dir_emoji} {direction} ({conf}%)",
-             f"Target: ${target:.2f} ({horizon})"]
+
+    # Horizon: usually 1h, 4h, 1d adjacent to direction; optional
+    horizon_m = _re.search(r"\b(\d+[mhd])\b", text[dir_m.end():dir_m.end()+10], flags=_re.IGNORECASE)
+    horizon = horizon_m.group(1) if horizon_m else None
+
+    target_m = _re.search(r"[→\->]+\s*\$?([\d.]+)", text)
+    target = float(target_m.group(1)) if target_m else None
+
+    conf_m = _re.search(r"conf[=:\s]+(\d+)%?", text, flags=_re.IGNORECASE)
+    conf = int(conf_m.group(1)) if conf_m else None
+
+    prose = text.rsplit("·", 1)[-1].strip().rstrip(".") if "·" in text else ""
+    reasons = _split_reasons(prose, 3) if prose else []
+
+    header_line = f"{dir_emoji} {direction}" + (f" ({conf}%)" if conf is not None else "")
+    lines = [f"🔮 FUTURIST | {_ny_hhmm(ts)}", "", header_line]
+    if target is not None:
+        target_line = f"Target: ${target:.2f}"
+        if horizon:
+            target_line += f" ({horizon})"
+        lines.append(target_line)
     if reasons:
         lines.append("")
         lines.extend(f"• {r}" for r in reasons)
@@ -331,25 +364,55 @@ def _try_futurist_burst(content: str, ts: str) -> str | None:
 
 
 def _try_pattern_intraday_burst(content: str, ts: str) -> str | None:
-    """Intraday emits: 'breakdown (5m) · DOWN break @ $22.10 (conf=85%) · breakdown detected; watching ...'"""
+    """Intraday emits something like:
+        'breakdown (5m) · DOWN break @ $22.10 (conf=85%) · breakdown detected ...'
+
+    Parses field-by-field so a partial match still produces a degraded burst.
+    Returns None only if no recognizable pattern/direction can be extracted.
+    """
     import re as _re
-    m = _re.match(
-        r"(\w+)\s*\((\d+m)\)\s*·\s*(UP|DOWN|FLAT)\s+break\s*@\s*\$([\d.]+)\s*\(conf=(\d+)%\)\s*·\s*(.+)",
-        content.strip(), flags=_re.IGNORECASE | _re.DOTALL
-    )
-    if not m:
+    text = content.strip()
+
+    timeframe_m = _re.search(r"\((\d+[mh])\)", text, flags=_re.IGNORECASE)
+    timeframe = timeframe_m.group(1) if timeframe_m else None
+
+    # Pattern name: the first word, typically lowercase ("breakdown", "wedge", etc.)
+    name_m = _re.match(r"(\w+)", text)
+    pattern_name = name_m.group(1) if name_m else None
+
+    dir_m = _re.search(r"\b(UP|DOWN|FLAT)\b", text, flags=_re.IGNORECASE)
+    direction = dir_m.group(1).upper() if dir_m else None
+
+    level_m = _re.search(r"@\s*\$?([\d.]+)", text)
+    level = float(level_m.group(1)) if level_m else None
+
+    conf_m = _re.search(r"conf[=:\s]+(\d+)%?", text, flags=_re.IGNORECASE)
+    conf = int(conf_m.group(1)) if conf_m else None
+
+    # Need at minimum a direction or a pattern name to make a meaningful burst
+    if not direction and not pattern_name:
         return None
-    pattern_name = m.group(1)
-    timeframe = m.group(2)
-    direction = m.group(3).upper()
-    level = float(m.group(4))
-    conf = int(m.group(5))
-    prose = m.group(6).strip().rstrip(".")
-    dir_emoji = {"UP": "📈", "DOWN": "📉", "FLAT": "↔️"}[direction]
-    reasons = _split_reasons(prose, 3)
-    lines = [f"⚡ INTRADAY | {_ny_hhmm(ts)}", "",
-             f"{timeframe} | {pattern_name}",
-             f"{dir_emoji} {direction} @ ${level:.2f} ({conf}%)"]
+
+    prose = text.rsplit("·", 1)[-1].strip().rstrip(".") if text.count("·") >= 2 else ""
+    reasons = _split_reasons(prose, 3) if prose else []
+
+    lines = [f"⚡ INTRADAY | {_ny_hhmm(ts)}", ""]
+    if timeframe and pattern_name:
+        lines.append(f"{timeframe} | {pattern_name}")
+    elif pattern_name:
+        lines.append(pattern_name)
+    elif timeframe:
+        lines.append(timeframe)
+
+    if direction or level is not None:
+        dir_emoji = {"UP": "📈", "DOWN": "📉", "FLAT": "↔️"}.get(direction, "")
+        sig_line = f"{dir_emoji} {direction}" if direction else ""
+        if level is not None:
+            sig_line = (sig_line + f" @ ${level:.2f}") if sig_line else f"@ ${level:.2f}"
+        if conf is not None:
+            sig_line += f" ({conf}%)"
+        lines.append(sig_line.strip())
+
     if reasons:
         lines.append("")
         lines.extend(f"• {r}" for r in reasons)
@@ -373,28 +436,62 @@ def _try_pattern_burst(content: str, ts: str) -> str | None:
 
 
 def _try_newsie_burst(content: str, ts: str) -> str | None:
-    """Newsie emits: 'composite=+0.13 (neutral) · 15 articles · <headline>...'"""
+    """Newsie emits something like:
+        'composite=+0.13 (neutral) · 15 articles · <headline>...'
+
+    Parses field-by-field so a partial match still produces a degraded burst.
+    Returns None only if neither score nor headline can be extracted (the two
+    minimum signals — without either there's nothing meaningful to send).
+    """
     import re as _re
-    m = _re.match(
-        r"composite=([+-]?\d+\.\d+)\s*\((\w+)\)\s*·\s*(\d+)\s+articles\s*·\s*(.+)",
-        content.strip(), flags=_re.IGNORECASE | _re.DOTALL
-    )
-    if not m:
-        return None
-    score = float(m.group(1))
-    label = m.group(2).upper()
-    n_articles = int(m.group(3))
-    headline = m.group(4).strip()
+    text = content.strip()
+
+    score_m = _re.search(r"composite[=:\s]+([+-]?\d+\.\d+)", text, flags=_re.IGNORECASE)
+    score = float(score_m.group(1)) if score_m else None
+
+    label_m = _re.search(r"\(\s*(bullish|bearish|neutral|positive|negative)\s*\)",
+                        text, flags=_re.IGNORECASE)
+    # Fallback: infer label from score sign if explicit label missing
+    label = label_m.group(1).upper() if label_m else None
+    if label is None and score is not None:
+        label = "BULLISH" if score > 0.1 else ("BEARISH" if score < -0.1 else "NEUTRAL")
+
+    articles_m = _re.search(r"(\d+)\s+articles?", text, flags=_re.IGNORECASE)
+    n_articles = int(articles_m.group(1)) if articles_m else None
+
+    # Headline: prefer the last "· "-delimited segment; otherwise the last sentence
+    headline = ""
+    if "·" in text:
+        headline = text.rsplit("·", 1)[-1].strip()
+    if not headline and score_m:
+        headline = text[score_m.end():].strip(" ·")
+
+    if score is None and not headline:
+        return None  # nothing to say
+
     label_emoji = {"BULLISH": "🟢", "BEARISH": "🔴", "NEUTRAL": "⚪",
                    "POSITIVE": "🟢", "NEGATIVE": "🔴"}.get(label, "⚪")
-    # First sentence, capped at ~120 chars on a word boundary
-    headline_short = headline.split(".")[0].strip()
-    if len(headline_short) > 120:
-        cut = headline_short.rfind(" ", 0, 120)
-        headline_short = headline_short[:cut if cut > 0 else 120].rstrip() + "…"
-    lines = [f"📰 NEWSIE | {_ny_hhmm(ts)}", "",
-             f"{label_emoji} {label} ({score:+.2f}) · {n_articles} articles",
-             f'"{headline_short}"']
+
+    lines = [f"📰 NEWSIE | {_ny_hhmm(ts)}", ""]
+
+    # Sentiment summary line — emit whichever fields survived
+    summary_parts = []
+    if label:
+        summary_parts.append(f"{label_emoji} {label}")
+    if score is not None:
+        summary_parts.append(f"({score:+.2f})")
+    if n_articles is not None:
+        summary_parts.append(f"· {n_articles} articles")
+    if summary_parts:
+        lines.append(" ".join(summary_parts))
+
+    if headline:
+        headline_short = headline.split(".")[0].strip()
+        if len(headline_short) > 120:
+            cut = headline_short.rfind(" ", 0, 120)
+            headline_short = headline_short[:cut if cut > 0 else 120].rstrip() + "…"
+        lines.append(f'"{headline_short}"')
+
     return "\n".join(lines)
 
 
