@@ -34,12 +34,20 @@ class Voice:
     emoji: str
     label: str       # human-readable persona label
     max_per_run: int # cap to avoid backlog spam after downtime
+    # Per-voice staleness override (minutes). When None, uses
+    # AGENT_VOICE_MAX_STALENESS_MIN (default 30). Daily/rare agents need
+    # a longer window so a late orchestrator restart doesn't silently drop
+    # their once-a-day output (e.g., CTO Trove fires once at 09:10 ET).
+    staleness_minutes: int | None = None
 
 
 # Agents currently producing real output (CrewAI-bypass rewrites). Add more
 # here as they are fixed. Order matters — forwarded in this order each run.
 VOICES: list[Voice] = [
-    Voice("CTO",       "trove_score",       "🛡️", "CTO",       max_per_run=1),
+    # CTO Trove fires once daily — needs a 24h window so a mid-day restart
+    # doesn't silently skip the morning row before it can be forwarded.
+    Voice("CTO",       "trove_score",       "🛡️", "CTO",       max_per_run=1,
+          staleness_minutes=1440),
     Voice("Synthesis", "synthesis",         "🧠", "Synthesis", max_per_run=1),
     Voice("Trendy",    "trend_signal",      "📈", "Trendy",    max_per_run=1),
     Voice("Pattern",   "pattern_signal",    "🎯", "Pattern",   max_per_run=1),
@@ -246,7 +254,7 @@ def _try_synthesis_burst(content: str, ts: str) -> str | None:
     trend_emoji = {"UP": "📈", "DOWN": "📉", "SIDEWAYS": "↔️"}.get(trend_dir, "↔️")
     struct_emoji = {"GREEN": "🟢", "CAUTION": "🟡", "YELLOW": "🟡", "RED": "🔴"}.get(struct_state, "⚪")
 
-    lines = [f"🧠 SYNTHESIS | {_ny_hhmm(ts)}", ""]
+    lines = [f"🧠 {_ny_hhmm(ts)}", ""]
     if consensus_dir and consensus_pct is not None:
         lines.append(f"Consensus: {cons_emoji} {consensus_dir} ({consensus_pct}%)")
     if signal_action:
@@ -308,7 +316,7 @@ def _try_trendy_burst(content: str, ts: str) -> str | None:
     reasons = _split_reasons(prose, 3) if prose else []
 
     header_line = f"{dir_emoji} {direction}" + (f" ({conf}%)" if conf is not None else "")
-    lines = [f"📈 TRENDY | {_ny_hhmm(ts)}", "", header_line]
+    lines = [f"📈 {_ny_hhmm(ts)}", "", header_line]
     if sup_m and res_m:
         lines.append(f"Support: ${float(sup_m.group(1)):.2f} | Resistance: ${float(res_m.group(1)):.2f}")
     elif sup_m:
@@ -351,7 +359,7 @@ def _try_futurist_burst(content: str, ts: str) -> str | None:
     reasons = _split_reasons(prose, 3) if prose else []
 
     header_line = f"{dir_emoji} {direction}" + (f" ({conf}%)" if conf is not None else "")
-    lines = [f"🔮 FUTURIST | {_ny_hhmm(ts)}", "", header_line]
+    lines = [f"🔮 {_ny_hhmm(ts)}", "", header_line]
     if target is not None:
         target_line = f"Target: ${target:.2f}"
         if horizon:
@@ -366,6 +374,7 @@ def _try_futurist_burst(content: str, ts: str) -> str | None:
 def _try_pattern_intraday_burst(content: str, ts: str) -> str | None:
     """Intraday emits something like:
         'breakdown (5m) · DOWN break @ $22.10 (conf=85%) · breakdown detected ...'
+    Also sometimes 'No clean pattern on 30d chart — price $22.08 RSI 38'.
 
     Parses field-by-field so a partial match still produces a degraded burst.
     Returns None only if no recognizable pattern/direction can be extracted.
@@ -373,12 +382,24 @@ def _try_pattern_intraday_burst(content: str, ts: str) -> str | None:
     import re as _re
     text = content.strip()
 
+    # No-signal report (also emitted by intraday sometimes)
+    if text.lower().startswith("no clean pattern") or text.lower().startswith("no pattern"):
+        price_m = _re.search(r"price\s+\$?([\d.]+)", text, flags=_re.IGNORECASE)
+        rsi_m = _re.search(r"RSI\s+(\d+)", text, flags=_re.IGNORECASE)
+        lines = [f"⚡ {_ny_hhmm(ts)}", "", "No clean intraday pattern"]
+        if price_m and rsi_m:
+            lines.append(f"Price: ${float(price_m.group(1)):.2f} | RSI: {rsi_m.group(1)}")
+        return "\n".join(lines)
+
     timeframe_m = _re.search(r"\((\d+[mh])\)", text, flags=_re.IGNORECASE)
     timeframe = timeframe_m.group(1) if timeframe_m else None
 
     # Pattern name: the first word, typically lowercase ("breakdown", "wedge", etc.)
-    name_m = _re.match(r"(\w+)", text)
+    # but skip if it's "no" (handled above) or another non-pattern word
+    name_m = _re.match(r"([a-z]+)", text, flags=_re.IGNORECASE)
     pattern_name = name_m.group(1) if name_m else None
+    if pattern_name and pattern_name.lower() in ("no", "none", "the", "a"):
+        pattern_name = None
 
     dir_m = _re.search(r"\b(UP|DOWN|FLAT)\b", text, flags=_re.IGNORECASE)
     direction = dir_m.group(1).upper() if dir_m else None
@@ -396,7 +417,7 @@ def _try_pattern_intraday_burst(content: str, ts: str) -> str | None:
     prose = text.rsplit("·", 1)[-1].strip().rstrip(".") if text.count("·") >= 2 else ""
     reasons = _split_reasons(prose, 3) if prose else []
 
-    lines = [f"⚡ INTRADAY | {_ny_hhmm(ts)}", ""]
+    lines = [f"⚡ {_ny_hhmm(ts)}", ""]
     if timeframe and pattern_name:
         lines.append(f"{timeframe} | {pattern_name}")
     elif pattern_name:
@@ -427,7 +448,7 @@ def _try_pattern_burst(content: str, ts: str) -> str | None:
         import re as _re
         price_m = _re.search(r"price\s+\$?([\d.]+)", stripped, flags=_re.IGNORECASE)
         rsi_m = _re.search(r"RSI\s+(\d+)", stripped, flags=_re.IGNORECASE)
-        lines = [f"🎯 PATTERN | {_ny_hhmm(ts)}", "", "No clean pattern (30d)"]
+        lines = [f"🎯 {_ny_hhmm(ts)}", "", "No clean pattern (30d)"]
         if price_m and rsi_m:
             lines.append(f"Price: ${float(price_m.group(1)):.2f} | RSI: {rsi_m.group(1)}")
         return "\n".join(lines)
@@ -472,7 +493,7 @@ def _try_newsie_burst(content: str, ts: str) -> str | None:
     label_emoji = {"BULLISH": "🟢", "BEARISH": "🔴", "NEUTRAL": "⚪",
                    "POSITIVE": "🟢", "NEGATIVE": "🔴"}.get(label, "⚪")
 
-    lines = [f"📰 NEWSIE | {_ny_hhmm(ts)}", ""]
+    lines = [f"📰 {_ny_hhmm(ts)}", ""]
 
     # Sentiment summary line — emit whichever fields survived
     summary_parts = []
@@ -517,7 +538,7 @@ def _try_cto_burst(content: str, ts: str) -> str | None:
         immunity_line = f"Immunity: {passed}/{total}"
         if failing:
             immunity_line += f" ({', '.join(failing)})"
-    lines = [f"🛡️ CTO | {_ny_hhmm(ts)}", "",
+    lines = [f"🛡️ {_ny_hhmm(ts)}", "",
              f"Trove Score: {score}/100 {stars} ({delta})"]
     if immunity_line:
         lines.append(immunity_line)
@@ -605,7 +626,7 @@ def forward_pending(db_path: str = DB_PATH) -> dict[str, int]:
     on its own).
     """
     sent: dict[str, int] = {}
-    stale_cutoff_min = int(os.getenv("AGENT_VOICE_MAX_STALENESS_MIN", "30"))
+    default_stale_cutoff = int(os.getenv("AGENT_VOICE_MAX_STALENESS_MIN", "30"))
     # Big enough to plow through multi-day backlogs in a few ticks; bounded
     # so a single tick can't stall on huge result sets.
     QUERY_LIMIT = 500
@@ -614,6 +635,8 @@ def forward_pending(db_path: str = DB_PATH) -> dict[str, int]:
     try:
         _ensure_schema(conn)
         for v in VOICES:
+            # Per-voice staleness override; daily/rare agents need a wider window
+            stale_cutoff_min = v.staleness_minutes if v.staleness_minutes is not None else default_stale_cutoff
             watermark = _get_watermark(conn, v)
             rows = conn.execute(
                 "SELECT id, timestamp, content FROM agent_logs "

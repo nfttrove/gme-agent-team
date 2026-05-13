@@ -400,9 +400,13 @@ class TestBurstFormatting:
             volume_context="1.8x 20d ADV",
             timestamp_et="14:30 ET"
         )
+        # After the label-dropping change (2026-05-13), emoji is the identity,
+        # not the literal word. Verify by emoji + content instead.
         assert len(messages) == 2
-        assert "SIGNAL" in messages[0]
-        assert "MARKET" in messages[1]
+        assert "🔮" in messages[0]  # default signal emoji (Futurist)
+        assert "💬" in messages[1]  # market emoji
+        assert "BULLISH" in messages[0]
+        assert "$23.45" in messages[1]
         assert self.count_lines(messages[0]) <= 8
         assert self.count_lines(messages[1]) <= 8
 

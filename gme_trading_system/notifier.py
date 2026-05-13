@@ -387,13 +387,14 @@ def notify_signal_alert(agent_name: str, signal_type: str, confidence: float,
         if not reasons:
             reasons = [reasoning[:60]]  # Fallback: use first 60 chars
 
-    # Format as single SIGNAL burst message
+    # Format as single SIGNAL burst message — use the agent's own emoji as identity
     msg = format_signal_burst(
         direction=direction,
         target=take_profit,
         confidence=f"{confidence:.0%}",
         reasons=reasons,
-        timestamp_et=ts
+        timestamp_et=ts,
+        emoji=AGENT_EMOJI.get(agent_name, "🔮"),
     )
     return _send(msg)
 

@@ -29,20 +29,25 @@ def get_ny_time_short() -> str:
     return datetime.now(ny_tz).strftime("%H:%M ET")
 
 
-def format_header(emoji: str, message_type: str, timestamp_et: str | None = None) -> str:
-    """Format message header with emoji, type, and optional timestamp.
+def format_header(emoji: str, message_type: str | None = None, timestamp_et: str | None = None) -> str:
+    """Format message header with emoji and timestamp.
+
+    The emoji IS the agent identity — message_type labels (SIGNAL, MARKET, etc.)
+    are dropped from the header to keep the feed clean. Kept as an optional
+    parameter for API stability with existing tests; ignored at runtime.
 
     Args:
         emoji: Single emoji character (e.g., '🔮')
-        message_type: Message type name (e.g., 'NEXT', 'MARKET')
+        message_type: Legacy/unused; preserved for back-compat
         timestamp_et: Optional timestamp in format "HH:MM ET"
 
     Returns:
-        Formatted header string (e.g., "🔮 NEXT | 14:30 ET")
+        Formatted header string (e.g., "🔮 14:30 ET")
     """
+    _ = message_type  # intentionally unused — emoji is the identity
     if timestamp_et:
-        return f"{emoji} {message_type} | {timestamp_et}"
-    return f"{emoji} {message_type}"
+        return f"{emoji} {timestamp_et}"
+    return emoji
 
 
 def apply_spacing(lines: list[str], section_breaks: list[int] | None = None) -> str:
@@ -142,13 +147,19 @@ def format_signal_burst(
     confidence: str | None = None,
     reasons: list[str] | None = None,
     timestamp_et: str | None = None,
+    emoji: str = "🔮",
 ) -> str:
     """Format a signal recommendation burst.
 
     Returns ~4–5 line message with direction, target, confidence, and 3 bullet reasons.
 
+    Args:
+        emoji: Agent emoji to use as identity. Default 🔮 (Futurist) since
+               structured signal alerts are almost always Futurist predictions.
+               Callers can override for other agents.
+
     Example:
-        🧠 SIGNAL | 14:30 ET
+        🔮 14:30 ET
 
         🟢 Bullish
         Target: $25.50
@@ -158,7 +169,7 @@ def format_signal_burst(
         • Volume spike
         • Support hold
     """
-    lines = [format_header("🧠", "SIGNAL", timestamp_et), ""]
+    lines = [format_header(emoji, timestamp_et=timestamp_et), ""]
 
     # Direction with emoji
     dir_emoji = {"BULLISH": "🟢", "BEARISH": "🔴", "NEUTRAL": "⚪", "HOLD": "🟡", "WAIT": "⏳"}.get(
