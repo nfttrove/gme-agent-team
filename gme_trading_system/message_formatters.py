@@ -168,6 +168,16 @@ _FIELD_EMOJIS = {
 # already and a later layer calls it again).
 _PREPENDED_EMOJIS = "🟢🟡🔴⚪⏳📈📉↔️"
 
+# Standalone state words that may appear in any agent's prose (Chatty,
+# commentary, narration). Map → emoji. Reused across labeled and unlabeled
+# colorize passes so Chatty's `team sees BEARISH` reads the same as
+# Synthesis's `CONSENSUS: BEARISH`.
+_STANDALONE_STATE_EMOJIS = {
+    "BULLISH": "🟢", "BEARISH": "🔴", "NEUTRAL": "⚪",
+    "GREEN": "🟢", "YELLOW": "🟡", "RED": "🔴",
+    "RISING": "🟢", "FALLING": "🔴",
+}
+
 
 def layout_synthesis_brief(text: str, prev_state: dict | None = None) -> str:
     """Reformat the 3-line NOW/NEXT/SIGNAL brief for mobile readability.
@@ -284,14 +294,17 @@ def colorize_status_emojis(text: str) -> str:
     """
     if not text:
         return text
+    # Pass 1 — labeled forms: CONSENSUS: BEARISH → CONSENSUS: 🔴 BEARISH
     for label, mapping in _FIELD_EMOJIS.items():
         for word, emoji in mapping.items():
-            # (?<![emoji-chars]\s) — skip if an emoji + space is already in front of WORD
-            # Approach instead: require label followed by *only whitespace* then WORD.
-            # If an emoji is already prefixed, the pattern won't match (because
-            # there'd be non-whitespace between `:` and WORD).
             pattern = rf"({label}:\s*)({word})\b"
             text = re.sub(pattern, rf"\1{emoji} \2", text)
+    # Pass 2 — standalone state words anywhere (Chatty's `team sees BEARISH`).
+    # Negative lookbehind skips words already preceded by emoji+space from
+    # pass 1, so the labeled form isn't double-prefixed.
+    for word, emoji in _STANDALONE_STATE_EMOJIS.items():
+        pattern = rf"(?<![{_PREPENDED_EMOJIS}]\s)\b({word})\b"
+        text = re.sub(pattern, rf"{emoji} \1", text)
     return text
 
 

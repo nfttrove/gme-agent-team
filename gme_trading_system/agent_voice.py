@@ -88,6 +88,97 @@ def _set_watermark(conn: sqlite3.Connection, v: Voice, last_id: int) -> None:
     )
 
 
+def _chatty_echoes_synthesis(conn: sqlite3.Connection, row_id: int, content: str,
+                              ts: str, window_seconds: int = 60) -> str | None:
+    """If a Synthesis brief landed within `window_seconds` before this Chatty
+    row AND the Chatty content's directional bias matches Synthesis's
+    consensus direction, return the Synthesis direction so the caller can log
+    + suppress. Returns None when there's no echo to suppress.
+    """
+    if not content or not ts:
+        return None
+    # Find a Synthesis brief in the window (ts arithmetic uses SQLite's
+    # datetime; the row_id<? guard avoids race conditions with the current row).
+    # Normalize both sides with datetime() so the ISO-with-TZ stored format
+    # compares correctly against the windowed cutoff (otherwise the `T` and
+    # `+00:00` suffix make string comparison unreliable).
+    syn_row = conn.execute(
+        "SELECT content FROM agent_logs "
+        "WHERE agent_name='Synthesis' AND task_type='synthesis' AND status='ok' "
+        "AND length(content) > 50 AND id < ? "
+        "AND datetime(timestamp) > datetime(?, ?) "
+        "ORDER BY id DESC LIMIT 1",
+        (row_id, ts, f"-{window_seconds} seconds"),
+    ).fetchone()
+    if not syn_row or not syn_row[0]:
+        return None
+    from message_formatters import _extract_consensus_dir
+    syn_dir = _extract_consensus_dir(syn_row[0])
+    if not syn_dir:
+        return None
+    # Extract Chatty's bias from prose. Map rising/falling/quiet/etc. to
+    # the canonical BULLISH/BEARISH/NEUTRAL bucket.
+    import re as _re
+    text = content.upper()
+    # Check explicit state words first
+    for word, canonical in [
+        ("BULLISH", "BULLISH"), ("BEARISH", "BEARISH"), ("NEUTRAL", "NEUTRAL"),
+        ("RISING", "BULLISH"), ("FALLING", "BEARISH"),
+    ]:
+        if _re.search(rf"\b{word}\b", text):
+            if canonical == syn_dir:
+                return syn_dir
+            return None
+    return None
+
+
+def _newsie_zero_score_repeat(conn: sqlite3.Connection, row_id: int, content: str,
+                               window_minutes: int = 60) -> bool:
+    """Return True if the current Newsie row carries a zero-score sentiment AND
+    the previous Newsie within `window_minutes` was also zero-score. Suppress
+    in that case — back-to-back 'no news' notifications have zero information."""
+    if not content:
+        return False
+    import re as _re
+    # Match composite=+0.00, composite=-0.00, composite=0.00, or "neutral 0.0"
+    score_match = _re.search(
+        r"(?:composite\s*=\s*|score\s+|sentiment[:\s]+|neutral\s+)([+-]?\d+\.\d+)",
+        content,
+        flags=_re.IGNORECASE,
+    )
+    if not score_match:
+        return False
+    try:
+        current_score = float(score_match.group(1))
+    except ValueError:
+        return False
+    if abs(current_score) > 0.01:
+        return False  # current is non-zero, let it through
+    # Check previous Newsie
+    prev = conn.execute(
+        "SELECT content FROM agent_logs "
+        "WHERE agent_name='Newsie' AND task_type='news' AND status='ok' "
+        "AND id < ? "
+        "AND datetime(timestamp) > datetime('now', ?) "
+        "ORDER BY id DESC LIMIT 1",
+        (row_id, f"-{window_minutes} minutes"),
+    ).fetchone()
+    if not prev or not prev[0]:
+        return False
+    prev_match = _re.search(
+        r"(?:composite\s*=\s*|score\s+|sentiment[:\s]+|neutral\s+)([+-]?\d+\.\d+)",
+        prev[0],
+        flags=_re.IGNORECASE,
+    )
+    if not prev_match:
+        return False
+    try:
+        prev_score = float(prev_match.group(1))
+    except ValueError:
+        return False
+    return abs(prev_score) <= 0.01  # both zero → suppress
+
+
 def _is_stale(ts: str, max_age_minutes: int) -> bool:
     """True if ts is older than max_age_minutes. Returns True on parse
     failure to err on the side of skipping (better to drop a row than
@@ -192,6 +283,20 @@ def forward_pending(db_path: str = DB_PATH) -> dict[str, int]:
                     continue
                 if sent_count >= v.max_per_run:
                     break
+                # Chatty echo suppression: if this Chatty row's bias matches
+                # the most recent Synthesis (within 60s), don't re-notify.
+                if v.agent_name == "Chatty":
+                    echo_dir = _chatty_echoes_synthesis(conn, row_id, content or "", ts or "")
+                    if echo_dir:
+                        log.info(f"[voice] Chatty echo of Synthesis ({echo_dir}) — suppressed")
+                        new_watermark = row_id
+                        continue
+                # Newsie zero-score repeat suppression
+                if v.agent_name == "Newsie":
+                    if _newsie_zero_score_repeat(conn, row_id, content or ""):
+                        log.info(f"[voice] Newsie zero-score repeat — suppressed")
+                        new_watermark = row_id
+                        continue
                 # Flip detection: for Synthesis, pull the previous brief's
                 # consensus + signal action so the formatter can flag direction
                 # changes. Other voices don't have a flip concept.

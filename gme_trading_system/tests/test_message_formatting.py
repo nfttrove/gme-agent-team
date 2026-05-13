@@ -472,6 +472,45 @@ class TestColorizeStatusEmojis:
         assert "📉 DOWN" in out
         assert "⏳ WAIT" in out
 
+    # ── Standalone state-word colorization (Chatty-style prose) ─────────
+
+    def test_standalone_bearish_colorized(self):
+        """`team sees BEARISH` (no label) gets 🔴 prepended."""
+        out = colorize_status_emojis("team sees BEARISH")
+        assert "🔴 BEARISH" in out
+
+    def test_standalone_rising_colorized(self):
+        """`$22.61 RISING` gets 🟢 prepended."""
+        out = colorize_status_emojis("$22.61 RISING")
+        assert "🟢 RISING" in out
+
+    def test_standalone_yellow_colorized(self):
+        """`Consensus YELLOW` (unlabeled YELLOW) gets 🟡 prepended."""
+        out = colorize_status_emojis("Consensus YELLOW")
+        assert "🟡 YELLOW" in out
+
+    def test_lowercase_in_prose_unchanged(self):
+        """Lowercase 'bearish' in prose is left alone — only UPPERCASE matters."""
+        out = colorize_status_emojis("team feels bearish today")
+        assert "🔴" not in out
+        assert "bearish" in out
+
+    def test_no_double_prefix_after_label_pass(self):
+        """Labeled form gets colorized once; the bare-word pass doesn't re-prefix."""
+        out = colorize_status_emojis("CONSENSUS: BEARISH 65%")
+        # Exactly one 🔴 (from pass 1), not two
+        assert out.count("🔴") == 1
+        assert "🔴 BEARISH" in out
+
+    def test_mixed_labeled_and_standalone(self):
+        """A Chatty-style message with both labeled and bare state words gets
+        consistently colorized — single 🔴 in each spot."""
+        text = "CONSENSUS: BEARISH 67% | team sees BEARISH"
+        out = colorize_status_emojis(text)
+        # Both BEARISH words should be colorized, with exactly one 🔴 each
+        assert out.count("🔴 BEARISH") == 2
+        assert out.count("🔴") == 2
+
 
 class TestDecimalConfidenceToPercent:
     """Display-layer transform that rewrites 0-1 decimals as percentages so
