@@ -22,12 +22,14 @@ from message_formatters import (  # noqa: E402
     coerce_news_score,
     coerce_trend_strength,
     colorize_status_emojis,
+    decimal_confidence_to_percent,
     escape_html,
     format_consensus,
     format_data_status,
     format_price,
     format_rsi,
     format_volume,
+    layout_synthesis_brief,
     normalize_synthesis_capitalization,
     tighten_prose,
 )
@@ -469,6 +471,95 @@ class TestColorizeStatusEmojis:
         assert "🔴 BEARISH" in out  # CONSENSUS
         assert "📉 DOWN" in out
         assert "⏳ WAIT" in out
+
+
+class TestDecimalConfidenceToPercent:
+    """Display-layer transform that rewrites 0-1 decimals as percentages so
+    TREND/PREDICTION read consistently with CONSENSUS's percent format."""
+
+    def test_trend_decimal_to_percent(self):
+        """TREND: DOWN 0.55 → TREND: DOWN 55%."""
+        assert decimal_confidence_to_percent("TREND: DOWN 0.55") == "TREND: DOWN 55%"
+
+    def test_prediction_decimal_to_percent(self):
+        """PREDICTION: BEARISH 0.65 → PREDICTION: BEARISH 65%."""
+        assert decimal_confidence_to_percent("PREDICTION: BEARISH 0.65") == "PREDICTION: BEARISH 65%"
+
+    def test_rounds_correctly(self):
+        """0.555 should round to 56% (banker's rounding gives 56 for round(55.5)=56)."""
+        result = decimal_confidence_to_percent("TREND: UP 0.555")
+        assert "56%" in result or "55%" in result  # accept either Python rounding
+
+    def test_passes_through_already_percent(self):
+        """If value is already a percent (or >= 1.0), don't transform."""
+        before = "CONSENSUS: BULLISH 67%"
+        assert decimal_confidence_to_percent(before) == before
+
+    def test_does_not_touch_consensus(self):
+        """CONSENSUS already uses % — this transform shouldn't affect it."""
+        before = "CONSENSUS: BULLISH 67% (5/6 agents)"
+        assert decimal_confidence_to_percent(before) == before
+
+    def test_handles_both_in_same_text(self):
+        """Both TREND and PREDICTION get rewritten in one pass."""
+        before = "TREND: DOWN 0.55 | PREDICTION: BEARISH 0.7"
+        after = decimal_confidence_to_percent(before)
+        assert "DOWN 55%" in after
+        assert "BEARISH 70%" in after
+
+
+class TestLayoutSynthesisBrief:
+    """Reformat 3-line NOW/NEXT/SIGNAL brief into bullet layout, SIGNAL on top."""
+
+    SAMPLE = (
+        "NOW: PRICE: $22.13 🔻 -0.40% | DATA: clean (no gaps) | NEWS: NEUTRAL 0.0 (no catalysts) | STRUCTURAL: 🟡 YELLOW (consolidating)\n"
+        "NEXT: CONSENSUS: 🔴 BEARISH 67% (2/3 agents) | TREND: 📉 DOWN 55% | PREDICTION: 🔴 BEARISH 55%\n"
+        "SIGNAL: ⏳ WAIT — short-term bearish trend."
+    )
+
+    def test_signal_appears_first(self):
+        """Output starts with SIGNAL line, bolded."""
+        out = layout_synthesis_brief(self.SAMPLE)
+        assert out.startswith("<b>SIGNAL:")
+
+    def test_now_section_bulleted(self):
+        """NOW becomes its own header and each field is a bullet."""
+        out = layout_synthesis_brief(self.SAMPLE)
+        assert "📊 <b>NOW</b>" in out
+        assert "• PRICE: $22.13" in out
+        assert "• DATA: clean (no gaps)" in out
+        assert "• STRUCTURAL: 🟡 YELLOW (consolidating)" in out
+
+    def test_next_section_bulleted(self):
+        """NEXT becomes its own header with bullet fields."""
+        out = layout_synthesis_brief(self.SAMPLE)
+        assert "🔮 <b>NEXT</b>" in out
+        assert "• CONSENSUS: 🔴 BEARISH 67%" in out
+        assert "• TREND: 📉 DOWN 55%" in out
+
+    def test_signal_bolded(self):
+        """SIGNAL line is wrapped in <b> tags."""
+        out = layout_synthesis_brief(self.SAMPLE)
+        assert "<b>SIGNAL: ⏳ WAIT" in out
+
+    def test_passthrough_for_non_synthesis(self):
+        """Non-synthesis content (no NOW:/SIGNAL: markers) passes through unchanged."""
+        before = "$22.65 rips higher, quiet volume."
+        assert layout_synthesis_brief(before) == before
+
+    def test_flip_prefix_on_signal_change(self):
+        """When prev signal differs, ⚡ FLIP prefix appears."""
+        prev = {"signal": "BUY", "consensus": "BULLISH"}
+        out = layout_synthesis_brief(self.SAMPLE, prev_state=prev)
+        assert "⚡ FLIP" in out
+        assert "BUY→WAIT" in out
+        assert "BULLISH→BEARISH" in out
+
+    def test_no_flip_when_same(self):
+        """When prev signal matches, no FLIP prefix."""
+        prev = {"signal": "WAIT", "consensus": "BEARISH"}
+        out = layout_synthesis_brief(self.SAMPLE, prev_state=prev)
+        assert "FLIP" not in out
 
 
 class TestSignalPromptWiring:

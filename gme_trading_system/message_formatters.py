@@ -169,6 +169,109 @@ _FIELD_EMOJIS = {
 _PREPENDED_EMOJIS = "🟢🟡🔴⚪⏳📈📉↔️"
 
 
+def layout_synthesis_brief(text: str, prev_state: dict | None = None) -> str:
+    """Reformat the 3-line NOW/NEXT/SIGNAL brief for mobile readability.
+
+    SIGNAL goes to the top (bold), then NOW and NEXT each get bullet-listed
+    fields one per line. Single-line non-synthesis content passes through
+    unchanged so this is safe to call on every agent voice.
+
+    If `prev_state` is provided with 'consensus' and/or 'signal' keys and
+    they differ from the current brief, prefixes the SIGNAL line with a
+    ⚡ FLIP marker plus the prior value — material changes pop out.
+    """
+    if not text or "NOW:" not in text.upper() or "SIGNAL:" not in text.upper():
+        return text
+
+    lines = [ln for ln in text.split("\n") if ln.strip()]
+    now_line = next_line = signal_line = None
+    other_lines = []
+    for ln in lines:
+        u = ln.strip().upper()
+        if u.startswith("NOW:"):
+            now_line = ln.strip()
+        elif u.startswith("NEXT:"):
+            next_line = ln.strip()
+        elif u.startswith("SIGNAL:"):
+            signal_line = ln.strip()
+        else:
+            other_lines.append(ln.strip())
+
+    def _split_fields(body: str) -> list[str]:
+        return [f.strip() for f in body.split("|") if f.strip()]
+
+    parts: list[str] = []
+
+    # SIGNAL on top, bold, optional ⚡ FLIP prefix on direction change
+    if signal_line:
+        flip_prefix = ""
+        if prev_state:
+            cur_signal = _extract_signal_action(signal_line)
+            cur_consensus = _extract_consensus_dir(next_line or "")
+            prev_signal = prev_state.get("signal")
+            prev_consensus = prev_state.get("consensus")
+            flips = []
+            if prev_signal and cur_signal and prev_signal != cur_signal:
+                flips.append(f"SIGNAL {prev_signal}→{cur_signal}")
+            if prev_consensus and cur_consensus and prev_consensus != cur_consensus:
+                flips.append(f"CONSENSUS {prev_consensus}→{cur_consensus}")
+            if flips:
+                flip_prefix = f"⚡ FLIP ({', '.join(flips)})\n"
+        parts.append(f"{flip_prefix}<b>{signal_line}</b>")
+
+    if now_line:
+        body = now_line[len("NOW:"):].strip()
+        parts.append("📊 <b>NOW</b>")
+        parts.extend(f"• {f}" for f in _split_fields(body))
+
+    if next_line:
+        body = next_line[len("NEXT:"):].strip()
+        parts.append("🔮 <b>NEXT</b>")
+        parts.extend(f"• {f}" for f in _split_fields(body))
+
+    parts.extend(other_lines)
+    return "\n".join(parts)
+
+
+def _extract_signal_action(signal_line: str) -> str | None:
+    m = re.search(r"SIGNAL:\s*(?:[⚡🟢🟡🔴⚪⏳📈📉]+\s*)*(\w+)", signal_line, flags=re.IGNORECASE)
+    return m.group(1).upper() if m else None
+
+
+def _extract_consensus_dir(next_line: str) -> str | None:
+    m = re.search(r"CONSENSUS:\s*(?:[🟢🟡🔴⚪]+\s*)*(\w+)", next_line, flags=re.IGNORECASE)
+    return m.group(1).upper() if m else None
+
+
+def decimal_confidence_to_percent(text: str) -> str:
+    """Display-layer: rewrite TREND/PREDICTION decimal strengths as percentages.
+
+    Storage stays canonical (`TREND: DOWN 0.55`, parser expects 0.0-1.0).
+    Display shows `TREND: DOWN 55%` so it reads consistently with CONSENSUS.
+    Only converts decimals < 1.0; integers and already-% values pass through.
+    """
+    if not text:
+        return text
+
+    def _sub(match):
+        label = match.group("label")
+        word = match.group("word")
+        num_str = match.group("num")
+        try:
+            num = float(num_str)
+        except ValueError:
+            return match.group(0)
+        if num >= 1.0:
+            return match.group(0)
+        return f"{label}: {word} {int(round(num * 100))}%"
+
+    return re.sub(
+        r"(?P<label>TREND|PREDICTION):\s*(?P<word>\w+)\s+(?P<num>0?\.\d+)\b",
+        _sub,
+        text,
+    )
+
+
 def colorize_status_emojis(text: str) -> str:
     """Prepend a colored emoji before each canonical status word.
 

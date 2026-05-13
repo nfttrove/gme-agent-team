@@ -110,20 +110,28 @@ def _is_stale(ts: str, max_age_minutes: int) -> bool:
         return True
 
 
-def _format(v: Voice, content: str, ts: str) -> str:
+def _format(v: Voice, content: str, ts: str, prev_state: dict | None = None) -> str:
     # Strip HTML-special chars that break Telegram parse_mode=HTML
     safe = (content or "").replace("<", "&lt;").replace(">", "&gt;").strip()
-    # Prepend coloured emojis to canonical status words (STRUCTURAL / CONSENSUS /
-    # SIGNAL / PREDICTION / TREND). Display-layer only — the word stays so the
-    # Synthesis parser still ingests it.
+    # Display-layer transforms — canonical content stays in agent_logs:
+    #   1) colorize_status_emojis: prepend 🟢🟡🔴 etc. before status words
+    #   2) decimal_confidence_to_percent: TREND DOWN 0.55 → TREND DOWN 55%
+    #   3) layout_synthesis_brief: SIGNAL on top (bold), NOW/NEXT as bullets,
+    #      optional ⚡ FLIP marker when consensus/signal direction changed
     try:
-        from message_formatters import colorize_status_emojis
+        from message_formatters import (
+            colorize_status_emojis,
+            decimal_confidence_to_percent,
+            layout_synthesis_brief,
+        )
         safe = colorize_status_emojis(safe)
+        safe = decimal_confidence_to_percent(safe)
+        safe = layout_synthesis_brief(safe, prev_state=prev_state)
     except Exception:
         pass
-    # Keep it readable — cap at 500 chars (emoji prepends add ~5-10 chars per match)
-    if len(safe) > 540:
-        safe = safe[:537] + "..."
+    # Keep it readable — emoji prepends + bullet layout add bytes, raise the cap
+    if len(safe) > 800:
+        safe = safe[:797] + "..."
     from datetime import date
     if len(ts) >= 16:
         ts_date = ts[:10]
@@ -181,7 +189,24 @@ def forward_pending(db_path: str = DB_PATH) -> dict[str, int]:
                     continue
                 if sent_count >= v.max_per_run:
                     break
-                msg = _format(v, content or "", ts or "")
+                # Flip detection: for Synthesis, pull the previous brief's
+                # consensus + signal action so the formatter can flag direction
+                # changes. Other voices don't have a flip concept.
+                prev_state = None
+                if v.agent_name == "Synthesis":
+                    prev_row = conn.execute(
+                        "SELECT content FROM agent_logs "
+                        "WHERE agent_name='Synthesis' AND task_type='synthesis' "
+                        "AND status='ok' AND id < ? ORDER BY id DESC LIMIT 1",
+                        (row_id,),
+                    ).fetchone()
+                    if prev_row and prev_row[0]:
+                        from message_formatters import _extract_consensus_dir, _extract_signal_action
+                        prev_state = {
+                            "consensus": _extract_consensus_dir(prev_row[0]),
+                            "signal": _extract_signal_action(prev_row[0]),
+                        }
+                msg = _format(v, content or "", ts or "", prev_state=prev_state)
                 ok = notifier._send(msg)
                 if not ok:
                     log.warning(f"[voice] send failed for {v.agent_name} id={row_id}; "

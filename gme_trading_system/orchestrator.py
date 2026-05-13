@@ -2348,8 +2348,11 @@ def run_synthesis():
         # the channel saw 4+ identical briefs in a row. See post-LLM block below.
 
         logs_block = "\n".join(f"  {name}: {content}" for name, content in per_agent.items())
-        # PRICE token is pre-formatted from market fact — LLM must use it verbatim
-        price_token = f"${fact['price']:.2f} {fact['direction'].lower()}"
+        # PRICE token is pre-formatted from market fact — LLM must use it verbatim.
+        # Includes the day-on-day pct so 'falling' becomes quantitative ('-0.4%').
+        pct = fact.get('pct_change', 0.0) or 0.0
+        arrow = "🔻" if pct < -0.5 else ("🔺" if pct > 0.5 else "↔")
+        price_token = f"${fact['price']:.2f} {arrow} {pct:+.2f}%"
         # Volume regime as a comparative anchor for the LLM (rec #6)
         try:
             vol_conn = sqlite3.connect(DB_PATH)
@@ -2419,10 +2422,12 @@ def run_synthesis():
             write_log("Synthesis", f"malformed brief: {brief[:200]}", "synthesis", "error")
             return
 
-        # Safety net: force correct PRICE token even if LLM drifted
+        # Safety net: force correct PRICE token even if LLM drifted.
+        # Pattern matches PRICE: $XX.XX followed by anything until the next pipe
+        # or newline, so the new arrow/% suffix doesn't slip past the cleanup.
         import re
         brief = re.sub(
-            r'PRICE:\s*\$[\d.]+\s*\w*',
+            r'PRICE:\s*\$[\d.]+[^|\n]*',
             f'PRICE: {price_token}',
             brief,
             count=1,
