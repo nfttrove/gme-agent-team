@@ -283,11 +283,14 @@ class TestDailySummaryWording:
         assert "Learner debrief" not in text
         assert "Graduated lessons" not in text
 
-    def test_replacement_text_present(self):
-        """Given notifier source, when grepping, then 'Daily review done' present."""
+    def test_daily_summary_uses_burst_format(self):
+        """Given notifier source, when grepping, then daily summary uses burst."""
         notifier_path = Path(__file__).resolve().parent.parent / "notifier.py"
         text = notifier_path.read_text()
-        assert "Daily review done" in text
+        # Burst-format rewrite (2026-05-13) replaced the prose-style daily
+        # summary with format_summary_burst(). The CLOSE-burst output is
+        # trader-readable by construction (compact P&L + win-rate, no jargon).
+        assert "format_summary_burst" in text
 
 
 # ── Consensus clamp tests (no more 100% overclaim) ──────────────────────────
