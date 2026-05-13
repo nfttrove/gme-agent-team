@@ -6,7 +6,9 @@ Defined in [gme_trading_system/agents.py](gme_trading_system/agents.py); schedul
 
 ## Active window
 
-Six agents are decorated with `@active_window_required` and **silently skip outside 07:30–18:00 ET, Mon–Fri**. They are: Valerie, Chatty, Newsie, Pattern, Trendy, Futurist, GeoRisk, Synthesis. Daily/weekly cron jobs run regardless.
+Cycles decorated with `@active_window_required` **silently skip outside 08:30–17:00 ET, Mon–Fri** (excluding US market holidays). The decorated cycles are: Valerie, Trendy, Futurist, Synthesis, Pattern (incl. intraday), Newsie (signal cycle), GeoRisk, and Briefing (4-hour periodic brief). Chatty and Newsie's analysis cycle (`run_news`) run regardless of the window. Daily/weekly cron jobs (Boss huddle, CTO Trove, weekend digests, EOD reviews) also run regardless. The window is defined in [market_hours.py](gme_trading_system/market_hours.py) `is_active_window()`.
+
+The mapping between agents and decorated cycle functions, plus the time literals, is enforced by [tests/test_docs_architecture.py](gme_trading_system/tests/test_docs_architecture.py) — if you change the decorator set or the window, update this paragraph (or vice versa) and the fitness test will tell you.
 
 ## Confidence scoring
 
