@@ -517,31 +517,87 @@ def _try_newsie_burst(content: str, ts: str) -> str | None:
 
 
 def _try_cto_burst(content: str, ts: str) -> str | None:
-    """CTO Trove emits multi-line: 'GME Trove Score: 65.4/100 ★★★★☆ = unchanged ...'"""
+    """CTO Trove emits multi-line thesis intelligence. Extract any of:
+        - numeric score + star rating + change vs prior
+        - immunity check (passing/failing)
+        - net cash %
+        - Altman Z (bankruptcy distance)
+        - insider 3y buys ($)
+    Emits whatever survived (resilient/partial). Returns None only if no
+    Trove score line at all — that's the minimum signal for a CTO burst.
+
+    Each parser pulls fields independently so prose phrasing can drift
+    without breaking the burst (mirrors the resilient-parsing approach
+    used elsewhere in this module).
+    """
     import re as _re
-    m = _re.search(
-        r"GME Trove Score:\s*([\d.]+)/100\s*([★☆]+)\s*=\s*(\w+)",
+
+    score_m = _re.search(
+        r"(?:GME\s+)?Trove\s*Score:\s*([\d.]+)/100\s*([★☆]+)?\s*=?\s*(\w+)?",
         content, flags=_re.IGNORECASE
     )
-    if not m:
-        return None
-    score = float(m.group(1))
-    stars = m.group(2)
-    delta = m.group(3)
-    # Optional immunity line: 'Immunity 4/5: ...'
+    if not score_m:
+        return None  # minimum signal missing
+    score = float(score_m.group(1))
+    stars = score_m.group(2) or ""
+    delta = score_m.group(3) or ""
+
+    # Immunity: 'Immunity 4/5: ✗ Debt-free · ✓ Cash>$1B · ...'
     imm_m = _re.search(r"Immunity\s+(\d+)/(\d+):\s*(.+?)(?:\n|$)", content, flags=_re.IGNORECASE)
-    immunity_line = None
+    immunity_passed = imm_m.group(1) if imm_m else None
+    immunity_total = imm_m.group(2) if imm_m else None
+    immunity_failing = []
     if imm_m:
-        passed, total = imm_m.group(1), imm_m.group(2)
-        failing = [seg.strip() for seg in imm_m.group(3).split("·")
-                   if seg.strip().startswith("✗")]
-        immunity_line = f"Immunity: {passed}/{total}"
-        if failing:
-            immunity_line += f" ({', '.join(failing)})"
-    lines = [f"🛡️ {_ny_hhmm(ts)}", "",
-             f"Trove Score: {score}/100 {stars} ({delta})"]
-    if immunity_line:
-        lines.append(immunity_line)
+        immunity_failing = [seg.strip().lstrip("✗").strip()
+                            for seg in imm_m.group(3).split("·")
+                            if seg.strip().startswith("✗")]
+
+    # Net Cash: 'Net Cash 46.4%' from the Inputs line
+    net_cash_m = _re.search(r"Net Cash\s+([\d.]+)%", content, flags=_re.IGNORECASE)
+    net_cash = float(net_cash_m.group(1)) if net_cash_m else None
+
+    # Altman Z: 'Altman Z 8.3' — bankruptcy distance (>3 = safe, <1.8 = distress)
+    altman_m = _re.search(r"Altman\s*Z\s+([\d.]+)", content, flags=_re.IGNORECASE)
+    altman_z = float(altman_m.group(1)) if altman_m else None
+
+    # Insider 3y dollars: 'Insider 3y buys: 21 purchases / $44.2M'
+    insider_m = _re.search(
+        r"Insider\s+3y\s+buys?:\s*(\d+)\s*purchases?\s*/\s*\$?([\d.]+[MK]?)",
+        content, flags=_re.IGNORECASE
+    )
+    insider_count = int(insider_m.group(1)) if insider_m else None
+    insider_dollars = insider_m.group(2) if insider_m else None
+
+    lines = [f"🛡️ {_ny_hhmm(ts)}", ""]
+
+    # Headline: score + delta. Make delta scannable.
+    headline = f"Trove: {score:.1f}/100"
+    if stars:
+        headline += f" {stars}"
+    if delta:
+        headline += f" ({delta})"
+    lines.append(headline)
+
+    # Capital health: net cash + altman z on one line if both present
+    cap_parts = []
+    if net_cash is not None:
+        cap_parts.append(f"Net Cash: {net_cash:.0f}%")
+    if altman_z is not None:
+        cap_parts.append(f"Altman Z: {altman_z:.1f}")
+    if cap_parts:
+        lines.append(" | ".join(cap_parts))
+
+    # Insider conviction
+    if insider_count is not None and insider_dollars:
+        lines.append(f"Insider 3y: {insider_count} buys / ${insider_dollars}")
+
+    # Immunity (shown last so failing items pop)
+    if immunity_passed and immunity_total:
+        imm_line = f"Immunity: {immunity_passed}/{immunity_total}"
+        if immunity_failing:
+            imm_line += f" (✗ {', '.join(immunity_failing[:2])})"
+        lines.append(imm_line)
+
     return "\n".join(lines)
 
 

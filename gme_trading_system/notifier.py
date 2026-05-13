@@ -376,16 +376,50 @@ def notify_signal_alert(agent_name: str, signal_type: str, confidence: float,
     # Infer direction from signal_type or entry vs target
     direction = "BULLISH" if take_profit and entry_price and take_profit > entry_price else "BEARISH"
 
-    # Parse reasons from reasoning string (bullet-separated or comma-separated)
+    # Parse reasons from reasoning string. Orchestrator commonly builds
+    # reasoning as pipe-separated metadata-style strings (e.g.
+    # "DOWN trend | S=$21.98 | R=$25.25 — Price below VWAP, EMA21"). Split on
+    # the most "structural" separator first, then clean each part: drop
+    # metadata-like fragments (S=$X, R=$X, "X trend", "Consensus: X") since
+    # those duplicate fields already shown elsewhere in the burst.
+    import re as _re
     reasons = []
     if reasoning:
-        # Simple heuristic: split on •, -, or comma and take first 3
-        for sep in ["•", "-", ","]:
+        # Pick the separator that yields the most parts (>=2)
+        candidate_seps = ["•", "\n", "|", ";", " — ", ", "]
+        parts = [reasoning]
+        for sep in candidate_seps:
             if sep in reasoning:
-                reasons = [r.strip() for r in reasoning.split(sep) if r.strip()][:3]
-                break
-        if not reasons:
-            reasons = [reasoning[:60]]  # Fallback: use first 60 chars
+                split_attempt = [r.strip() for r in reasoning.split(sep) if r.strip()]
+                if len(split_attempt) >= 2:
+                    parts = split_attempt
+                    break
+
+        # Strip metadata-like fragments that duplicate fields shown in the
+        # header (direction, target). These leak from orchestrator's
+        # pipe-separated reasoning construction.
+        _drop_patterns = [
+            _re.compile(r"^(BULLISH|BEARISH|NEUTRAL|UP|DOWN|SIDEWAYS)\s+trend\s*$", _re.IGNORECASE),
+            _re.compile(r"^S\s*=\s*\$?[\d.]+\s*$", _re.IGNORECASE),
+            _re.compile(r"^R\s*=\s*\$?[\d.]+\s*$", _re.IGNORECASE),
+            _re.compile(r"^Consensus:\s*\w+\s*$", _re.IGNORECASE),
+            _re.compile(r"^Sentiment:\s*[+-]?[\d.]+\s*$", _re.IGNORECASE),
+            _re.compile(r"^Trend:\s*\w+\s*$", _re.IGNORECASE),
+        ]
+        cleaned = []
+        for p in parts:
+            # Strip leading metadata tokens within a part: "S=$X.XX, Y" → "Y"
+            p = _re.sub(r"^S\s*=\s*\$?[\d.]+\s*,?\s*", "", p, flags=_re.IGNORECASE)
+            p = _re.sub(r"^R\s*=\s*\$?[\d.]+\s*,?\s*", "", p, flags=_re.IGNORECASE)
+            p = p.strip(" .,—-")
+            if not p or any(pat.match(p) for pat in _drop_patterns):
+                continue
+            cleaned.append(p)
+
+        reasons = cleaned[:3]
+        # If everything was metadata (e.g. Synthesis's "Consensus: X | Sentiment: Y |
+        # Trend: Z" — all redundant with the header), emit the burst with no
+        # bullets rather than echoing the metadata back as one ugly line.
 
     # Format as single SIGNAL burst message — use the agent's own emoji as identity
     msg = format_signal_burst(
