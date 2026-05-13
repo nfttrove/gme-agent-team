@@ -134,6 +134,26 @@ def _db_scalar(sql: str, params=()):
         return None
 
 
+def _table_columns(conn: sqlite3.Connection, table: str) -> set[str]:
+    """Return column names for a SQLite table, or an empty set if absent."""
+    try:
+        return {row[1] for row in conn.execute(f"PRAGMA table_info({table})").fetchall()}
+    except Exception:
+        return set()
+
+
+def _table_exists(conn: sqlite3.Connection, table: str) -> bool:
+    """True when a SQLite table exists in the active bot database."""
+    try:
+        row = conn.execute(
+            "SELECT 1 FROM sqlite_master WHERE type='table' AND name=?",
+            (table,),
+        ).fetchone()
+        return bool(row)
+    except Exception:
+        return False
+
+
 def _get_frequency() -> str:
     freq = _db_scalar("SELECT value FROM bot_settings WHERE key='notification_frequency'")
     return freq or "medium"
@@ -1181,44 +1201,72 @@ def handle_command(text: str, user: str = "team"):
                     snippet = row["content"][:220].replace("\n", " ").strip()
                     agent_lines.append(f"  {name}: {snippet}")
 
-            # News sentiment tally (last 24h)
+            news_cols = _table_columns(conn, "news_analysis")
+            if "sentiment_label" in news_cols:
+                sentiment_expr = "COALESCE(sentiment_label, 'unknown')"
+            elif "sentiment_score" in news_cols:
+                sentiment_expr = (
+                    "CASE WHEN sentiment_score > 0.15 THEN 'positive' "
+                    "WHEN sentiment_score < -0.15 THEN 'negative' "
+                    "ELSE 'neutral' END"
+                )
+            else:
+                sentiment_expr = "'unknown'"
+
+            # News sentiment tally (last 24h). Some test/old local DBs only
+            # carry sentiment_score, so derive labels instead of crashing.
             news_rows = conn.execute(
-                "SELECT sentiment_label, COUNT(*) FROM news_analysis "
+                f"SELECT {sentiment_expr} AS sentiment_label, COUNT(*) "
+                "FROM news_analysis "
                 "WHERE timestamp > datetime('now','-24 hours') "
                 "GROUP BY sentiment_label"
-            ).fetchall()
+            ).fetchall() if _table_exists(conn, "news_analysis") else []
             news_tally = ", ".join(f"{r[0]}: {r[1]}" for r in news_rows) or "no recent news"
             top_headline = conn.execute(
-                "SELECT headline, sentiment_label FROM news_analysis "
+                f"SELECT headline, {sentiment_expr} AS sentiment_label FROM news_analysis "
                 "WHERE timestamp > datetime('now','-24 hours') "
                 "ORDER BY timestamp DESC LIMIT 1"
-            ).fetchone()
+            ).fetchone() if _table_exists(conn, "news_analysis") else None
 
-            # Latest prediction
-            pred = conn.execute(
-                "SELECT horizon, predicted_price, confidence, reasoning "
-                "FROM predictions ORDER BY timestamp DESC LIMIT 1"
-            ).fetchone()
-            pred_line = (
-                f"{pred['horizon']} target ${pred['predicted_price']:.2f} "
-                f"({pred['confidence']:.0%}) — {pred['reasoning'][:120]}"
-                if pred else "no active prediction"
-            )
+            # Latest prediction. Older fixtures may not include a reasoning
+            # column; keep the SWOT usable with the available target/confidence.
+            pred_cols = _table_columns(conn, "predictions")
+            pred = None
+            if {"horizon", "predicted_price", "confidence"}.issubset(pred_cols):
+                reasoning_select = "reasoning" if "reasoning" in pred_cols else "'' AS reasoning"
+                pred = conn.execute(
+                    f"SELECT horizon, predicted_price, confidence, {reasoning_select} "
+                    "FROM predictions ORDER BY timestamp DESC LIMIT 1"
+                ).fetchone()
+            pred_line = "no active prediction"
+            if pred:
+                reasoning = (pred["reasoning"] or "no reasoning captured")[:120]
+                pred_line = (
+                    f"{pred['horizon']} target ${pred['predicted_price']:.2f} "
+                    f"({pred['confidence']:.0%}) — {reasoning}"
+                )
 
-            # Latest options snapshot
-            opts = conn.execute(
-                "SELECT max_pain_strike, put_call_ratio, net_oi_bias, expiration "
-                "FROM options_snapshots ORDER BY timestamp DESC LIMIT 1"
-            ).fetchone()
-            opts_line = (
-                f"max-pain ${opts['max_pain_strike']:.2f} for {opts['expiration']}, "
-                f"P/C {opts['put_call_ratio']:.2f}, bias {opts['net_oi_bias']}"
-                if opts else "no options snapshot"
-            )
+            # Latest options snapshot (optional in fresh/test databases).
+            opts = None
+            if _table_exists(conn, "options_snapshots"):
+                opts = conn.execute(
+                    "SELECT max_pain_strike, put_call_ratio, net_oi_bias, expiration "
+                    "FROM options_snapshots ORDER BY timestamp DESC LIMIT 1"
+                ).fetchone()
+            opts_line = "no options snapshot"
+            if opts:
+                max_pain = opts["max_pain_strike"]
+                pc_ratio = opts["put_call_ratio"]
+                max_pain_str = f"${max_pain:.2f}" if max_pain is not None else "n/a"
+                pc_ratio_str = f"{pc_ratio:.2f}" if pc_ratio is not None else "n/a"
+                opts_line = (
+                    f"max-pain {max_pain_str} for {opts['expiration'] or 'n/a'}, "
+                    f"P/C {pc_ratio_str}, bias {opts['net_oi_bias'] or 'n/a'}"
+                )
             conn.close()
 
             headline_line = (
-                f"{top_headline['sentiment_label']}: {top_headline['headline'][:160]}"
+                f"{top_headline['sentiment_label']}: {(top_headline['headline'] or '')[:160]}"
                 if top_headline else "n/a"
             )
             agent_block = "\n".join(agent_lines) if agent_lines else "  (no recent agent logs)"

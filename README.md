@@ -77,6 +77,7 @@ Everything happens in the configured Telegram chat. Key commands:
 | `/standup` | Paper-trade win rates + 30-day signal accuracy |
 | `/signals [N]` | Recent signals with live TP/SL outcomes |
 | `/brief` | Today's strategy brief from the Synthesis agent |
+| `/swot` | Owner-only GME strengths/weaknesses/opportunities/threats synthesis from recent agent intel |
 | `/force <agent>` | Run an agent on demand (e.g. `/force futurist`) |
 | `/learn "<rule>" --why "<reason>"` | Teach the agents a lesson — feeds episodic memory |
 | `/candidates`, `/graduate <id>`, `/reject <id>` | Triage lesson candidates |
