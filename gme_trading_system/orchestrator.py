@@ -2423,11 +2423,12 @@ def run_synthesis():
             return
 
         # Safety net: force correct PRICE token even if LLM drifted.
-        # Pattern matches PRICE: $XX.XX followed by anything until the next pipe
-        # or newline, so the new arrow/% suffix doesn't slip past the cleanup.
+        # Non-greedy match up to (but not including) trailing whitespace before
+        # a pipe or end-of-line, so the existing ' | ' separator stays intact
+        # instead of getting consumed and producing 'PRICE: ...%| DATA: ...'.
         import re
         brief = re.sub(
-            r'PRICE:\s*\$[\d.]+[^|\n]*',
+            r'PRICE:\s*\$[\d.]+[^|\n]*?(?=\s*(?:[|\n]|$))',
             f'PRICE: {price_token}',
             brief,
             count=1,

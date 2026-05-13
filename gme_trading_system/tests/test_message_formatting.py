@@ -615,6 +615,34 @@ class TestLayoutSynthesisBrief:
         assert "FLIP" not in out
 
 
+class TestPriceTokenSafetyNet:
+    """The PRICE token safety-net regex (orchestrator.py) must preserve the
+    trailing space before the pipe separator. A greedy [^|\\n]* swallowed
+    the space and produced 'PRICE: $X 🔻 -1%| DATA: ...' in live output."""
+
+    PATTERN = r'PRICE:\s*\$[\d.]+[^|\n]*?(?=\s*(?:[|\n]|$))'
+
+    def _apply(self, text: str, token: str = "$22.16 🔻 -1.16%") -> str:
+        import re
+        return re.sub(self.PATTERN, f"PRICE: {token}", text, count=1, flags=re.IGNORECASE)
+
+    def test_preserves_space_before_pipe(self):
+        """' | ' separator stays intact after the substitution."""
+        out = self._apply("PRICE: $22.83 falling | DATA: clean")
+        assert "% | DATA" in out
+        assert "%|" not in out
+
+    def test_handles_end_of_line(self):
+        """Substitution at end-of-string works."""
+        out = self._apply("PRICE: $22.16 falling")
+        assert out == "PRICE: $22.16 🔻 -1.16%"
+
+    def test_handles_newline(self):
+        """Substitution before a newline (multi-line brief) works."""
+        out = self._apply("PRICE: $22.16 falling\nNEXT: CONSENSUS...")
+        assert out == "PRICE: $22.16 🔻 -1.16%\nNEXT: CONSENSUS..."
+
+
 class TestSignalPromptWiring:
     """The SIGNAL row must be specified in the Synthesis prompt with a closed
     suffix vocabulary and the 95% clamp instruction. These are source-level
