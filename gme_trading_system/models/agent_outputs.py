@@ -12,7 +12,10 @@ from .enums import TradeAction
 
 Bias = Literal["BULLISH", "BEARISH", "NEUTRAL", "HOLD"]
 Consensus = Literal["BULLISH", "BEARISH", "NEUTRAL"]
-StructuralStatus = Literal["GREEN", "YELLOW", "RED"]
+# CAUTION is the canonical mid-tier as of 2026-05-13 (replaces YELLOW for
+# readability — reads as a state, not a colour). YELLOW kept in the union so
+# historical agent_logs rows still validate when re-parsed by episodic memory.
+StructuralStatus = Literal["GREEN", "CAUTION", "YELLOW", "RED"]
 TrendDirection = Literal["UP", "DOWN", "SIDEWAYS", "up", "down", "sideways"]
 
 
@@ -71,7 +74,7 @@ class SynthesisBrief(BaseModel):
     trend_strength: float = Field(0.0, ge=0.0, le=1.0)
     prediction_bias: Bias = "HOLD"
     prediction_confidence: float = Field(0.5, ge=0.0, le=1.0)
-    structural_status: StructuralStatus = "YELLOW"
+    structural_status: StructuralStatus = "CAUTION"
     consensus: Consensus = "NEUTRAL"
     consensus_pct: float = Field(0.5, ge=0.0, le=1.0)
     signal_type: str = "synthesis_consensus"

@@ -326,8 +326,8 @@ class SECScanner:
             debt = financials.get("long_term_debt") or 0
             cash = financials.get("cash") or 0
 
-            debt_status = "GREEN" if debt == 0 else ("YELLOW" if debt < 500_000_000 else "RED")
-            cash_status = "GREEN" if cash >= 1_000_000_000 else ("YELLOW" if cash >= 500_000_000 else "RED")
+            debt_status = "GREEN" if debt == 0 else ("CAUTION" if debt < 500_000_000 else "RED")
+            cash_status = "GREEN" if cash >= 1_000_000_000 else ("CAUTION" if cash >= 500_000_000 else "RED")
 
             report["checks"]["debt_free"] = {
                 "status": debt_status,

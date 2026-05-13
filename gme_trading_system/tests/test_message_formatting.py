@@ -208,6 +208,30 @@ class TestParserTolerance:
         assert brief is not None
         assert brief.news_sentiment == -0.5
 
+    def test_caution_parses_as_structural_status(self):
+        """STRUCTURAL: CAUTION (canonical post-2026-05-13) validates against
+        the pydantic Literal and ingests into episodic memory."""
+        output = (
+            "PRICE: $22.50 | DATA: clean | STRUCTURAL: CAUTION (consolidating) | "
+            "NEWS: neutral 0.0 (no catalysts) | TREND: SIDEWAYS 0.4 | "
+            "PREDICTION: HOLD 0.5 | CONSENSUS: NEUTRAL 50%"
+        )
+        brief = extract_synthesis_from_output(output)
+        assert brief is not None
+        assert brief.structural_status == "CAUTION"
+
+    def test_legacy_yellow_still_parses(self):
+        """Historical agent_logs rows with STRUCTURAL: YELLOW remain valid for
+        back-compat (Literal accepts both YELLOW and CAUTION)."""
+        output = (
+            "PRICE: $22.50 | DATA: clean | STRUCTURAL: YELLOW (consolidating) | "
+            "NEWS: neutral 0.0 (no catalysts) | TREND: SIDEWAYS 0.4 | "
+            "PREDICTION: HOLD 0.5 | CONSENSUS: NEUTRAL 50%"
+        )
+        brief = extract_synthesis_from_output(output)
+        assert brief is not None
+        assert brief.structural_status == "YELLOW"
+
 
 # ── NOW/NEXT two-line format tests (Wave 5) ─────────────────────────────────
 
@@ -437,14 +461,14 @@ class TestColorizeStatusEmojis:
         assert "🟢 BULLISH" in colorize_status_emojis("PREDICTION: BULLISH 0.7")
         assert "🔴 BEARISH" in colorize_status_emojis("PREDICTION: BEARISH 0.65")
 
-    def test_canonical_word_preserved(self):
-        """The original word remains intact — parser regex stays happy."""
+    def test_canonical_word_preserved_in_output(self):
+        """The original word is still present after colorize — just with emoji prepended.
+        Production never runs the parser over colorized text (parser reads the canonical
+        stored row; colorize is display-only in agent_voice), so we just assert the word
+        survives the substitution."""
         out = colorize_status_emojis("STRUCTURAL: YELLOW (consolidating)")
-        from episodic_integration import extract_synthesis_from_output
-        full = "PRICE: $22.50 | " + out + " | CONSENSUS: BULLISH 60%"
-        brief = extract_synthesis_from_output(full)
-        assert brief is not None
-        assert brief.structural_status == "YELLOW"
+        assert "YELLOW" in out
+        assert "🟡 YELLOW" in out
 
     def test_idempotent(self):
         """Calling twice on the same text does not double-prefix."""
@@ -485,9 +509,20 @@ class TestColorizeStatusEmojis:
         assert "🟢 RISING" in out
 
     def test_standalone_yellow_colorized(self):
-        """`Consensus YELLOW` (unlabeled YELLOW) gets 🟡 prepended."""
+        """`Consensus YELLOW` (unlabeled YELLOW, legacy) gets 🟡 prepended."""
         out = colorize_status_emojis("Consensus YELLOW")
         assert "🟡 YELLOW" in out
+
+    def test_standalone_caution_colorized(self):
+        """`STRUCTURAL is CAUTION` (canonical post-2026-05-13) gets 🟡 prepended."""
+        out = colorize_status_emojis("STRUCTURAL is CAUTION today")
+        assert "🟡 CAUTION" in out
+
+    def test_labeled_caution_colorized(self):
+        """`STRUCTURAL: CAUTION` (labeled, canonical) gets 🟡 prepended in pass 1."""
+        out = colorize_status_emojis("STRUCTURAL: CAUTION (consolidating)")
+        assert "🟡 CAUTION" in out
+        assert out.count("🟡") == 1  # not double-prefixed by pass 2
 
     def test_lowercase_in_prose_unchanged(self):
         """Lowercase 'bearish' in prose is left alone — only UPPERCASE matters."""

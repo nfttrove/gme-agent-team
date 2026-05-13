@@ -113,8 +113,11 @@ def normalize_synthesis_capitalization(brief: str) -> str:
                   "SIGNAL"):
         brief = re.sub(rf"\b{label}\b\s*:", f"{label}:", brief, flags=re.IGNORECASE)
     # Directional words — uppercase. Include SIGNAL actions (BUY/SELL/HOLD/WAIT).
+    # CAUTION is the canonical mid-tier STRUCTURAL value (post 2026-05-13);
+    # YELLOW is retained for historical agent_logs rows still in episodic memory.
     for word in ("BULLISH", "BEARISH", "NEUTRAL", "UP", "DOWN", "SIDEWAYS",
-                 "GREEN", "YELLOW", "RED", "BUY", "SELL", "HOLD", "WAIT"):
+                 "GREEN", "CAUTION", "YELLOW", "RED",
+                 "BUY", "SELL", "HOLD", "WAIT"):
         brief = re.sub(rf"\b{word}\b", word, brief, flags=re.IGNORECASE)
     return brief
 
@@ -152,10 +155,12 @@ def coerce_trend_strength(brief: str) -> str:
 
 
 # Display-layer emoji prefixes for the canonical status words. The text stays
-# in place so the parser keeps ingesting (`STRUCTURAL: YELLOW` regex still
+# in place so the parser keeps ingesting (`STRUCTURAL: CAUTION` regex still
 # matches); the emoji is purely a visual scannability win for Telegram readers.
+# STRUCTURAL has both CAUTION (canonical from 2026-05-13) and YELLOW (legacy)
+# mapped to 🟡 so old agent_logs rows still render coloured.
 _FIELD_EMOJIS = {
-    "STRUCTURAL": {"GREEN": "🟢", "YELLOW": "🟡", "RED": "🔴"},
+    "STRUCTURAL": {"GREEN": "🟢", "CAUTION": "🟡", "YELLOW": "🟡", "RED": "🔴"},
     "CONSENSUS":  {"BULLISH": "🟢", "BEARISH": "🔴", "NEUTRAL": "⚪"},
     "PREDICTION": {"BULLISH": "🟢", "BEARISH": "🔴", "NEUTRAL": "⚪",
                    "HOLD": "🟡", "BUY": "🟢", "SELL": "🔴"},
@@ -174,7 +179,7 @@ _PREPENDED_EMOJIS = "🟢🟡🔴⚪⏳📈📉↔️"
 # Synthesis's `CONSENSUS: BEARISH`.
 _STANDALONE_STATE_EMOJIS = {
     "BULLISH": "🟢", "BEARISH": "🔴", "NEUTRAL": "⚪",
-    "GREEN": "🟢", "YELLOW": "🟡", "RED": "🔴",
+    "GREEN": "🟢", "CAUTION": "🟡", "YELLOW": "🟡", "RED": "🔴",
     "RISING": "🟢", "FALLING": "🔴",
 }
 
@@ -289,7 +294,7 @@ def colorize_status_emojis(text: str) -> str:
     (regex-anchored on the word) keeps working. Idempotent: won't double-prefix.
 
     Example:
-        STRUCTURAL: YELLOW (consolidating) → STRUCTURAL: 🟡 YELLOW (consolidating)
+        STRUCTURAL: CAUTION (consolidating) → STRUCTURAL: 🟡 CAUTION (consolidating)
         SIGNAL: BUY @ $22.50 (...) → SIGNAL: 🟢 BUY @ $22.50 (...)
     """
     if not text:

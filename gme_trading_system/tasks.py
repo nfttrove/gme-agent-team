@@ -168,7 +168,7 @@ cto_daily_brief_task = Task(
         "  SELECT * FROM structural_signals WHERE ticker='GME' AND filing_date >= date('now','-7 days') ORDER BY confidence DESC\n"
         "Check each of the 6 GME immunity conditions (debt-free, cash>$1B, PE-free board, Cohen control, "
         "no restructuring advisor, profitable). Based on the signals table and your knowledge, "
-        "rate each GREEN / YELLOW / RED.\n\n"
+        "rate each GREEN / CAUTION / RED.\n\n"
 
         "STEP 2 — SHORT WATCHLIST\n"
         "Query structural_signals for non-GME companies with recent signals:\n"
@@ -203,7 +203,7 @@ cto_daily_brief_task = Task(
 
         "Output format:\n"
         "GME_IMMUNITY: {debt_free: GREEN, cash: GREEN, board: GREEN, cohen: GREEN, no_cro: GREEN, profitable: GREEN}\n"
-        "OVERALL_GME_STATUS: GREEN/YELLOW/RED\n"
+        "OVERALL_GME_STATUS: GREEN/CAUTION/RED\n"
         "TOP_SHORT_CANDIDATES: [{ticker, score, action, key_signals}]\n"
         "ANTI_PATTERN_ALERTS: [list]\n"
         "KEY_INVESTORS: {rc_ventures: [alert or 'no new filings'], scion_latest: [top position]}\n"
@@ -317,7 +317,7 @@ def make_synthesis_task(agent, price_str: str, agent_logs_str: str) -> Task:
             "  - Pattern: chart pattern and breakout bias\n"
             "  - Trendy: trend direction and strength\n"
             "  - Futurist: trade bias (BUY/SELL/HOLD) and confidence\n"
-            "  - CTO: structural bias (GREEN/YELLOW/RED)\n"
+            "  - CTO: structural bias (GREEN/CAUTION/RED)\n"
             "  - Social: any tracked account posts (or 'none')\n"
             "  - SafetyGate: PASS or BLOCK\n\n"
             "Consensus pct = share of non-n/a agents agreeing with the direction (e.g. 4 of 6 bearish = 67%).\n"
@@ -325,7 +325,7 @@ def make_synthesis_task(agent, price_str: str, agent_logs_str: str) -> Task:
             "Return ONE line. Labels UPPERCASE; directional values UPPERCASE; front-load CONSENSUS:\n"
             "CONSENSUS: [BULLISH/BEARISH/NEUTRAL] [X]% | PRICE: $XX.XX [trend] | "
             "TREND: [DIRECTION, strength] | PREDICTION: [BIAS, confidence] | "
-            "STRUCTURAL: [GREEN/YELLOW/RED] | DATA: [clean/degraded] | "
+            "STRUCTURAL: [GREEN/CAUTION/RED] | DATA: [clean/degraded] | "
             "NEWS: [sentiment] [score] | PATTERN: [type, bias] | SOCIAL: [alert or none] | "
             "GATE: [PASS/BLOCK]"
         ),
