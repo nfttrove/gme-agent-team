@@ -201,9 +201,80 @@ def _is_stale(ts: str, max_age_minutes: int) -> bool:
         return True
 
 
+def _ny_hhmm(ts: str) -> str:
+    """Return 'HH:MM ET' from an ET ISO timestamp, falling back to current ET."""
+    if len(ts) >= 16:
+        return f"{ts[11:16]} ET"
+    try:
+        from message_formatters_v2 import get_ny_time_short
+        return get_ny_time_short()
+    except Exception:
+        return ts
+
+
+def _try_synthesis_burst(content: str, ts: str) -> str | None:
+    """Parse canonical Synthesis NOW/NEXT/SIGNAL output and emit as compact burst.
+
+    Returns None when the content doesn't look like a Synthesis brief, letting
+    the caller fall through to the legacy prose formatter.
+
+    Canonical format being parsed:
+        NOW: PRICE: $22.09 🔻 -1.49% | DATA: clean | NEWS: NEUTRAL 0.13 | STRUCTURAL: CAUTION
+        NEXT: CONSENSUS: BEARISH 65% | TREND: DOWN 0.6 | PREDICTION: BEARISH 0.55
+        SIGNAL: WAIT — explanation
+    """
+    if not content or "NOW:" not in content.upper() or "SIGNAL:" not in content.upper():
+        return None
+    import re as _re
+
+    def _grab(pattern: str, flags=_re.IGNORECASE) -> _re.Match | None:
+        return _re.search(pattern, content, flags=flags)
+
+    consensus = _grab(r"CONSENSUS:\s*(\w+)\s+(\d+)%?")
+    signal = _grab(r"SIGNAL:\s*(\w+)")
+    trend = _grab(r"TREND:\s*(UP|DOWN|SIDEWAYS)")
+    structural = _grab(r"STRUCTURAL:\s*(GREEN|CAUTION|YELLOW|RED)")
+
+    consensus_dir = consensus.group(1).upper() if consensus else None
+    consensus_pct = int(consensus.group(2)) if consensus else None
+    signal_action = signal.group(1).upper() if signal else None
+    trend_dir = trend.group(1).upper() if trend else None
+    struct_state = structural.group(1).upper() if structural else None
+
+    cons_emoji = {"BULLISH": "🟢", "BEARISH": "🔴", "NEUTRAL": "⚪"}.get(consensus_dir, "⚪")
+    sig_emoji = {"BUY": "🟢", "SELL": "🔴", "HOLD": "🟡", "WAIT": "⏳"}.get(signal_action, "⏳")
+    trend_emoji = {"UP": "📈", "DOWN": "📉", "SIDEWAYS": "↔️"}.get(trend_dir, "↔️")
+    struct_emoji = {"GREEN": "🟢", "CAUTION": "🟡", "YELLOW": "🟡", "RED": "🔴"}.get(struct_state, "⚪")
+
+    lines = [f"🧠 SYNTHESIS | {_ny_hhmm(ts)}", ""]
+    if consensus_dir and consensus_pct is not None:
+        lines.append(f"Consensus: {cons_emoji} {consensus_dir} ({consensus_pct}%)")
+    if signal_action:
+        lines.append(f"Signal: {sig_emoji} {signal_action}")
+    if trend_dir:
+        lines.append(f"Trend: {trend_emoji} {trend_dir}")
+    if struct_state:
+        lines.append(f"Structure: {struct_emoji} {struct_state}")
+
+    # Body must have at least one field beyond the header to be worth emitting
+    if len(lines) <= 2:
+        return None
+    return "\n".join(lines)
+
+
 def _format(v: Voice, content: str, ts: str, prev_state: dict | None = None) -> str:
     # Strip HTML-special chars that break Telegram parse_mode=HTML
     safe = (content or "").replace("<", "&lt;").replace(">", "&gt;").strip()
+
+    # Burst-format path for structured-output agents. Returns the full message
+    # (with its own header + timestamp) so callers should NOT re-wrap. Falls
+    # through to the legacy narrative formatter when None is returned.
+    if v.agent_name == "Synthesis":
+        burst = _try_synthesis_burst(safe, ts)
+        if burst:
+            return burst
+
+    # Legacy narrative path (Chatty's prose, Newsie's commentary, etc.)
     # Display-layer transforms — canonical content stays in agent_logs.
     # ORDER MATTERS: decimal→% must run BEFORE colorize, because colorize
     # injects an emoji between `TREND:` and the word, which would otherwise
