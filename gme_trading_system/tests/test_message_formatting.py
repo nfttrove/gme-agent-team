@@ -21,6 +21,7 @@ from message_formatters import (  # noqa: E402
     clamp_consensus_pct,
     coerce_news_score,
     coerce_trend_strength,
+    colorize_status_emojis,
     escape_html,
     format_consensus,
     format_data_status,
@@ -398,6 +399,76 @@ class TestCoerceNewsScore:
         brief = extract_synthesis_from_output(coerced)
         assert brief is not None
         assert brief.news_sentiment == 0.75
+
+
+class TestColorizeStatusEmojis:
+    """Display-layer transform that prepends coloured emojis before canonical
+    status words. The word stays so the Synthesis parser still ingests it."""
+
+    def test_structural_colors(self):
+        """GREEN/YELLOW/RED get the matching circle emoji prepended."""
+        assert "🟢 GREEN" in colorize_status_emojis("STRUCTURAL: GREEN (cash-rich)")
+        assert "🟡 YELLOW" in colorize_status_emojis("STRUCTURAL: YELLOW (consolidating)")
+        assert "🔴 RED" in colorize_status_emojis("STRUCTURAL: RED (debt-heavy)")
+
+    def test_consensus_direction(self):
+        """BULLISH/BEARISH/NEUTRAL after CONSENSUS get green/red/white circles."""
+        assert "🟢 BULLISH" in colorize_status_emojis("CONSENSUS: BULLISH 65%")
+        assert "🔴 BEARISH" in colorize_status_emojis("CONSENSUS: BEARISH 67%")
+        assert "⚪ NEUTRAL" in colorize_status_emojis("CONSENSUS: NEUTRAL 50%")
+
+    def test_signal_action(self):
+        """BUY/SELL/HOLD/WAIT after SIGNAL get the matching icon."""
+        assert "🟢 BUY" in colorize_status_emojis("SIGNAL: BUY @ $22.50 (...)")
+        assert "🔴 SELL" in colorize_status_emojis("SIGNAL: SELL @ $22.50 (...)")
+        assert "🟡 HOLD" in colorize_status_emojis("SIGNAL: HOLD — reason")
+        assert "⏳ WAIT" in colorize_status_emojis("SIGNAL: WAIT — reason")
+
+    def test_trend_direction(self):
+        """UP/DOWN/SIDEWAYS after TREND get arrow emojis."""
+        assert "📈 UP" in colorize_status_emojis("TREND: UP 0.7")
+        assert "📉 DOWN" in colorize_status_emojis("TREND: DOWN 0.7")
+        assert "↔️ SIDEWAYS" in colorize_status_emojis("TREND: SIDEWAYS 0.5")
+
+    def test_prediction_field(self):
+        """BULLISH/BEARISH/HOLD after PREDICTION get coloured emojis too."""
+        assert "🟢 BULLISH" in colorize_status_emojis("PREDICTION: BULLISH 0.7")
+        assert "🔴 BEARISH" in colorize_status_emojis("PREDICTION: BEARISH 0.65")
+
+    def test_canonical_word_preserved(self):
+        """The original word remains intact — parser regex stays happy."""
+        out = colorize_status_emojis("STRUCTURAL: YELLOW (consolidating)")
+        from episodic_integration import extract_synthesis_from_output
+        full = "PRICE: $22.50 | " + out + " | CONSENSUS: BULLISH 60%"
+        brief = extract_synthesis_from_output(full)
+        assert brief is not None
+        assert brief.structural_status == "YELLOW"
+
+    def test_idempotent(self):
+        """Calling twice on the same text does not double-prefix."""
+        once = colorize_status_emojis("STRUCTURAL: YELLOW (consolidating)")
+        twice = colorize_status_emojis(once)
+        assert once == twice
+        # Sanity: only one emoji circle, not two
+        assert twice.count("🟡") == 1
+
+    def test_no_match_no_change(self):
+        """Text without any matching status word is unchanged."""
+        before = "$22.50 rising, volume quiet."
+        assert colorize_status_emojis(before) == before
+
+    def test_full_synthesis_brief(self):
+        """A real three-line brief gets all four fields coloured."""
+        brief = (
+            "NOW: PRICE: $22.50 rising | DATA: clean | STRUCTURAL: YELLOW (consolidating)\n"
+            "NEXT: CONSENSUS: BEARISH 67% | TREND: DOWN 0.6 | PREDICTION: BEARISH 0.65\n"
+            "SIGNAL: WAIT — wait for breakdown confirmation"
+        )
+        out = colorize_status_emojis(brief)
+        assert "🟡 YELLOW" in out
+        assert "🔴 BEARISH" in out  # CONSENSUS
+        assert "📉 DOWN" in out
+        assert "⏳ WAIT" in out
 
 
 class TestSignalPromptWiring:

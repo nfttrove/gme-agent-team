@@ -151,6 +151,47 @@ def coerce_trend_strength(brief: str) -> str:
     )
 
 
+# Display-layer emoji prefixes for the canonical status words. The text stays
+# in place so the parser keeps ingesting (`STRUCTURAL: YELLOW` regex still
+# matches); the emoji is purely a visual scannability win for Telegram readers.
+_FIELD_EMOJIS = {
+    "STRUCTURAL": {"GREEN": "🟢", "YELLOW": "🟡", "RED": "🔴"},
+    "CONSENSUS":  {"BULLISH": "🟢", "BEARISH": "🔴", "NEUTRAL": "⚪"},
+    "PREDICTION": {"BULLISH": "🟢", "BEARISH": "🔴", "NEUTRAL": "⚪",
+                   "HOLD": "🟡", "BUY": "🟢", "SELL": "🔴"},
+    "SIGNAL":     {"BUY": "🟢", "SELL": "🔴", "HOLD": "🟡", "WAIT": "⏳"},
+    "TREND":      {"UP": "📈", "DOWN": "📉", "SIDEWAYS": "↔️"},
+}
+
+# Detect any emoji we'd prepend, so the helper is idempotent (won't double-prefix
+# if called twice on the same text — e.g. forwarder ran the text through once
+# already and a later layer calls it again).
+_PREPENDED_EMOJIS = "🟢🟡🔴⚪⏳📈📉↔️"
+
+
+def colorize_status_emojis(text: str) -> str:
+    """Prepend a colored emoji before each canonical status word.
+
+    Display-layer transform — the original word stays so the Synthesis parser
+    (regex-anchored on the word) keeps working. Idempotent: won't double-prefix.
+
+    Example:
+        STRUCTURAL: YELLOW (consolidating) → STRUCTURAL: 🟡 YELLOW (consolidating)
+        SIGNAL: BUY @ $22.50 (...) → SIGNAL: 🟢 BUY @ $22.50 (...)
+    """
+    if not text:
+        return text
+    for label, mapping in _FIELD_EMOJIS.items():
+        for word, emoji in mapping.items():
+            # (?<![emoji-chars]\s) — skip if an emoji + space is already in front of WORD
+            # Approach instead: require label followed by *only whitespace* then WORD.
+            # If an emoji is already prefixed, the pattern won't match (because
+            # there'd be non-whitespace between `:` and WORD).
+            pattern = rf"({label}:\s*)({word})\b"
+            text = re.sub(pattern, rf"\1{emoji} \2", text)
+    return text
+
+
 def coerce_news_score(brief: str) -> str:
     """Convert NEWS scores written as percentages back into the -1.0 to 1.0 range.
 

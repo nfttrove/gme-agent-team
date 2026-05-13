@@ -113,9 +113,17 @@ def _is_stale(ts: str, max_age_minutes: int) -> bool:
 def _format(v: Voice, content: str, ts: str) -> str:
     # Strip HTML-special chars that break Telegram parse_mode=HTML
     safe = (content or "").replace("<", "&lt;").replace(">", "&gt;").strip()
-    # Keep it readable — cap at 500 chars
-    if len(safe) > 500:
-        safe = safe[:497] + "..."
+    # Prepend coloured emojis to canonical status words (STRUCTURAL / CONSENSUS /
+    # SIGNAL / PREDICTION / TREND). Display-layer only — the word stays so the
+    # Synthesis parser still ingests it.
+    try:
+        from message_formatters import colorize_status_emojis
+        safe = colorize_status_emojis(safe)
+    except Exception:
+        pass
+    # Keep it readable — cap at 500 chars (emoji prepends add ~5-10 chars per match)
+    if len(safe) > 540:
+        safe = safe[:537] + "..."
     from datetime import date
     if len(ts) >= 16:
         ts_date = ts[:10]
