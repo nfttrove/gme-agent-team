@@ -1,7 +1,9 @@
 """
-Telegram Push Notification System
+Telegram Push Notification System — Chat-Native Burst Format
 
 Sends critical trading alerts directly to your phone via Telegram bot.
+Messages are formatted as short bursts (5–8 lines each) for 1-second comprehension
+while scrolling, with minimal emoji and aggressive spacing.
 
 Setup (5 minutes):
   1. Open Telegram → search @BotFather → send /newbot → name it (e.g. GMEAlertBot)
@@ -14,9 +16,9 @@ Setup (5 minutes):
 Usage:
     from notifier import notify, notify_trade, notify_cto_alert, notify_immunity_red
     notify("Test message")              # plain alert
-    notify_trade("BUY", 22.10, 0.73)   # trade approved
-    notify_cto_alert("AMC", "restructuring_advisor_hired", 0.99)  # PE signal
-    notify_immunity_red("debt_free", "GME issued $500M bonds")    # EMERGENCY
+    notify_trade("BUY", 22.10, 0.73)   # trade approved (single burst)
+    notify_cto_alert("AMC", "restructuring_advisor_hired", 0.99)  # PE signal burst
+    notify_immunity_red("debt_free", "GME issued $500M bonds")    # EMERGENCY burst
 """
 import logging
 import os
@@ -28,6 +30,13 @@ import requests
 from dotenv import load_dotenv
 
 from circuit_breaker import get_breaker, CircuitOpenError
+from message_formatters_v2 import (
+    format_header, format_signal_burst, format_market_burst, format_trade_burst,
+    format_structure_burst, format_alert_burst, format_impact_burst,
+    format_social_burst, format_watchdog_burst, format_summary_burst,
+    format_update_burst, format_stale_burst, format_pattern_burst,
+    burst_signal_with_market, get_ny_time_short
+)
 from trading_glossary import add_emoji_definitions
 
 ET = ZoneInfo("America/New_York")
@@ -88,6 +97,17 @@ def _send(text: str, parse_mode: str = "HTML") -> bool:
         except requests.RequestException as e:
             log.error(f"[notify] Telegram send failed to {chat_id}: {e}")
     return success
+
+
+def _send_burst(messages: list[str]) -> bool:
+    """Send a list of messages in rapid succession. Returns True if at least one succeeds."""
+    if not messages:
+        return False
+    any_success = False
+    for msg in messages:
+        if _send(msg):
+            any_success = True
+    return any_success
 
 
 def _send_photo(photo_path: Path, caption: str, parse_mode: str = "HTML") -> bool:
@@ -152,124 +172,132 @@ def notify(message: str) -> bool:
 def notify_trade(action: str, price: float, confidence: float,
                  stop_loss: float = 0, take_profit: float = 0,
                  quantity: float = 0, status: str = "APPROVED") -> bool:
+    """Burst: Trade approval or rejection (single message).
+
+    Returns True if message sent successfully.
     """
-    Notify when Boss approves or rejects a trade.
-    action: BUY | SELL | HOLD
-    """
-    emoji = {"BUY": "🟢", "SELL": "🔴", "HOLD": "⚪"}.get(action, "📊")
-    status_emoji = "✅" if status == "APPROVED" else "❌"
-    msg = (
-        f"{status_emoji} <b>TRADE {status}</b>\n"
-        f"{emoji} {action} GME @ <b>${price:.2f}</b>\n"
-        f"Confidence: {confidence:.0%}\n"
+    ts = get_ny_time_short()
+    msg = format_trade_burst(
+        side=action,
+        symbol="GME",
+        entry=price,
+        target=take_profit if take_profit else None,
+        stop_loss=stop_loss if stop_loss else None,
+        quantity=int(quantity) if quantity else None,
+        timestamp_et=ts
     )
-    if stop_loss:
-        msg += f"SL: ${stop_loss:.2f}  |  TP: ${take_profit:.2f}\n"
-    if quantity:
-        msg += f"Qty: {quantity} shares\n"
-    msg += f"<i>{datetime.now(ET).strftime('%Y-%m-%d %H:%M:%S')}</i>"
     return _send(msg)
 
 
 def notify_cto_alert(ticker: str, signal_name: str, confidence: float,
                      action: str = "SHORT", timeline_months: int = 0,
                      headline: str = "") -> bool:
-    """
-    CTO structural signal detected — PE playbook firing on a stock.
-    High confidence (>80%) signals always send. Lower confidence only if action=EXIT.
+    """Burst: PE playbook structural signal (single message).
+
+    Suppresses low-confidence noise (<70%).
+    Returns True if message sent successfully.
     """
     if confidence < 0.70 and action not in ("SHORT", "EXIT"):
-        return False  # suppress low-confidence noise
+        log.info(f"[notify] Suppressing low-confidence CTO alert on {ticker}")
+        return False
 
-    urgency = "🚨" if confidence >= 0.90 else ("⚠️" if confidence >= 0.75 else "📌")
-    msg = (
-        f"{urgency} <b>PE PLAYBOOK SIGNAL</b>\n"
-        f"Ticker: <b>{ticker}</b>\n"
-        f"Signal: <code>{signal_name}</code>\n"
-        f"Confidence: {confidence:.0%}  |  Action: <b>{action}</b>\n"
+    ts = get_ny_time_short()
+    timeline_str = f"~{timeline_months} months" if timeline_months else None
+    msg = format_structure_burst(
+        ticker=ticker,
+        signal_type=signal_name,
+        confidence=f"{confidence:.0%}",
+        timeline=timeline_str,
+        news_snippet=headline[:120] if headline else None,
+        timestamp_et=ts
     )
-    if timeline_months:
-        msg += f"Timeline: ~{timeline_months} months to event\n"
-    if headline:
-        msg += f"<i>{headline[:200]}</i>\n"
-    msg += f"\n<i>{datetime.now(ET).strftime('%Y-%m-%d %H:%M')}</i>"
     return _send(msg)
 
 
 def notify_immunity_red(check_name: str, detail: str) -> bool:
+    """Burst: Immunity breach EMERGENCY alert (single message).
+
+    Highest priority — thesis is compromised.
+    Returns True if message sent successfully.
     """
-    EMERGENCY: A GME immunity condition turned RED.
-    This is the highest priority alert — means the thesis is compromised.
-    """
-    msg = (
-        f"🆘 <b>GME IMMUNITY ALERT — {check_name.upper()}</b>\n\n"
-        f"{detail}\n\n"
-        f"⚡ <b>ACTION REQUIRED: Review position immediately.</b>\n"
-        f"If PE playbook weapon has been restored, the squeeze thesis changes.\n\n"
-        f"<i>{datetime.now(ET).strftime('%Y-%m-%d %H:%M:%S')}</i>"
+    ts = get_ny_time_short()
+    msg = format_alert_burst(
+        alert_type=check_name.upper(),
+        severity="CRITICAL",
+        message=detail,
+        action="Review position immediately",
+        timestamp_et=ts
     )
     return _send(msg)
 
 
 def notify_max_pain(strike: float, current_price: float, friday_date: str,
                     net_oi_direction: str = "") -> bool:
-    """Weekly max pain update — sent Monday morning."""
-    diff = current_price - strike
-    direction = "ABOVE" if diff > 0 else "BELOW"
-    emoji = "📌"
-    msg = (
-        f"{emoji} <b>OPTIONS MAX PAIN — {friday_date}</b>\n\n"
-        f"Max Pain Strike: <b>${strike:.2f}</b>\n"
-        f"Current Price: ${current_price:.2f} ({direction} by ${abs(diff):.2f})\n"
-    )
-    if net_oi_direction:
-        msg += f"Net OI bias: {net_oi_direction}\n"
-    msg += (
-        f"\nMM hedging pressure pulls price toward ${strike:.2f} into expiry.\n"
-        f"<i>Expiry: {friday_date}</i>"
+    """Burst: Weekly options max pain update (single message).
+
+    Returns True if message sent successfully.
+    """
+    ts = get_ny_time_short()
+    msg = format_impact_burst(
+        max_pain=strike,
+        current_price=current_price,
+        expiry_date=friday_date,
+        oi_bias=net_oi_direction if net_oi_direction else None,
+        timestamp_et=ts
     )
     return _send(msg)
 
 
 def notify_social_signal(username: str, tweet_text: str, signal_type: str = "INFO") -> bool:
+    """Burst: Social intelligence alert (single ultra-compact message).
+
+    signal_type: INFO | CRITICAL
+    Returns True if message sent successfully.
     """
-    Alert when a tracked account (Cohen, Burry, Cheng) posts something relevant.
-    signal_type: INFO | BULLISH | BEARISH | CRITICAL
-    """
-    emoji = {"INFO": "💬", "BULLISH": "🐂", "BEARISH": "🐻", "CRITICAL": "🚨"}.get(signal_type, "💬")
-    msg = (
-        f"{emoji} <b>@{username} posted</b>\n\n"
-        f'"{tweet_text[:400]}"\n\n'
-        f"Signal: <b>{signal_type}</b>\n"
-        f"<i>{datetime.now(ET).strftime('%Y-%m-%d %H:%M')}</i>"
+    ts = get_ny_time_short()
+    msg = format_social_burst(
+        handle=username,
+        message=tweet_text,
+        urgency="CRITICAL" if signal_type == "CRITICAL" else "INFO",
+        timestamp_et=ts
     )
     return _send(msg)
 
 
 def notify_watchdog_alert(age_seconds: int) -> bool:
-    """TradingView webhook has gone silent — data gap warning."""
+    """Burst: Data feed watchdog alert (single message).
+
+    Returns True if message sent successfully.
+    """
+    ts = get_ny_time_short()
     mins = age_seconds // 60
-    msg = (
-        f"⚠️ <b>DATA FEED ALERT</b>\n\n"
-        f"TradingView webhook silent for <b>{mins} minutes</b>.\n"
-        f"Check: ngrok running? TradingView alert active? Internet connection?\n\n"
-        f"1-second data NOT flowing. Alpaca backup may be filling gaps.\n"
-        f"<i>{datetime.now(ET).strftime('%Y-%m-%d %H:%M')}</i>"
+    msg = format_watchdog_burst(
+        feed_name="TradingView",
+        duration_offline=mins,
+        fallback_status="Alpaca backup active",
+        timestamp_et=ts
     )
     return _send(msg)
 
 
 def notify_daily_summary(pnl: float, win_rate: float, trades: int,
                          pred_error_pct: float, gme_close: float) -> bool:
-    """End-of-day summary push."""
-    pnl_emoji = "🟢" if pnl >= 0 else "🔴"
-    msg = (
-        f"📊 <b>DAILY SUMMARY</b> — {datetime.now(ET).strftime('%Y-%m-%d')}\n\n"
-        f"GME Close: <b>${gme_close:.2f}</b>\n\n"
-        f"{pnl_emoji} P&L (paper): <b>${pnl:+.2f}</b>\n"
-        f"Win Rate: {win_rate:.0%}  |  Trades: {trades}\n"
-        f"Prediction error: ±{pred_error_pct:.2f}%\n\n"
-        f"<i>Daily review done. Win-rate weights updated for tomorrow's predictions.</i>"
+    """Burst: End-of-day summary (single message).
+
+    Returns True if message sent successfully.
+    """
+    ts = datetime.now(ET).strftime("%H:%M ET")
+    learnings = [
+        f"Prediction error ±{pred_error_pct:.1f}%",
+    ]
+    msg = format_summary_burst(
+        price=gme_close,
+        pnl=pnl,
+        pnl_pct=(pnl / gme_close * 100) if gme_close else None,
+        win_rate=win_rate,
+        trades_count=trades,
+        learnings=learnings,
+        timestamp_et=ts
     )
     return _send(msg)
 
@@ -277,18 +305,23 @@ def notify_daily_summary(pnl: float, win_rate: float, trades: int,
 def notify_periodic_brief(price: float, pct_change: float, consensus: str,
                          top_signal: str, geo_risk: str, prediction: str,
                          options: str = "") -> bool:
-    """Send a 4-hour intelligence digest (human-readable)."""
-    ts = datetime.now(ET).strftime("%I:%M %p")
-    msg = (
-        f"📊 <b>GME INTELLIGENCE BRIEF</b> — {ts} ET\n\n"
-        f"💰 <b>PRICE</b>: ${price:.2f} ({pct_change:+.1f}%)\n"
-        f"🧠 <b>CONSENSUS</b>: {consensus}\n"
-        f"🔮 <b>PREDICTION</b>: {prediction}\n"
-        f"📰 <b>TOP SIGNAL</b>: {top_signal}\n"
-        f"🌍 <b>GEOPOLITICAL RISK</b>: {geo_risk}"
+    """Burst: Periodic 4-hour market update (single message).
+
+    Returns True if message sent successfully.
+    """
+    ts = get_ny_time_short()
+    # Parse consensus direction if it's like "BULLISH 65%"
+    consensus_dir = consensus.split()[0].upper() if consensus else "NEUTRAL"
+    consensus_pct = int(consensus.split()[1].rstrip("%")) if len(consensus.split()) > 1 else 50
+
+    msg = format_update_burst(
+        consensus_direction=consensus_dir,
+        consensus_pct=consensus_pct,
+        top_signal=top_signal,
+        structure_status=prediction,
+        risk_flag=geo_risk,
+        timestamp_et=ts
     )
-    if options:
-        msg += f"\n📐 <b>OPTIONS</b>: {options}"
     return _send(msg)
 
 
@@ -308,14 +341,12 @@ def notify_signal_alert(agent_name: str, signal_type: str, confidence: float,
                         entry_price: float = None, stop_loss: float = None,
                         take_profit: float = None, reasoning: str = "",
                         alert_id: str = "") -> bool:
-    """
-    Send a signal alert with confidence score, risk/reward, and actionable params.
+    """Burst: Primary signal alert (may send 1 or 2 messages depending on data freshness).
 
-    This is the new primary alert function for the feedback loop system.
-    Confidence 0.0-1.0 is converted to 0-100% display.
+    If data is stale, sends a STALE warning instead.
+    Otherwise sends SIGNAL burst (and optionally MARKET context).
 
-    Signals are suppressed (replaced with a warning) when data_freshness checks
-    fail — agents reading stale tables produce confident-but-wrong narratives.
+    Confidence is shown only (no calibration math exposed).
 
     Usage:
         notify_signal_alert(
@@ -325,87 +356,45 @@ def notify_signal_alert(agent_name: str, signal_type: str, confidence: float,
             entry_price=23.45,
             stop_loss=22.80,
             take_profit=25.50,
-            reasoning="RSI oversold + volume spike on dip",
+            reasoning="RSI oversold + volume spike",
             alert_id="abc123"
         )
     """
     stale = _stale_data_reasons()
     if stale:
         log.warning(f"[notify] Suppressing {agent_name} signal — stale data: {stale}")
-        warn = (
-            f"⚠️ <b>SIGNAL SUPPRESSED — STALE DATA</b>\n\n"
-            f"{agent_name} wanted to emit <b>{signal_type}</b> "
-            f"(confidence {confidence:.0%}) but the data layer is not fresh:\n\n"
+        ts = get_ny_time_short()
+        msg = format_stale_burst(
+            stale_data_type=", ".join([s.split(":")[0] for s in stale[:3]]),
+            time_gap=None,
+            impact="Signals suppressed until fresh data",
+            timestamp_et=ts
         )
-        for reason in stale[:5]:
-            warn += f"• {reason}\n"
-        warn += (
-            f"\nSignal withheld to avoid a confident-but-wrong alert. "
-            f"Check <code>/freshness</code>. "
-            f"\n<i>{datetime.now(ET).strftime('%Y-%m-%d %H:%M:%S')}</i>"
-        )
-        return _send(warn)
+        return _send(msg)
 
-    # Calibrate stated confidence against this agent's actual hit-rate.
-    # signal_scores has been quietly recording outcomes for weeks; nothing
-    # was reading it back at emit time. Severity is driven by *effective*
-    # confidence — a chronically over-confident agent gets dampened, an
-    # under-confident one gets boosted, until cold-start ends.
-    stated_conf = confidence
-    try:
-        from confidence_calibration import apply_to_confidence
-        confidence, cal_meta = apply_to_confidence(stated_conf, agent_name)
-    except Exception as e:
-        log.warning(f"[notify] calibration lookup failed, using stated conf: {e}")
-        cal_meta = {"cold_start": True, "sample_size": 0, "multiplier": 1.0}
+    ts = get_ny_time_short()
+    # Infer direction from signal_type or entry vs target
+    direction = "BULLISH" if take_profit and entry_price and take_profit > entry_price else "BEARISH"
 
-    # Determine severity based on calibrated confidence
-    if confidence >= 0.80:
-        severity = "🔴 HIGH"
-        emoji = "⚡"
-    elif confidence >= 0.65:
-        severity = "🟡 MEDIUM"
-        emoji = "⚠️"
-    else:
-        severity = "🟢 LOW"
-        emoji = "📌"
-
-    agent_icon = AGENT_EMOJI.get(agent_name, "")
-    msg = f"{emoji} <b>SIGNAL ALERT</b> {agent_icon}\n\n"
-    msg += f"<b>{signal_type.upper().replace('_', ' ')}</b>\n"
-    if cal_meta.get("cold_start"):
-        # New agent — show confidence and explain we're still gathering data
-        msg += f"Confidence: <b>{confidence:.0%}</b> {severity}\n"
-        msg += f"<i>New agent ({cal_meta['sample_size']}/{5} calibration samples)</i>\n\n"
-    elif abs(stated_conf - confidence) < 0.005:
-        # No significant adjustment — show as-is
-        msg += f"Confidence: <b>{confidence:.0%}</b> {severity}\n\n"
-    else:
-        # Significant calibration applied — show the adjustment and why
-        hit_rate = cal_meta.get("hit_rate", 0)
-        msg += (f"Confidence: <b>{confidence:.0%}</b> {severity}\n"
-                f"<i>Calibrated from {stated_conf:.0%} (hit rate {hit_rate:.0%} on {cal_meta['sample_size']} signals)</i>\n\n")
-
-    # Risk/reward setup
-    if entry_price and stop_loss and take_profit:
-        risk = ((entry_price - stop_loss) / entry_price) * 100
-        reward = ((take_profit - entry_price) / entry_price) * 100
-        ratio = reward / risk if risk > 0 else 0
-        msg += f"📊 <b>Setup</b>\n"
-        msg += f"  Entry: ${entry_price:.2f}\n"
-        msg += f"  Stop: ${stop_loss:.2f} ({risk:.1f}%)\n"
-        msg += f"  Target: ${take_profit:.2f} ({reward:+.1f}%)\n"
-        msg += f"  R/R Ratio: 1:{ratio:.2f}\n\n"
-
+    # Parse reasons from reasoning string (bullet-separated or comma-separated)
+    reasons = []
     if reasoning:
-        # Add emoji-prefix definitions for trading terms in reasoning
-        enhanced_reasoning = add_emoji_definitions(reasoning)
-        msg += f"<i>Reasoning: {enhanced_reasoning[:280]}</i>\n\n"
+        # Simple heuristic: split on •, -, or comma and take first 3
+        for sep in ["•", "-", ","]:
+            if sep in reasoning:
+                reasons = [r.strip() for r in reasoning.split(sep) if r.strip()][:3]
+                break
+        if not reasons:
+            reasons = [reasoning[:60]]  # Fallback: use first 60 chars
 
-    msg += f"<i>{datetime.now(ET).strftime('%Y-%m-%d %H:%M:%S')}</i>"
-    if alert_id:
-        msg += f"\n<code>Alert ID: {alert_id[:8]}</code>"
-
+    # Format as single SIGNAL burst message
+    msg = format_signal_burst(
+        direction=direction,
+        target=take_profit,
+        confidence=f"{confidence:.0%}",
+        reasons=reasons,
+        timestamp_et=ts
+    )
     return _send(msg)
 
 
@@ -422,18 +411,18 @@ def test_connection() -> bool:
             "\nSetup guide: https://core.telegram.org/bots#how-do-i-create-a-bot\n"
         )
         return False
+    ts = get_ny_time_short()
     ok = _send(
-        "🤖 <b>GME Trading System</b>\n\n"
-        "Telegram notifications are working.\n"
-        "You'll receive alerts for:\n"
-        "  • Trade approvals/rejections\n"
-        "  • PE playbook signals on any stock\n"
-        "  • GME immunity status changes\n"
-        "  • Weekly max pain updates\n"
-        "  • Ryan Cohen / Burry / Roaring Kitty / Larry Cheng posts\n"
-        "  • Data feed alerts\n"
-        "  • Daily P&amp;L summary\n\n"
-        "<i>System online.</i>"
+        f"🤖 <b>GME System Online</b> | {ts}\n\n"
+        "Burst-format Telegram alerts:\n"
+        "  • Trade approvals (TRADE burst)\n"
+        "  • PE playbook signals (STRUCTURE burst)\n"
+        "  • Immunity alerts (ALERT burst)\n"
+        "  • Max pain updates (IMPACT burst)\n"
+        "  • Social posts (SOCIAL burst)\n"
+        "  • Data feed status (WATCHDOG burst)\n"
+        "  • Daily summary (CLOSE burst)\n\n"
+        "<i>1-second comprehension. No calibration metadata.</i>"
     )
     if ok:
         print("[notifier] ✅ Telegram test message sent successfully.")
