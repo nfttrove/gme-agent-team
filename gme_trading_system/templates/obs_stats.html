@@ -96,7 +96,10 @@
   .subscribe {
     margin: 10px 0 4px; text-align: center;
   }
-  .subscribe img { max-width: 100%; height: auto; }
+  /* Cap height tightly — users frequently drop oversized print-res assets
+     in here. max-height keeps it a reasonable CTA strip regardless. */
+  .subscribe img { max-width: 100%; max-height: 64px; height: auto; width: auto; object-fit: contain; }
+  .flag { max-height: 38px; width: auto; }
   .darkpool {
     display: flex; justify-content: space-between; align-items: center;
     margin-top: 10px; padding-top: 8px;
