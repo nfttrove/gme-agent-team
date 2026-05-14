@@ -3269,7 +3269,10 @@ class TradingSystemOrchestrator:
 
         # Options intelligence — max pain every Monday pre-market
         self.scheduler.add_job(run_options_update, CronTrigger(day_of_week="mon", hour=8, minute=30, timezone=ET), id="options")
-        self.scheduler.add_job(run_fundamentals_update, CronTrigger(day_of_week="mon-fri", hour=8, minute=35, timezone=ET), id="fundamentals")
+        # Every 30 min Mon-Fri 08:00-16:30 ET. yfinance + FINRA are cheap and
+        # idempotent — this catches FINRA's mid-morning publish without waiting
+        # until next day's pre-open refresh.
+        self.scheduler.add_job(run_fundamentals_update, CronTrigger(day_of_week="mon-fri", hour="8-16", minute="0,30", timezone=ET), id="fundamentals")
 
         # Weekly coffee nudge — Sundays 10:00 AM ET
         self.scheduler.add_job(run_sunday_support_message, CronTrigger(day_of_week="sun", hour=10, minute=0, timezone=ET), id="sunday_support")
