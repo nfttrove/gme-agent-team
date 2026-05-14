@@ -19,6 +19,7 @@ REPO_ROOT = Path(__file__).resolve().parent.parent.parent
 AGENTS_MD = REPO_ROOT / "AGENTS.md"
 MARKET_HOURS = REPO_ROOT / "gme_trading_system" / "market_hours.py"
 ORCHESTRATOR = REPO_ROOT / "gme_trading_system" / "orchestrator.py"
+AGENTS_PY = REPO_ROOT / "gme_trading_system" / "agents.py"
 
 
 # Canonical mapping from decorated cycle function names to agent identities.
@@ -40,6 +41,29 @@ CYCLE_TO_AGENT = {
     # run_voice_forwarder is decorated too but it's the outbound forwarder,
     # not an agent. Documented separately under "Cross-cutting schedules".
     "run_voice_forwarder":            None,
+}
+
+
+# Canonical mapping from agents.py `role=` kwargs to AGENTS.md `### <header>` tags
+# (the human-readable name in front of the em-dash separator). When you add a
+# new agent, update three places at once:
+#   1. agents.py — instantiate `ResilientAgent(role="...", ...)`
+#   2. AGENTS.md § The N agents — add a `### Name — Role` H3 (and bump N)
+#   3. this mapping — bridge the two
+# The inventory fitness test below will fail loudly if any side drifts.
+AGENT_ROLE_TO_MD_HEADER = {
+    "Data Validator":                                   "Valerie",
+    "Stream Commentator":                               "Chatty",
+    "News Analyst":                                     "Newsie",
+    "Triangle Breakout & Multi-Day Pattern Specialist": "Pattern",
+    "Daily Trend Analyst":                              "Trendy",
+    "Market Futurist":                                  "Futurist",
+    "GeoRisk Researcher":                               "GeoRisk",
+    "Intelligence Synthesiser":                         "Synthesis",
+    "Project Manager":                                  "Boss / Project Manager",
+    "Chief Technology & Market Structure Officer":      "CTO",
+    "Historical Researcher":                            "Memoria",
+    "Strategy Briefing Officer":                        "Briefing",
 }
 
 
@@ -139,6 +163,37 @@ def _decorated_cycle_functions() -> set[str]:
     return out
 
 
+def _agents_py_roles() -> set[str]:
+    """AST-walk agents.py for every `ResilientAgent(...)` call and pull out
+    the `role=` kwarg literal. Returns the set of role strings.
+
+    Skips the class definition itself — only collects instantiations."""
+    tree = ast.parse(AGENTS_PY.read_text())
+    out = set()
+    for node in ast.walk(tree):
+        if not isinstance(node, ast.Call):
+            continue
+        if not (isinstance(node.func, ast.Name) and node.func.id == "ResilientAgent"):
+            continue
+        for kw in node.keywords:
+            if kw.arg == "role" and isinstance(kw.value, ast.Constant):
+                out.add(kw.value.value)
+                break
+    return out
+
+
+def _agents_md_inventory_headers() -> set[str]:
+    """Extract `### Name — ...` H3 header tags from AGENTS.md's
+    `## The N agents` section. Returns the set of names (the part before the
+    em-dash / en-dash / hyphen separator)."""
+    text = AGENTS_MD.read_text()
+    m = re.search(r"## The \d+ agents\n(.+?)(?:\n## |\Z)", text, flags=re.DOTALL)
+    assert m, "AGENTS.md is missing the `## The N agents` section"
+    section = m.group(1)
+    headers = re.findall(r"^### (.+?)\s*[—–\-]{1,2}\s", section, flags=re.MULTILINE)
+    return {h.strip() for h in headers}
+
+
 # ─── Tests ──────────────────────────────────────────────────────────────────
 
 
@@ -230,4 +285,68 @@ def test_documented_active_window_hours_match_decorator_docstring():
         f"in market_hours.py doesn't restate it. "
         f"Docstring excerpt: {docstring[:200]!r}. "
         "Code wins: update the docstring (or AGENTS.md) so both match."
+    )
+
+
+def test_agents_md_inventory_matches_agents_py():
+    """
+    Given the H3 headers under AGENTS.md § The N agents
+    When agents.py instantiates ResilientAgent(...) with role= kwargs
+    Then every documented agent must have a matching role in code and vice
+    versa, bridged by AGENT_ROLE_TO_MD_HEADER in this file.
+
+    Catches the next-most-likely drift after the active-window contract:
+    renaming/adding/removing an agent in one place and forgetting the others.
+    The mapping in this file is the single source of truth — if you add a
+    13th agent, you update the mapping, agents.py, and AGENTS.md together.
+    """
+    # Given
+    documented_headers = _agents_md_inventory_headers()
+    # When
+    code_roles = _agents_py_roles()
+    # Then — code side
+    expected_roles = set(AGENT_ROLE_TO_MD_HEADER.keys())
+    missing_in_code = expected_roles - code_roles
+    extra_in_code = code_roles - expected_roles
+    assert not missing_in_code and not extra_in_code, (
+        f"agents.py role kwargs drifted from AGENT_ROLE_TO_MD_HEADER. "
+        f"Missing in code: {sorted(missing_in_code)}. "
+        f"Extra in code: {sorted(extra_in_code)}. "
+        "Code wins (per CLAUDE.md): if you added/renamed an agent, update the "
+        "mapping in tests/test_docs_architecture.py AND the corresponding "
+        "`### Name — Role` H3 in AGENTS.md."
+    )
+    # Then — doc side
+    expected_headers = set(AGENT_ROLE_TO_MD_HEADER.values())
+    missing_in_doc = expected_headers - documented_headers
+    extra_in_doc = documented_headers - expected_headers
+    assert not missing_in_doc and not extra_in_doc, (
+        f"AGENTS.md § The N agents H3 headers drifted from "
+        f"AGENT_ROLE_TO_MD_HEADER. "
+        f"Missing in doc: {sorted(missing_in_doc)}. "
+        f"Extra in doc: {sorted(extra_in_doc)}. "
+        "Code wins (per CLAUDE.md): update AGENTS.md to add/rename the "
+        "`### Name — Role` H3 to match agents.py, or update the mapping in "
+        "tests/test_docs_architecture.py if an agent was removed."
+    )
+
+
+def test_agents_md_section_title_matches_inventory_count():
+    """
+    Given AGENTS.md's `## The N agents` section heading
+    When the H3 entries in that section are enumerated
+    Then N must equal the number of H3 entries.
+
+    Belt-and-braces for the inventory test: someone could add a 13th agent,
+    update agents.py + the mapping + a new H3, and still forget to bump the
+    'The 12 agents' heading. This catches that.
+    """
+    text = AGENTS_MD.read_text()
+    m = re.search(r"^## The (\d+) agents\b", text, flags=re.MULTILINE)
+    assert m, "AGENTS.md is missing the `## The N agents` section heading"
+    declared = int(m.group(1))
+    actual = len(_agents_md_inventory_headers())
+    assert declared == actual, (
+        f"AGENTS.md heading says 'The {declared} agents' but the section "
+        f"contains {actual} H3 entries. Update the heading or the inventory."
     )
