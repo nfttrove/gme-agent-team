@@ -107,6 +107,9 @@
     color: var(--muted); font-size: 13px; letter-spacing: 1px;
   }
   .darkpool .dp-label { font-weight: 700; letter-spacing: 2px; }
+  /* T+1 publish date next to "DARK POOL" — visually subordinate so it's clear
+     this is FINRA's most recent file, not real-time. */
+  .darkpool .dp-date  { color: var(--muted); font-weight: 500; letter-spacing: 1px; margin-left: 6px; }
   .darkpool .dp-pct { color: var(--ink); font-weight: 600; font-variant-numeric: tabular-nums; }
   .darkpool .dp-vol { color: var(--ink); font-variant-numeric: tabular-nums; }
 </style>
@@ -171,7 +174,7 @@
   </div>
 
   <div class="darkpool">
-    <span class="dp-label">DARK POOL</span>
+    <span class="dp-label">DARK POOL <span class="dp-date" data-f="dark_pool_date" data-fmt="dateShort">—</span></span>
     <span class="dp-pct" data-f="dark_pool_pct" data-fmt="pctSimple">—</span>
     <span class="dp-vol" data-f="dark_pool_volume" data-fmt="int">—</span>
   </div>
@@ -226,6 +229,13 @@
       const suffix = (k >= 11 && k <= 13) ? "th"
                    : j === 1 ? "st" : j === 2 ? "nd" : j === 3 ? "rd" : "th";
       return `${month} ${day}${suffix}, ${year}`;
+    },
+    dateShort(v) {
+      if (!v) return "";
+      const d = new Date(v + "T12:00:00");
+      if (isNaN(d)) return v;
+      // Short upper-case form ("MAY 13") to sit visually with "DARK POOL"
+      return d.toLocaleDateString("en-US", { month: "short", day: "numeric" }).toUpperCase();
     },
     range(v) { return v ?? "—"; },
   };
