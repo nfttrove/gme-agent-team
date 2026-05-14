@@ -12,7 +12,7 @@ External dependencies are mocked:
   - crewai Crew (for /brief, /update) returns a stub result
   - requests.post (for /compare) returns canned JSON
   - Supabase sync client is mocked
-  - run_screen (for /trove) returns a minimal list
+  - run_screen (for /dv) returns a minimal list
 
 DB is a tempfile sqlite populated with the minimum schema each command touches.
 """
@@ -376,32 +376,32 @@ def test_brief_price_direction_logic(seeded_db, captured_sends, monkeypatch):
     assert "rising" in joined.lower() or "📍 market" in joined.lower()
 
 
-def test_trove_default_watchlist(seeded_db, captured_sends, monkeypatch):
-    fake_trove = types.ModuleType("trove")
-    fake_trove.DEFAULT_WATCHLIST = ["GME", "VIPS"]
-    fake_trove.run_screen = lambda tickers, max_tickers=20: [
+def test_dv_default_watchlist(seeded_db, captured_sends, monkeypatch):
+    fake_dv = types.ModuleType("dv_score")
+    fake_dv.DEFAULT_WATCHLIST = ["GME", "VIPS"]
+    fake_dv.run_screen = lambda tickers, max_tickers=20: [
         {"ticker": "GME", "score": 57.0, "rating": "★★★☆☆", "immunity": 3,
          "pillar_A": 20, "pillar_B": 22, "pillar_C": 15,
          "net_cash_pct": 18, "altman_z": 3.2},
     ]
-    monkeypatch.setitem(sys.modules, "trove", fake_trove)
-    telegram_bot.handle_command("/trove")
+    monkeypatch.setitem(sys.modules, "dv_score", fake_dv)
+    telegram_bot.handle_command("/dv")
     joined = "\n".join(captured_sends)
-    assert "Trove Score Rankings" in joined
+    assert "DV Score Rankings" in joined
     assert "GME" in joined
 
 
-def test_trove_with_tickers(seeded_db, captured_sends, monkeypatch):
-    fake_trove = types.ModuleType("trove")
-    fake_trove.DEFAULT_WATCHLIST = []
-    fake_trove.run_screen = lambda tickers, max_tickers=20: [
+def test_dv_with_tickers(seeded_db, captured_sends, monkeypatch):
+    fake_dv = types.ModuleType("dv_score")
+    fake_dv.DEFAULT_WATCHLIST = []
+    fake_dv.run_screen = lambda tickers, max_tickers=20: [
         {"ticker": t, "score": 50.0, "rating": "★★★☆☆", "immunity": 2,
          "pillar_A": 15, "pillar_B": 20, "pillar_C": 15,
          "net_cash_pct": 10, "altman_z": 2.5}
         for t in tickers
     ]
-    monkeypatch.setitem(sys.modules, "trove", fake_trove)
-    telegram_bot.handle_command("/trove AAPL MSFT")
+    monkeypatch.setitem(sys.modules, "dv_score", fake_dv)
+    telegram_bot.handle_command("/dv AAPL MSFT")
     joined = "\n".join(captured_sends)
     assert "AAPL" in joined and "MSFT" in joined
 

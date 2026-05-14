@@ -26,7 +26,7 @@ gme_trading_system/
 ├── tasks.py                # CrewAI task specs (description + expected_output)
 ├── llm_config.py           # Gemma local + Gemini fallback wiring
 ├── circuit_breaker.py      # 3-state breakers for 6 external services
-├── market_hours.py         # is_market_open(), is_active_window() — 07:30–18:00 ET Mon–Fri
+├── market_hours.py         # is_market_open(), is_active_window() — 08:30–17:00 ET Mon–Fri
 ├── db_maintenance.py       # WAL mode, nightly backup, 14-day retention
 ├── logger_daemon.py        # Flask :8765 — TradingView webhook + /metrics
 ├── notifier.py             # Telegram push, circuit-breaker wrapped
@@ -62,7 +62,7 @@ gme_trading_system/
 
 1. **No tool calls in agents** — Gemma doesn't support CrewAI tool calling. Agents output structured text; `sql_executor.py` parses and executes.
 2. **LLM fallback chain** — Gemma → Gemini Flash (rate limit) → Gemini Pro (complex). Lives in `ResilientAgent` (agents.py).
-3. **Active window gating** — 07:30–18:00 ET, Mon–Fri. Eight agents decorated with `@active_window_required` skip silently outside.
+3. **Active window gating** — 08:30–17:00 ET, Mon–Fri. Eight agents decorated with `@active_window_required` skip silently outside.
 4. **Crew timeouts** — `safe_kickoff()` wraps `crew.kickoff()` with `ThreadPoolExecutor`; crews abort after 180–600s.
 5. **Circuit breakers** — 6 services (Telegram, Supabase, Finnhub, SEC, NewsAPI, Twitter); open after 5 failures, retry after 60s.
 6. **Database** — SQLite WAL mode, nightly backup at 03:00 ET, 14-day retention. Canonical path: `gme_trading_system/agent_memory.db`.
@@ -109,7 +109,7 @@ curl http://localhost:8765/metrics
 ./venv/bin/python -m pytest gme_trading_system/tests/ -v
 ```
 
-Baseline: **144 pass, 2 pre-existing failures** (`test_signal_scorer_detects_sl_first_touch_as_loss`, `test_trove_default_watchlist`). House style for new tests: behaviour-focused names, Given/When/Then docstrings — see [gme_trading_system/tests/README.md](gme_trading_system/tests/README.md).
+Baseline: **144 pass, 2 pre-existing failures** (`test_signal_scorer_detects_sl_first_touch_as_loss`, `test_dv_default_watchlist`). House style for new tests: behaviour-focused names, Given/When/Then docstrings — see [gme_trading_system/tests/README.md](gme_trading_system/tests/README.md).
 
 ## Environment
 

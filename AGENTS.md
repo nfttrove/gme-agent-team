@@ -6,7 +6,7 @@ Defined in [gme_trading_system/agents.py](gme_trading_system/agents.py); schedul
 
 ## Active window
 
-Cycles decorated with `@active_window_required` **silently skip outside 08:30–17:00 ET, Mon–Fri** (excluding US market holidays). The decorated cycles are: Valerie, Trendy, Futurist, Synthesis, Pattern (incl. intraday), Newsie (signal cycle), GeoRisk, and Briefing (4-hour periodic brief). Chatty and Newsie's analysis cycle (`run_news`) run regardless of the window. Daily/weekly cron jobs (Boss huddle, CTO Trove, weekend digests, EOD reviews) also run regardless. The window is defined in [market_hours.py](gme_trading_system/market_hours.py) `is_active_window()`.
+Cycles decorated with `@active_window_required` **silently skip outside 08:30–17:00 ET, Mon–Fri** (excluding US market holidays). The decorated cycles are: Valerie, Trendy, Futurist, Synthesis, Pattern (incl. intraday), Newsie (signal cycle), GeoRisk, and Briefing (4-hour periodic brief). Chatty and Newsie's analysis cycle (`run_news`) run regardless of the window. Daily/weekly cron jobs (Boss huddle, CTO DV score, weekend digests, EOD reviews) also run regardless. The window is defined in [market_hours.py](gme_trading_system/market_hours.py) `is_active_window()`.
 
 The mapping between agents and decorated cycle functions, plus the time literals, is enforced by [tests/test_docs_architecture.py](gme_trading_system/tests/test_docs_architecture.py) — if you change the decorator set or the window, update this paragraph (or vice versa) and the fitness test will tell you.
 
@@ -84,11 +84,11 @@ Every signal emitted to Telegram carries a 0.0–1.0 confidence score. The team 
 - **Why it exists:** sets the day's frame; reviews the previous day
 
 ### CTO — Chief Technology & Market Structure Officer
-- **Cadence:** 09:05 ET daily brief, 09:10 ET Trove score, 09:15 ET Trove history log, Sun 08:00 ET structural scan
+- **Cadence:** 09:05 ET daily brief, 09:10 ET DV (deep-value) score, 09:15 ET DV history log, Sun 08:00 ET structural scan
 - **LLM:** DeepSeek-r1 / Gemini Pro
 - **Reads:** PE playbook signals, short-side research, dark pool data
-- **Writes:** `cto_brief`, `trove_scores`, `structural_signals`
-- **Signals:** PE-playbook flags; structural shifts in short interest; Trove score changes for the watchlist
+- **Writes:** `cto_brief`, `dv_score_history`, `structural_signals`
+- **Signals:** PE-playbook flags; structural shifts in short interest; DV score changes for the watchlist
 - **Why it exists:** the "is this still a PE-damaged squeeze setup" check; differentiated thesis layer
 
 ### Memoria — Historical Researcher
@@ -135,7 +135,7 @@ Beyond the 12 agents, the orchestrator runs:
 - `learning_debrief` at 16:30 ET — closes out the day's signals
 - `lesson_producer` at 16:35 ET — promotes patterns to lesson candidates
 - `weekly_review` Fri 17:00 ET — `learner.weekly_strategy_review()`, parameter adaptation
-- `saturday_review` Sat 09:00 ET — Telegram digest: week's signal volume by agent, prediction accuracy, full Trove deep-value rankings (with week-over-week deltas once a prior snapshot exists), lesson candidates, system health. Paper-trade open/close stats and personal targets are deliberately omitted — those live in owner-only `/standup` and `/progress` respectively.
+- `saturday_review` Sat 09:00 ET — Telegram digest: week's signal volume by agent, prediction accuracy, full DV deep-value rankings (with week-over-week deltas once a prior snapshot exists), lesson candidates, system health. Paper-trade open/close stats and personal targets are deliberately omitted — those live in owner-only `/standup` and `/progress` respectively.
 - `monday_digest` Mon 08:00 ET — pre-open weekend digest: news since Fri close, GeoRisk weekend events, gap-risk vs Fri close (does NOT replace 09:00 huddle)
 - `nightly_maintenance` at 03:00 ET — DB backup + WAL checkpoint + retention purge
 

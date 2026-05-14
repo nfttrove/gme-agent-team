@@ -48,7 +48,7 @@ python telegram_bot.py    # in another
 python logger_daemon.py   # optional, for TradingView webhooks
 ```
 
-You should now receive Telegram messages within the next active window (07:30–18:00 ET, Mon–Fri). Type `/help` to the bot to see all commands.
+You should now receive Telegram messages within the next active window (08:30–17:00 ET, Mon–Fri). Type `/help` to the bot to see all commands.
 
 ## Production (macOS launchd)
 
@@ -139,7 +139,7 @@ See `.env.example`. Required:
 - `GOOGLE_API_KEY` — Gemini fallback
 - `TELEGRAM_BOT_TOKEN`, `TELEGRAM_CHAT_ID` — alerts + commands
 
-Optional: `FINNHUB_API_KEY`, `NEWSAPI_KEY`, `SUPABASE_URL`, `SUPABASE_KEY`, `DISCORD_BOT_TOKEN`. Defaults: `OLLAMA_HOST=http://localhost:11434`, market timezone `America/New_York`, active window 07:30–18:00.
+Optional: `FINNHUB_API_KEY`, `NEWSAPI_KEY`, `SUPABASE_URL`, `SUPABASE_KEY`, `DISCORD_BOT_TOKEN`. Defaults: `OLLAMA_HOST=http://localhost:11434`, market timezone `America/New_York`, active window 08:30–17:00.
 
 ## Never commit
 

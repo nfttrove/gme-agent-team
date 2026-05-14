@@ -501,11 +501,11 @@ class TestAgentVoiceFreshness:
         assert _is_stale("not-a-timestamp", 30) is True
 
 
-class TestTroveInsiderConviction:
+class TestDVInsiderConviction:
     """Pillar D — director/officer open-market purchases (Form 4 code P)."""
 
     def test_insider_conviction_scoring(self):
-        from trove import TroveInputs, score, _score_insider_conviction
+        from dv_score import DVInputs, score, _score_insider_conviction
 
         # 6 buys, $2M → count=8, dollar=6, pillar D=14
         cp, dp, total = _score_insider_conviction(6, 2_000_000)
@@ -518,7 +518,7 @@ class TestTroveInsiderConviction:
         assert _score_insider_conviction(2, 500_000)[2] == 6.0
 
         # End-to-end: total still ≤ 100, pillar caps respected
-        i = TroveInputs(
+        i = DVInputs(
             ev_fcf=8, ev_ebitda=6, pb=0.8, altman_z=3.5, debt_equity=0.05,
             cash_mm=2000, total_debt_mm=10, market_cap_mm=5000,
             operating_margin=0.20, roe=0.18, net_margin=0.10,

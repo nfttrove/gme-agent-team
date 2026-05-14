@@ -1592,10 +1592,10 @@ def run_weekly_review():
         write_log("Learner", str(e), "weekly_review", "error")
 
 
-def _compose_trove_section(conn, top_n: int | None = None) -> str:
-    """Build the TROVE DEEP VALUE block for the Saturday review.
+def _compose_dv_section(conn, top_n: int | None = None) -> str:
+    """Build the DEEP VALUE block for the Saturday review.
 
-    Pulls the latest snapshot from trove_score_history, optionally compares
+    Pulls the latest snapshot from dv_score_history, optionally compares
     to the closest snapshot from 5–8 days prior, and renders one line per
     ticker with score, stars, price, and a week-over-week delta tag.
 
@@ -1603,11 +1603,11 @@ def _compose_trove_section(conn, top_n: int | None = None) -> str:
     positive int to cap (used only by tests that want a smaller subset).
 
     Returns "" if the table is empty or unreachable — the brief composer
-    will then omit the section entirely (no 'TROVE: no data' scaffolding).
+    will then omit the section entirely (no 'DV: no data' scaffolding).
     """
     try:
         latest_date_row = conn.execute(
-            "SELECT MAX(score_date) FROM trove_score_history"
+            "SELECT MAX(score_date) FROM dv_score_history"
         ).fetchone()
         latest_date = latest_date_row[0] if latest_date_row else None
         if not latest_date:
@@ -1616,14 +1616,14 @@ def _compose_trove_section(conn, top_n: int | None = None) -> str:
         if top_n is None:
             latest = conn.execute(
                 "SELECT ticker, score, rating, price_at_score "
-                "FROM trove_score_history WHERE score_date = ? "
+                "FROM dv_score_history WHERE score_date = ? "
                 "ORDER BY score DESC",
                 (latest_date,),
             ).fetchall()
         else:
             latest = conn.execute(
                 "SELECT ticker, score, rating, price_at_score "
-                "FROM trove_score_history WHERE score_date = ? "
+                "FROM dv_score_history WHERE score_date = ? "
                 "ORDER BY score DESC LIMIT ?",
                 (latest_date, top_n),
             ).fetchall()
@@ -1634,7 +1634,7 @@ def _compose_trove_section(conn, top_n: int | None = None) -> str:
         # weekday/weekend cron drift; 8d ceiling keeps us comparing against a
         # genuinely prior week, not last Thursday.
         prior_date_row = conn.execute(
-            "SELECT MAX(score_date) FROM trove_score_history "
+            "SELECT MAX(score_date) FROM dv_score_history "
             "WHERE score_date <= date(?, '-5 days') "
             "AND score_date >= date(?, '-8 days')",
             (latest_date, latest_date),
@@ -1644,12 +1644,12 @@ def _compose_trove_section(conn, top_n: int | None = None) -> str:
         prior_by_ticker: dict[str, float] = {}
         if prior_date:
             for t, s in conn.execute(
-                "SELECT ticker, score FROM trove_score_history WHERE score_date = ?",
+                "SELECT ticker, score FROM dv_score_history WHERE score_date = ?",
                 (prior_date,),
             ).fetchall():
                 prior_by_ticker[t] = float(s)
 
-        lines = ["<b>🔍 TROVE DEEP VALUE</b> — top of the watchlist"]
+        lines = ["<b>🔍 DEEP VALUE</b> — top of the watchlist"]
         for ticker, score, rating, price in latest:
             price_str = f"${float(price):.2f}" if price is not None else "—"
             if ticker in prior_by_ticker:
@@ -1665,7 +1665,7 @@ def _compose_trove_section(conn, top_n: int | None = None) -> str:
             )
         return "\n".join(lines)
     except Exception as e:
-        log.warning(f"[SatReview] trove section failed: {e}")
+        log.warning(f"[SatReview] dv section failed: {e}")
         return ""
 
 
@@ -1734,8 +1734,8 @@ def run_saturday_review():
             ).total_seconds() > 24 * 3600
         ]
 
-        # ---------- 5. Trove deep-value scores (rendered while conn is open) ----------
-        trove_section = _compose_trove_section(conn)
+        # ---------- 5. DV deep-value scores (rendered while conn is open) ----------
+        dv_section = _compose_dv_section(conn)
 
         conn.close()
 
@@ -1804,15 +1804,15 @@ def run_saturday_review():
         if stale_agents:
             system_line += f" Stale (>24h): {', '.join(stale_agents)}."
 
-        # Render Trove section only if we got non-empty content; keeps the
-        # brief clean on first-deploy boots before the daily Trove cron has
-        # populated trove_score_history.
-        trove_block = f"{trove_section}\n\n" if trove_section else ""
+        # Render DV section only if we got non-empty content; keeps the
+        # brief clean on first-deploy boots before the daily DV cron has
+        # populated dv_score_history.
+        dv_block = f"{dv_section}\n\n" if dv_section else ""
 
         brief = (
             f"📅 <b>SATURDAY REVIEW</b> — week of {week_start} to {week_end}\n\n"
             f"<b>THIS WEEK</b>\n{signals_line}\n{top_line}\n{preds_line}\n\n"
-            f"{trove_block}"
+            f"{dv_block}"
             f"<b>LESSONS</b>\n"
             f"• {n_candidates} candidate{'' if n_candidates == 1 else 's'} pending review (/candidates)\n\n"
             f"<b>SYSTEM</b>\n{system_line}\n\n"
@@ -1984,24 +1984,24 @@ def run_social_scan():
         write_log("Social", str(e)[:300], "social", "error")
 
 
-def run_cto_trove_score():
-    """CTO — Trove deep-value score for GME with delta vs previous run.
+def run_cto_dv_score():
+    """CTO — DV (deep-value) score for GME with delta vs previous run.
 
-    Writes a formatted score card to agent_logs (task_type='trove_score', agent='CTO')
+    Writes a formatted score card to agent_logs (task_type='dv_score', agent='CTO')
     which the voice forwarder picks up for Telegram. LLM is used only for the
     one-paragraph interpretation at the end — the numerical scoring is
-    deterministic (trove.score()), so it can't hallucinate points.
+    deterministic (dv_score.score()), so it can't hallucinate points.
     """
-    log.info("[CTO] Running Trove score")
-    write_log("CTO", "Computing Trove deep-value score for GME", "trove_score", "running")
+    log.info("[CTO] Running DV score")
+    write_log("CTO", "Computing DV deep-value score for GME", "dv_score", "running")
     try:
-        from trove import fetch, score as trove_score_fn
+        from dv_score import fetch, score as dv_score_fn
 
         inp = fetch("GME")
         if inp is None:
-            write_log("CTO", "trove.fetch returned None (data source down?)", "trove_score", "error")
+            write_log("CTO", "dv_score.fetch returned None (data source down?)", "dv_score", "error")
             return
-        r = trove_score_fn(inp)
+        r = dv_score_fn(inp)
         total = r["total"]
         rating = r["rating"]
         A = r["pillars"]["A"]
@@ -2020,7 +2020,7 @@ def run_cto_trove_score():
         conn = sqlite3.connect(DB_PATH)
         prev_row = conn.execute(
             "SELECT content FROM agent_logs WHERE agent_name='CTO' "
-            "AND task_type='trove_score' AND status='ok' "
+            "AND task_type='dv_score' AND status='ok' "
             "ORDER BY timestamp DESC LIMIT 1"
         ).fetchone()
         conn.close()
@@ -2064,7 +2064,7 @@ def run_cto_trove_score():
         prompt = (
             "You are the CTO — a deep-value analyst covering GME. Write ONE paragraph "
             "(max 350 chars, no preamble, no markdown, no quotes) interpreting today's "
-            "Trove score through the turnaround lens below.\n\n"
+            "DV (deep-value) score through the turnaround lens below.\n\n"
             "SCORING RUBRIC (so you use the right language):\n"
             "  ≥80 exceptional · ≥65 strong · ≥50 investment-grade deep value · "
             "≥35 speculative · <35 avoid. Do NOT call a 50+ score 'low' or 'weak'.\n\n"
@@ -2095,7 +2095,7 @@ def run_cto_trove_score():
             interpretation = interpretation.strip().strip('"').strip("'")
             interpretation = " ".join(interpretation.split())[:600]
         except Exception as e:
-            log.warning(f"[CTO] Trove interpretation LLM failed: {e}")
+            log.warning(f"[CTO] DV interpretation LLM failed: {e}")
 
         imm_line = (
             f"{'✓' if imm['debt_free'] else '✗'} Debt-free · "
@@ -2105,7 +2105,7 @@ def run_cto_trove_score():
             f"{'✓' if imm['altman_safe'] else '✗'} Altman Safe"
         )
         brief = (
-            f"GME Trove Score: {total:.1f}/100 {rating} {delta_str}\n"
+            f"GME DV Score: {total:.1f}/100 {rating} {delta_str}\n"
             f"Pillars — Valuation {A:.1f}/25 · Capital {B:.1f}/40 · Quality {C:.1f}/20 · Insider {D:.1f}/15\n"
             f"Insider 3y buys: {ins_count} purchases / {ins_str}\n"
             f"Immunity {imm_count}/5: {imm_line}\n"
@@ -2116,42 +2116,42 @@ def run_cto_trove_score():
         if interpretation:
             brief += f"\n— {interpretation}"
 
-        log.info(f"[CTO] Trove: {total:.1f}/100 {delta_str}")
-        write_log("CTO", brief, "trove_score", "ok")
+        log.info(f"[CTO] DV: {total:.1f}/100 {delta_str}")
+        write_log("CTO", brief, "dv_score", "ok")
     except Exception as e:
-        log.error(f"[CTO] Trove score failed: {e}")
-        write_log("CTO", str(e), "trove_score", "error")
+        log.error(f"[CTO] DV score failed: {e}")
+        write_log("CTO", str(e), "dv_score", "error")
 
 
-def run_trove_history_log():
-    """9:15 AM ET — log EVERY watchlist ticker to trove_score_history.
+def run_dv_history_log():
+    """9:15 AM ET — log EVERY watchlist ticker to dv_score_history.
 
     Previously gated at score >= 65 (the 'investment-grade deep value' bar).
     Now logs everyone so the Saturday review can show the full ranking,
     not just companies that already cleared the bar. Database growth is
     negligible (~40 rows/day × 365 = ~15k rows/year, UNIQUE-constrained).
     """
-    log.info("[trove_history] daily log run")
+    log.info("[dv_history] daily log run")
     try:
-        from trove_history import log_daily_scores
+        from dv_history import log_daily_scores
         result = log_daily_scores(threshold=0.0)
-        write_log("CTO", f"trove_history log: {result}", "trove_history", "ok")
+        write_log("CTO", f"dv_history log: {result}", "dv_history", "ok")
     except Exception as e:
-        log.error(f"[trove_history] log failed: {e}")
-        write_log("CTO", str(e), "trove_history", "error")
+        log.error(f"[dv_history] log failed: {e}")
+        write_log("CTO", str(e), "dv_history", "error")
 
 
-def run_trove_history_resolve():
+def run_dv_history_resolve():
     """3:30 AM ET — resolve forward returns for any rows whose
     30/90/365-day anniversary has passed."""
-    log.info("[trove_history] daily resolve run")
+    log.info("[dv_history] daily resolve run")
     try:
-        from trove_history import resolve_forward_returns
+        from dv_history import resolve_forward_returns
         result = resolve_forward_returns()
-        write_log("CTO", f"trove_history resolve: {result}", "trove_history", "ok")
+        write_log("CTO", f"dv_history resolve: {result}", "dv_history", "ok")
     except Exception as e:
-        log.error(f"[trove_history] resolve failed: {e}")
-        write_log("CTO", str(e), "trove_history", "error")
+        log.error(f"[dv_history] resolve failed: {e}")
+        write_log("CTO", str(e), "dv_history", "error")
 
 
 def run_cto_daily_brief():
@@ -2160,7 +2160,7 @@ def run_cto_daily_brief():
     Bypass pattern: pulls structural_signals, investor_intel, and news_analysis
     rows deterministically. Gemma only writes a short commentary on the
     short-watchlist and anti-pattern flags. GME immunity math is handled
-    separately by run_cto_trove_score at 9:10.
+    separately by run_cto_dv_score at 9:10.
     """
     log.info("[CTO] === Daily structural intelligence brief ===")
     write_log("CTO", "Running daily structural brief", "structural_brief", "running")
@@ -3157,9 +3157,9 @@ class TradingSystemOrchestrator:
 
         # CTO structural intelligence — PE playbook monitoring and short side research
         self.scheduler.add_job(run_cto_daily_brief,    CronTrigger(hour=9,  minute=5,  timezone=ET),                   id="cto_brief")
-        self.scheduler.add_job(run_cto_trove_score,    CronTrigger(hour=9,  minute=10, timezone=ET),                   id="cto_trove")
-        self.scheduler.add_job(run_trove_history_log,  CronTrigger(hour=9,  minute=15, timezone=ET),                   id="trove_history_log")
-        self.scheduler.add_job(run_trove_history_resolve, CronTrigger(hour=3, minute=30, timezone=ET),                 id="trove_history_resolve")
+        self.scheduler.add_job(run_cto_dv_score,       CronTrigger(hour=9,  minute=10, timezone=ET),                   id="cto_dv")
+        self.scheduler.add_job(run_dv_history_log,     CronTrigger(hour=9,  minute=15, timezone=ET),                   id="dv_history_log")
+        self.scheduler.add_job(run_dv_history_resolve, CronTrigger(hour=3, minute=30, timezone=ET),                    id="dv_history_resolve")
         self.scheduler.add_job(run_cto_structural_scan, CronTrigger(day_of_week="sun", hour=8, minute=0, timezone=ET), id="cto_scan")
         self.scheduler.add_job(run_investor_intel_scan, CronTrigger(hour=8, minute=0, timezone=ET),                    id="investor_intel")
 
@@ -3239,7 +3239,7 @@ class TradingSystemOrchestrator:
 ║  Voice Forwarder               every 10 min — agent→Telegram     ║
 ║  Boss     (daily huddle)       9:00 AM ET — mission briefing     ║
 ║  CTO      (structural brief)   9:05 AM ET — PE playbook + shorts ║
-║  CTO      (Trove score)        9:10 AM ET — deep-value rating    ║
+║  CTO      (DV score)           9:10 AM ET — deep-value rating    ║
 ║  Daily Strategy Brief         10:00 AM ET — team game plan       ║
 ║  📊 STANDUP (agent perf)       11:00 AM & 4:00 PM ET — ROI check ║
 ║  Aggregator                    4:35 PM ET                        ║

@@ -4,7 +4,7 @@ Insider open-market purchase aggregator (SEC Form 4).
 Pulls Form 4 filings for a ticker over a lookback window, filters for
 open-market purchases (transaction code "P") by Section 16 reporting
 persons — directors, officers, or 10% beneficial owners (e.g. RC Ventures
-on GME) — and returns aggregate count and dollar value. Used by Trove
+on GME) — and returns aggregate count and dollar value. Used by DV
 Score (Pillar D — Insider Conviction).
 
 SEC endpoints (no API key, fair-use UA required):

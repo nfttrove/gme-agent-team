@@ -1,12 +1,12 @@
 """
-Trove Score screen — fetches financials via yfinance and scores each ticker.
+DV Score screen — fetches financials via yfinance and scores each ticker.
 Altman Z-Score (revised, non-manufacturing) computed from balance sheet components.
 
 Usage:
-  python trove_screen.py                     # score all default tickers, summary table
-  python trove_screen.py --detail            # same + full per-ticker breakdown
-  python trove_screen.py --detail GME AAPL   # detail for specific tickers only
-  python trove_screen.py GME AAPL            # summary for specific tickers only
+  python dv_screen.py                     # score all default tickers, summary table
+  python dv_screen.py --detail            # same + full per-ticker breakdown
+  python dv_screen.py --detail GME AAPL   # detail for specific tickers only
+  python dv_screen.py GME AAPL            # summary for specific tickers only
 """
 
 import argparse
@@ -68,7 +68,7 @@ DEFAULT_TICKERS = [
 # ── Input model ───────────────────────────────────────────────────────────────
 
 @dataclass
-class TroveInputs:
+class DVInputs:
     ev_fcf:           float
     ev_ebitda:        float
     pb:               float
@@ -108,7 +108,7 @@ _SCALE_C = 20.0 / 25.0
 
 # ── Scorer ────────────────────────────────────────────────────────────────────
 
-def trove_score(i: TroveInputs) -> dict:
+def dv_score(i: DVInputs) -> dict:
     nc = i.net_cash_pct
 
     a1 = (5.0 if nc >= 0.10 else 0.0) if i.ev_fcf <= 0 else _asc(i.ev_fcf, _EV_FCF)
@@ -209,7 +209,7 @@ def altman_z_revised(bs, income, mcap_mm: float) -> Optional[float]:
         return None
 
 
-def fetch_inputs(ticker: str) -> Optional[TroveInputs]:
+def fetch_inputs(ticker: str) -> Optional[DVInputs]:
     try:
         t    = yf.Ticker(ticker)
         info = t.info or {}
@@ -253,7 +253,7 @@ def fetch_inputs(ticker: str) -> Optional[TroveInputs]:
         except Exception:
             pass
 
-        return TroveInputs(
+        return DVInputs(
             ev_fcf           = nan_to(ev_fcf, 0),    # 0 → cash-fortress path
             ev_ebitda        = nan_to(ev_ebitda, 99),
             pb               = nan_to(pb, 99),
@@ -295,7 +295,7 @@ _SCORE_LABELS = {
     "C3": "C3  Net Margin > 0  (5 pts)",
 }
 
-def print_detail(ticker: str, inp: TroveInputs, result: dict) -> None:
+def print_detail(ticker: str, inp: DVInputs, result: dict) -> None:
     s  = result["scores"]
     nc = inp.net_cash_pct
 
@@ -337,7 +337,7 @@ def print_detail(ticker: str, inp: TroveInputs, result: dict) -> None:
 # ── Main ──────────────────────────────────────────────────────────────────────
 
 def main():
-    parser = argparse.ArgumentParser(description="Trove Score deep-value screen")
+    parser = argparse.ArgumentParser(description="DV Score deep-value screen")
     parser.add_argument("tickers", nargs="*", help="Tickers to score (default: full watchlist)")
     parser.add_argument("--detail", nargs="*", metavar="TICKER",
                         help="Print full breakdown. No args = all scored tickers; "
@@ -361,7 +361,7 @@ def main():
         if inp is None:
             print("SKIP")
             continue
-        result = trove_score(inp)
+        result = dv_score(inp)
 
         if ticker in detail_set:
             print_detail(ticker, inp, result)
@@ -405,7 +405,7 @@ def main():
     pd.set_option("display.float_format", "{:.1f}".format)
 
     print(f"\n{'='*130}")
-    print("TROVE SCORE RANKINGS")
+    print("DV SCORE RANKINGS")
     print(f"{'='*130}")
     print(df[cols].to_string())
     print(f"{'='*130}")

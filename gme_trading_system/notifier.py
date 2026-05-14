@@ -64,7 +64,7 @@ AGENT_EMOJI = {
     "GeoRisk":   "🌍",  # geopolitical
     "Synthesis": "🧠",  # cross-agent consensus
     "Boss":      "🧭",  # daily mission briefing
-    "CTO":       "🛡️",  # structural / Trove score
+    "CTO":       "🛡️",  # structural / DV score
     "Calibrator":"📐",  # confidence calibration
 }
 

@@ -1,9 +1,9 @@
 """
-Trove Score — deep-value scoring framework.
+DV Score — deep-value scoring framework.
 Pillars: A=Valuation (25pts), B=Capital Structure (40pts), C=Quality (20pts),
          D=Insider Conviction (15pts). Total = 100.
 
-Shared library used by TroveScoreTool (agents) and the /trove Telegram command.
+Shared library used by DVScoreTool (agents) and the /dv Telegram command.
 """
 
 import math
@@ -61,7 +61,7 @@ DEFAULT_WATCHLIST = [
 # ── Input model ───────────────────────────────────────────────────────────────
 
 @dataclass
-class TroveInputs:
+class DVInputs:
     ev_fcf:           float
     ev_ebitda:        float
     pb:               float
@@ -108,7 +108,7 @@ _SCALE_C = 20.0 / 25.0
 
 # ── Scorer ────────────────────────────────────────────────────────────────────
 
-def score(inputs: TroveInputs) -> dict:
+def score(inputs: DVInputs) -> dict:
     i  = inputs
     nc = i.net_cash_pct
 
@@ -208,7 +208,7 @@ def _altman_z(bs, income, mcap_mm: float) -> Optional[float]:
         return None
 
 
-def fetch(ticker: str) -> Optional[TroveInputs]:
+def fetch(ticker: str) -> Optional[DVInputs]:
     try:
         import yfinance as yf
         t    = yf.Ticker(ticker)
@@ -254,7 +254,7 @@ def fetch(ticker: str) -> Optional[TroveInputs]:
         except Exception:
             pass
 
-        return TroveInputs(
+        return DVInputs(
             ev_fcf           = nan_to(ev_fcf,    0),
             ev_ebitda        = nan_to(ev_ebitda, 99),
             pb               = nan_to(pb,        99),

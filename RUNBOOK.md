@@ -133,7 +133,7 @@ launchctl kickstart -k gui/$(id -u)/com.gme.orchestrator
 
 ### Tests fail with `pillar_D` or `signal_scorer` errors
 
-Pre-existing failures unrelated to recent commits — `test_trove_default_watchlist` (Trove pillar_D bug) and `test_signal_scorer_detects_sl_first_touch_as_loss` (calibration scoring). Current baseline is **180 passed, 2 failed**. If you see *new* failures, investigate.
+Pre-existing failures unrelated to recent commits — `test_dv_default_watchlist` (DV pillar_D bug) and `test_signal_scorer_detects_sl_first_touch_as_loss` (calibration scoring). Current baseline is **180 passed, 2 failed**. If you see *new* failures, investigate.
 
 ### `/progress` (private £5k tracker) shows the wrong number
 

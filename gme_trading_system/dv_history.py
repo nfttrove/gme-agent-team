@@ -1,7 +1,7 @@
 """
-Trove forward-return tracker.
+DV (deep-value) forward-return tracker.
 
-Logs every ticker that hits a Trove score >= threshold, then revisits each
+Logs every ticker that hits a DV score >= threshold, then revisits each
 entry on its 30/90/365-day anniversaries to record forward returns. This is
 the only way to know if the rubric is generating real edge for *this* user
 on *this* watchlist over time.
@@ -23,7 +23,7 @@ log = logging.getLogger(__name__)
 DB_PATH = os.path.join(os.path.dirname(__file__), "agent_memory.db")
 
 SCHEMA = """
-CREATE TABLE IF NOT EXISTS trove_score_history (
+CREATE TABLE IF NOT EXISTS dv_score_history (
     id              INTEGER PRIMARY KEY AUTOINCREMENT,
     ticker          TEXT    NOT NULL,
     score_date      TEXT    NOT NULL,
@@ -44,10 +44,10 @@ CREATE TABLE IF NOT EXISTS trove_score_history (
     resolved_365d_at TEXT,
     UNIQUE(ticker, score_date)
 );
-CREATE INDEX IF NOT EXISTS idx_trove_hist_date     ON trove_score_history(score_date);
-CREATE INDEX IF NOT EXISTS idx_trove_hist_ticker   ON trove_score_history(ticker);
-CREATE INDEX IF NOT EXISTS idx_trove_hist_unresolved
-    ON trove_score_history(score_date)
+CREATE INDEX IF NOT EXISTS idx_dv_hist_date     ON dv_score_history(score_date);
+CREATE INDEX IF NOT EXISTS idx_dv_hist_ticker   ON dv_score_history(ticker);
+CREATE INDEX IF NOT EXISTS idx_dv_hist_unresolved
+    ON dv_score_history(score_date)
     WHERE return_30d IS NULL OR return_90d IS NULL OR return_365d IS NULL;
 """
 
@@ -79,7 +79,7 @@ def log_daily_scores(threshold: float = 65.0) -> dict:
 
     Idempotent per (ticker, score_date) thanks to UNIQUE constraint.
     """
-    from trove import run_screen, DEFAULT_WATCHLIST
+    from dv_score import run_screen, DEFAULT_WATCHLIST
 
     today = date.today().isoformat()
     results = run_screen(DEFAULT_WATCHLIST, max_tickers=len(DEFAULT_WATCHLIST))
@@ -94,7 +94,7 @@ def log_daily_scores(threshold: float = 65.0) -> dict:
             price = _close_price(r["ticker"], date.today())
             try:
                 conn.execute(
-                    """INSERT INTO trove_score_history
+                    """INSERT INTO dv_score_history
                        (ticker, score_date, score, rating, pillar_a, pillar_b,
                         pillar_c, pillar_d, insider_count, insider_dollars,
                         price_at_score)
@@ -110,7 +110,7 @@ def log_daily_scores(threshold: float = 65.0) -> dict:
     finally:
         conn.close()
 
-    log.info("[trove_history] logged %d new (skipped %d dupes) at threshold %.1f",
+    log.info("[dv_history] logged %d new (skipped %d dupes) at threshold %.1f",
              inserted, skipped, threshold)
     return {"inserted": inserted, "skipped": skipped, "threshold": threshold,
             "scored_total": len(results), "qualifying": len(qualifying)}
@@ -138,7 +138,7 @@ def resolve_forward_returns() -> dict:
             cutoff = (today - timedelta(days=days)).isoformat()
             rows = conn.execute(
                 f"""SELECT id, ticker, score_date, price_at_score
-                    FROM trove_score_history
+                    FROM dv_score_history
                     WHERE {ret_col} IS NULL
                       AND price_at_score IS NOT NULL
                       AND score_date <= ?""",
@@ -154,7 +154,7 @@ def resolve_forward_returns() -> dict:
                     continue
                 ret = (price_then / row["price_at_score"]) - 1.0
                 conn.execute(
-                    f"""UPDATE trove_score_history
+                    f"""UPDATE dv_score_history
                         SET {ret_col} = ?, {res_col} = ?
                         WHERE id = ?""",
                     (ret, today.isoformat(), row["id"]),
@@ -164,7 +164,7 @@ def resolve_forward_returns() -> dict:
     finally:
         conn.close()
 
-    log.info("[trove_history] resolved 30d=%d 90d=%d 365d=%d (failures=%d)",
+    log.info("[dv_history] resolved 30d=%d 90d=%d 365d=%d (failures=%d)",
              counts[30], counts[90], counts[365], failures)
     return {"resolved_30d": counts[30], "resolved_90d": counts[90],
             "resolved_365d": counts[365], "failures": failures}
@@ -178,12 +178,12 @@ def summarize() -> dict:
     try:
         _ensure_schema(conn)
         out = {"total_logged": conn.execute(
-            "SELECT COUNT(*) FROM trove_score_history").fetchone()[0]}
+            "SELECT COUNT(*) FROM dv_score_history").fetchone()[0]}
         for ret_col, _, days in _HORIZONS:
             row = conn.execute(
                 f"""SELECT COUNT(*), AVG({ret_col}),
                            SUM(CASE WHEN {ret_col} > 0 THEN 1 ELSE 0 END)
-                    FROM trove_score_history WHERE {ret_col} IS NOT NULL"""
+                    FROM dv_score_history WHERE {ret_col} IS NOT NULL"""
             ).fetchone()
             n, avg, wins = row
             out[f"{days}d"] = {"n": n,

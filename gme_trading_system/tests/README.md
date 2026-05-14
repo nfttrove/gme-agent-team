@@ -8,7 +8,7 @@ This suite is plain `pytest` — no `pytest-bdd`, no Gherkin files. We borrow th
 ./venv/bin/python -m pytest gme_trading_system/tests/ -v
 ```
 
-Baseline at the time of writing: **144 pass, 2 pre-existing failures** (`test_signal_scorer_detects_sl_first_touch_as_loss`, `test_trove_default_watchlist`). If a commit changes that ratio, that's the signal to investigate.
+Baseline at the time of writing: **144 pass, 2 pre-existing failures** (`test_signal_scorer_detects_sl_first_touch_as_loss`, `test_dv_default_watchlist`). If a commit changes that ratio, that's the signal to investigate.
 
 ## House style for new tests
 

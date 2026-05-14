@@ -286,26 +286,26 @@ class TestSaturdayReview:
         msg = captured_telegram[0]
         assert "4 candidates pending review" in msg
 
-    def test_trove_section_appears_when_snapshots_exist(
+    def test_dv_section_appears_when_snapshots_exist(
         self, empty_db, captured_telegram, stub_llm, stub_candidates, reset_breakers,
     ):
         """
-        Given the trove_score_history table has at least one snapshot
+        Given the dv_score_history table has at least one snapshot
         When run_saturday_review fires
-        Then a 🔍 TROVE DEEP VALUE section appears in the brief with each
+        Then a 🔍 DEEP VALUE section appears in the brief with each
         ticker's score, stars, and price.
 
-        Why this matters: this is the operator-requested weekly Trove digest.
-        If the section silently stops appearing because trove_history's schema
+        Why this matters: this is the operator-requested weekly DV digest.
+        If the section silently stops appearing because dv_history's schema
         drifted or the cron stopped writing, this test catches it.
         """
         # Given
-        from trove_history import SCHEMA as TROVE_SCHEMA
+        from dv_history import SCHEMA as DV_SCHEMA
         conn = sqlite3.connect(empty_db)
-        conn.executescript(TROVE_SCHEMA)
+        conn.executescript(DV_SCHEMA)
         conn.executescript(
             """
-            INSERT INTO trove_score_history
+            INSERT INTO dv_score_history
                 (ticker, score_date, score, rating, pillar_a, pillar_b,
                  pillar_c, pillar_d, price_at_score)
             VALUES
@@ -321,18 +321,18 @@ class TestSaturdayReview:
 
         # Then
         msg = captured_telegram[0]
-        assert "TROVE DEEP VALUE" in msg
+        assert "DEEP VALUE" in msg
         assert "CART" in msg
         assert "GME" in msg
         assert "69.5" in msg
         assert "$40.85" in msg
         assert "★★★★☆" in msg
 
-    def test_trove_section_shows_week_over_week_deltas_when_prior_snapshot_exists(
+    def test_dv_section_shows_week_over_week_deltas_when_prior_snapshot_exists(
         self, empty_db, captured_telegram, stub_llm, stub_candidates, reset_breakers,
     ):
         """
-        Given two Trove snapshots: today and 7 days ago, with score changes
+        Given two DV snapshots: today and 7 days ago, with score changes
         When run_saturday_review fires
         Then each ticker's line includes a delta tag like '↑ +1.5 vs last week'
         or '↓ -2.0 vs last week'.
@@ -341,12 +341,12 @@ class TestSaturdayReview:
         running this weekly — operators need to spot rank shifts, not stare
         at a static current snapshot.
         """
-        from trove_history import SCHEMA as TROVE_SCHEMA
+        from dv_history import SCHEMA as DV_SCHEMA
         conn = sqlite3.connect(empty_db)
-        conn.executescript(TROVE_SCHEMA)
+        conn.executescript(DV_SCHEMA)
         conn.executescript(
             """
-            INSERT INTO trove_score_history
+            INSERT INTO dv_score_history
                 (ticker, score_date, score, rating, pillar_a, pillar_b,
                  pillar_c, pillar_d, price_at_score)
             VALUES
@@ -371,7 +371,7 @@ class TestSaturdayReview:
         # Neither line should still say 'first weekly snapshot' once we have history
         assert "first weekly snapshot" not in msg
 
-    def test_trove_section_marks_new_entries(
+    def test_dv_section_marks_new_entries(
         self, empty_db, captured_telegram, stub_llm, stub_candidates, reset_breakers,
     ):
         """
@@ -381,12 +381,12 @@ class TestSaturdayReview:
         Then the new ticker's line is tagged '(new entry)' rather than
         falsely showing a delta of 0.0.
         """
-        from trove_history import SCHEMA as TROVE_SCHEMA
+        from dv_history import SCHEMA as DV_SCHEMA
         conn = sqlite3.connect(empty_db)
-        conn.executescript(TROVE_SCHEMA)
+        conn.executescript(DV_SCHEMA)
         conn.executescript(
             """
-            INSERT INTO trove_score_history
+            INSERT INTO dv_score_history
                 (ticker, score_date, score, rating, pillar_a, pillar_b,
                  pillar_c, pillar_d, price_at_score)
             VALUES
@@ -403,7 +403,7 @@ class TestSaturdayReview:
         assert "ALGN" in msg
         assert "(new entry)" in msg
 
-    def test_trove_section_shows_all_tickers_not_just_top_n(
+    def test_dv_section_shows_all_tickers_not_just_top_n(
         self, empty_db, captured_telegram, stub_llm, stub_candidates, reset_breakers,
     ):
         """
@@ -416,9 +416,9 @@ class TestSaturdayReview:
         (where the bottom is, not just who passed the deep-value gate).
         A regression to a row cap would silently hide most of the list.
         """
-        from trove_history import SCHEMA as TROVE_SCHEMA
+        from dv_history import SCHEMA as DV_SCHEMA
         conn = sqlite3.connect(empty_db)
-        conn.executescript(TROVE_SCHEMA)
+        conn.executescript(DV_SCHEMA)
         # Seed 12 tickers with descending scores — past the old top_n=8 cap
         rows = [
             (f"T{i:02d}", f"date('now')", 80 - i * 5, "★★★★☆" if i < 3 else "★★☆☆☆")
@@ -426,7 +426,7 @@ class TestSaturdayReview:
         ]
         for ticker, _, score, rating in rows:
             conn.execute(
-                "INSERT INTO trove_score_history "
+                "INSERT INTO dv_score_history "
                 "(ticker, score_date, score, rating, pillar_a, pillar_b, "
                 " pillar_c, pillar_d, price_at_score) "
                 "VALUES (?, date('now'), ?, ?, 20, 17, 14, 14, 25.0)",
@@ -442,21 +442,21 @@ class TestSaturdayReview:
         for i in range(12):
             assert f"T{i:02d}" in msg, f"T{i:02d} missing from brief"
 
-    def test_trove_section_omitted_when_history_empty(
+    def test_dv_section_omitted_when_history_empty(
         self, empty_db, captured_telegram, stub_llm, stub_candidates, reset_breakers,
     ):
         """
-        Given trove_score_history has no rows yet (fresh deployment)
+        Given dv_score_history has no rows yet (fresh deployment)
         When run_saturday_review fires
-        Then the TROVE section is omitted entirely (not 'TROVE: no data').
+        Then the DV section is omitted entirely (not 'DV: no data').
 
         Why this matters: empty scaffolding is noise. The bypass-pattern
         discipline is 'show what's there, don't fabricate sections'.
         """
         # Given — table exists but is empty
-        from trove_history import SCHEMA as TROVE_SCHEMA
+        from dv_history import SCHEMA as DV_SCHEMA
         conn = sqlite3.connect(empty_db)
-        conn.executescript(TROVE_SCHEMA)
+        conn.executescript(DV_SCHEMA)
         conn.close()
 
         # When
@@ -464,9 +464,9 @@ class TestSaturdayReview:
 
         # Then
         msg = captured_telegram[0]
-        assert "TROVE DEEP VALUE" not in msg
+        assert "DEEP VALUE" not in msg
         # The two surrounding sections must still appear so we know the brief
-        # didn't fall over while skipping Trove.
+        # didn't fall over while skipping DV.
         assert "THIS WEEK" in msg
         assert "LESSONS" in msg
 

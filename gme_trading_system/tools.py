@@ -199,16 +199,16 @@ class IndicatorTool(BaseTool):
         return compute_all(candles)
 
 
-class TroveScoreTool(BaseTool):
-    name: str = "Trove Score"
+class DVScoreTool(BaseTool):
+    name: str = "DV Score"
     description: str = (
-        "Score stocks using the Trove deep-value framework (Valuation/Capital Structure/Quality pillars, max 100 pts). "
+        "Score stocks using the DV (deep-value) framework (Valuation/Capital Structure/Quality pillars, max 100 pts). "
         "Input: comma-separated tickers, e.g. 'GME,VIPS,AAPL'. Max 10 tickers per call. "
         "Returns a ranked list with score, star rating, pillar breakdown, and immunity flags."
     )
 
     def _run(self, tickers: str) -> list:
-        from trove import fetch, score, DEFAULT_WATCHLIST
+        from dv_score import fetch, score, DEFAULT_WATCHLIST
         ticker_list = (
             [t.strip().upper() for t in tickers.split(",") if t.strip()]
             if tickers.strip()

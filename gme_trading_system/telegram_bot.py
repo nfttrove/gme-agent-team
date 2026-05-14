@@ -76,7 +76,7 @@ OWNER_ONLY_COMMANDS = {
     "/swot",                                       # ~20s Gemma narrative
     "/compare",                                    # Gemma + DeepSeek (~60s)
     "/brief",                                      # CrewAI chain w/ LLM
-    "/trove",                                      # Finnhub / SEC fan-out
+    "/dv",                                         # Finnhub / SEC fan-out
     "/lessons",                                    # subprocess + LLM recall
 }
 
@@ -1040,20 +1040,20 @@ def handle_command(text: str, user: str = "team"):
             _reply(f"❌ Error: {str(e)[:200]}")
             log.error(f"[tgbot] /learn failed: {e}")
 
-    elif cmd == "/trove":
+    elif cmd == "/dv":
         tickers = [a.strip("'\"/").upper() for a in args if a.strip("'\"/")] if args else None
         label   = " ".join(tickers) if tickers else "default watchlist"
-        _reply(f"⏳ Running Trove Score on <b>{label}</b>…")
+        _reply(f"⏳ Running DV Score on <b>{label}</b>…")
         try:
             import sys, os as _os
             sys.path.insert(0, _os.path.dirname(__file__))
-            from trove import run_screen, DEFAULT_WATCHLIST
+            from dv_score import run_screen, DEFAULT_WATCHLIST
             ticker_list = tickers if tickers else DEFAULT_WATCHLIST
             results = run_screen(ticker_list, max_tickers=60)
             if not results:
                 _reply("❌ No data returned — check ticker symbols.")
             else:
-                lines = ["<b>📊 Trove Score Rankings</b>\n"]
+                lines = ["<b>📊 DV Score Rankings</b>\n"]
                 for r in results:
                     imm     = "🛡️" * r["immunity"]
                     ins_d   = r.get("insider_buy_dollars", 0) or 0
@@ -1068,8 +1068,8 @@ def handle_command(text: str, user: str = "team"):
                 lines.append("\n<i>A=Valuation · B=Capital · C=Quality · D=Insider Conviction (3y dir/officer open-market buys)</i>")
                 _reply("\n".join(lines))
         except Exception as e:
-            _reply(f"❌ Trove error: {str(e)[:200]}")
-            log.error(f"[tgbot] /trove failed: {e}")
+            _reply(f"❌ DV error: {str(e)[:200]}")
+            log.error(f"[tgbot] /dv failed: {e}")
 
     elif cmd == "/lessons":
         import subprocess, sys
@@ -1449,7 +1449,7 @@ def handle_command(text: str, user: str = "team"):
                         f"Status: 🟢 HEALTHY\n\n"
                         "<i>Every /command branch in the bot executed without "
                         "raising and produced output. Covers /status, /ticks, "
-                        "/agents, /standup, /brief, /update, /trove, /learn, "
+                        "/agents, /standup, /brief, /update, /dv, /learn, "
                         "/lessons, /frequency, /supportme, /test, /compare, "
                         "/help and the unknown-command fallback.</i>"
                     )
@@ -1509,7 +1509,7 @@ def handle_command(text: str, user: str = "team"):
             "/brief — today's strategy brief from synthesis agent\n"
             "/swot — SWOT synthesis (strengths/weaknesses/opps/threats)\n"
             "/update — force sync local data to Supabase now\n"
-            "/trove [TICKERS] — deep-value Trove Score screen (default watchlist if no tickers)\n\n"
+            "/dv [TICKERS] — deep-value (DV) Score screen (default watchlist if no tickers)\n\n"
             "<b>🧠 Agent Learning:</b>\n"
             "/learn \"<lesson>\" --why \"<reason>\" — teach agents a rule\n"
             "/lessons [topic] — show lessons agents learned\n"
@@ -1602,7 +1602,7 @@ Keep responses brief (1 paragraph max). Think: Bloomberg meets a knowledgeable f
             "/brief — today's strategy in plain English\n"
             "/swot — SWOT synthesis\n"
             "/update — sync data to Supabase now\n"
-            "/trove [TICKERS] — deep-value score screen\n"
+            "/dv [TICKERS] — deep-value (DV) score screen\n"
             "/test — run Telegram handler smoke tests\n"
             "/supportme — buy-me-a-coffee / PayPal link\n"
             "/frequency — notification settings\n\n"
@@ -1816,7 +1816,7 @@ def _register_commands():
         {"command": "ticks",     "description": "Price ticks received today"},
         {"command": "force",     "description": "Run an agent on demand — /force valerie|newsie|futurist|…"},
         {"command": "compare",   "description": "Gemma vs DeepSeek side-by-side — /compare <question>"},
-        {"command": "trove",     "description": "Deep-value Trove screen — /trove [TICKERS]"},
+        {"command": "dv",        "description": "Deep-value (DV) screen — /dv [TICKERS]"},
         {"command": "learn",     "description": "Teach agents a rule — /learn \"…\" --why \"…\""},
         {"command": "lessons",   "description": "Show rules agents have learned"},
         {"command": "update",    "description": "Sync local SQLite → Supabase now"},

@@ -556,7 +556,7 @@ def format_structure_burst(
         AMC | restructuring_advisor_hired
         Confidence: 95% | Timeline: ~6 months
 
-    Example (GME, Trove score with bullets):
+    Example (GME, DV score with bullets):
         🛡️ CTO | 14:30 ET
 
         Structural Score: 7.2/10
@@ -585,7 +585,7 @@ def format_structure_burst(
         clean_conf = strip_calibration(confidence)
         lines[-1] = f"Confidence: {clean_conf} | Timeline: {timeline}"
 
-    # Bullets win over news snippet (preferred for GME Trove score)
+    # Bullets win over news snippet (preferred for GME DV score)
     if bullets:
         lines.append("")
         lines.extend(f"• {b}" for b in clamp_reasons(bullets, 4))

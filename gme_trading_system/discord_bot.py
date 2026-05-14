@@ -3,7 +3,7 @@ Discord Bot — Complete GME trading system interface (mirrors Telegram function
 
 Commands:
   /help, /status, /ticks, /agents, /brief, /update, /supportme,
-  /frequency, /learn, /lessons, /trove
+  /frequency, /learn, /lessons, /dv
 
 Chat: Send any message (no /) for LLM responses with trading context.
 
@@ -181,7 +181,7 @@ async def help_cmd(interaction: discord.Interaction):
         name="Research & Intel",
         value="/brief — today's strategy brief from synthesis agent\n"
               "/update — force sync local data to Supabase now\n"
-              "/trove [TICKERS] — deep-value Trove Score screen\n",
+              "/dv [TICKERS] — deep-value (DV) Score screen\n",
         inline=False,
     )
     embed.add_field(
@@ -377,12 +377,12 @@ async def lessons_cmd(interaction: discord.Interaction, topic: str = "trading st
         log.error(f"[discord] /lessons failed: {e}")
 
 
-@bot.tree.command(name="trove", description="Score stocks with Trove framework")
+@bot.tree.command(name="dv", description="Score stocks with DV (deep-value) framework")
 @app_commands.describe(tickers="Space-separated tickers (leave empty for default watchlist)")
-async def trove_cmd(interaction: discord.Interaction, tickers: str = ""):
+async def dv_cmd(interaction: discord.Interaction, tickers: str = ""):
     await interaction.response.defer()
     try:
-        from trove import run_screen, DEFAULT_WATCHLIST
+        from dv_score import run_screen, DEFAULT_WATCHLIST
 
         ticker_list = tickers.upper().split() if tickers.strip() else DEFAULT_WATCHLIST
         results = run_screen(ticker_list, max_tickers=60)
@@ -393,7 +393,7 @@ async def trove_cmd(interaction: discord.Interaction, tickers: str = ""):
 
         # Title embed
         title_embed = discord.Embed(
-            title="📊 Trove Score Rankings",
+            title="📊 DV Score Rankings",
             description=f"Scored {len(results)} ticker(s) — Deep-value framework",
             color=discord.Color.blue(),
             timestamp=datetime.now(ET),
@@ -441,8 +441,8 @@ async def trove_cmd(interaction: discord.Interaction, tickers: str = ""):
                 await interaction.channel.send(embeds=batch)
 
     except Exception as e:
-        await interaction.followup.send(f"❌ Trove error: {str(e)[:200]}")
-        log.error(f"[discord] /trove failed: {e}")
+        await interaction.followup.send(f"❌ DV error: {str(e)[:200]}")
+        log.error(f"[discord] /dv failed: {e}")
 
 
 def _score_color(score: float) -> discord.Color:

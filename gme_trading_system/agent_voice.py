@@ -37,16 +37,16 @@ class Voice:
     # Per-voice staleness override (minutes). When None, uses
     # AGENT_VOICE_MAX_STALENESS_MIN (default 30). Daily/rare agents need
     # a longer window so a late orchestrator restart doesn't silently drop
-    # their once-a-day output (e.g., CTO Trove fires once at 09:10 ET).
+    # their once-a-day output (e.g., CTO DV fires once at 09:10 ET).
     staleness_minutes: int | None = None
 
 
 # Agents currently producing real output (CrewAI-bypass rewrites). Add more
 # here as they are fixed. Order matters — forwarded in this order each run.
 VOICES: list[Voice] = [
-    # CTO Trove fires once daily — needs a 24h window so a mid-day restart
+    # CTO DV fires once daily — needs a 24h window so a mid-day restart
     # doesn't silently skip the morning row before it can be forwarded.
-    Voice("CTO",       "trove_score",       "🛡️", "CTO",       max_per_run=1,
+    Voice("CTO",       "dv_score",          "🛡️", "CTO",       max_per_run=1,
           staleness_minutes=1440),
     Voice("Synthesis", "synthesis",         "🧠", "Synthesis", max_per_run=1),
     Voice("Trendy",    "trend_signal",      "📈", "Trendy",    max_per_run=1),
@@ -517,14 +517,14 @@ def _try_newsie_burst(content: str, ts: str) -> str | None:
 
 
 def _try_cto_burst(content: str, ts: str) -> str | None:
-    """CTO Trove emits multi-line thesis intelligence. Extract any of:
+    """CTO DV emits multi-line thesis intelligence. Extract any of:
         - numeric score + star rating + change vs prior
         - immunity check (passing/failing)
         - net cash %
         - Altman Z (bankruptcy distance)
         - insider 3y buys ($)
     Emits whatever survived (resilient/partial). Returns None only if no
-    Trove score line at all — that's the minimum signal for a CTO burst.
+    DV score line at all — that's the minimum signal for a CTO burst.
 
     Each parser pulls fields independently so prose phrasing can drift
     without breaking the burst (mirrors the resilient-parsing approach
@@ -533,7 +533,7 @@ def _try_cto_burst(content: str, ts: str) -> str | None:
     import re as _re
 
     score_m = _re.search(
-        r"(?:GME\s+)?Trove\s*Score:\s*([\d.]+)/100\s*([★☆]+)?\s*=?\s*(\w+)?",
+        r"(?:GME\s+)?DV\s*Score:\s*([\d.]+)/100\s*([★☆]+)?\s*=?\s*(\w+)?",
         content, flags=_re.IGNORECASE
     )
     if not score_m:
@@ -571,7 +571,7 @@ def _try_cto_burst(content: str, ts: str) -> str | None:
     lines = [f"🛡️ {_ny_hhmm(ts)}", ""]
 
     # Headline: score + delta. Make delta scannable.
-    headline = f"Trove: {score:.1f}/100"
+    headline = f"DV: {score:.1f}/100"
     if stars:
         headline += f" {stars}"
     if delta:
