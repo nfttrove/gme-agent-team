@@ -63,9 +63,17 @@ def _ensure_schema(conn: sqlite3.Connection) -> None:
         "  agent_name TEXT NOT NULL,"
         "  task_type  TEXT NOT NULL,"
         "  last_id    INTEGER NOT NULL DEFAULT 0,"
+        "  last_pushed_at TEXT,"
         "  PRIMARY KEY (agent_name, task_type)"
         ")"
     )
+    # Backfill column for installs that pre-date last_pushed_at — used by
+    # state-diff suppression (Chatty/Synthesis heartbeat). NULL is fine for
+    # voices that have never pushed; suppression is bypassed in that case.
+    try:
+        conn.execute("ALTER TABLE voice_watermarks ADD COLUMN last_pushed_at TEXT")
+    except sqlite3.OperationalError:
+        pass  # column already exists
 
 
 def _get_watermark(conn: sqlite3.Connection, v: Voice) -> int:
@@ -94,6 +102,172 @@ def _set_watermark(conn: sqlite3.Connection, v: Voice, last_id: int) -> None:
         "ON CONFLICT(agent_name, task_type) DO UPDATE SET last_id=excluded.last_id",
         (v.agent_name, v.task_type, last_id),
     )
+
+
+def _mark_pushed_now(conn: sqlite3.Connection, v: Voice) -> None:
+    """Stamp the moment we actually delivered a burst for this voice.
+    State-diff suppression uses this to enforce a heartbeat — if too long
+    has passed since the last push, the agent fires even when state is
+    unchanged so the user knows it's still alive."""
+    conn.execute(
+        "UPDATE voice_watermarks SET last_pushed_at = datetime('now') "
+        "WHERE agent_name=? AND task_type=?",
+        (v.agent_name, v.task_type),
+    )
+
+
+def _get_last_pushed_at(conn: sqlite3.Connection, v: Voice) -> datetime | None:
+    """Return the UTC datetime of the last successful push, or None if
+    this voice has never pushed (or the column is NULL on a fresh row)."""
+    row = conn.execute(
+        "SELECT last_pushed_at FROM voice_watermarks WHERE agent_name=? AND task_type=?",
+        (v.agent_name, v.task_type),
+    ).fetchone()
+    if not row or not row[0]:
+        return None
+    try:
+        # SQLite datetime('now') returns 'YYYY-MM-DD HH:MM:SS' (UTC, no tz suffix)
+        dt = datetime.fromisoformat(str(row[0]).replace(" ", "T", 1))
+        if dt.tzinfo is None:
+            dt = dt.replace(tzinfo=timezone.utc)
+        return dt
+    except Exception:
+        return None
+
+
+# State-diff parsing helpers — used by the Chatty/Synthesis suppression rules.
+# Kept module-level so tests can exercise them directly.
+
+import re as _re_module
+
+_PRICE_RE = _re_module.compile(r"\$(\d+\.\d{2})")
+_CONSENSUS_RE = _re_module.compile(r"CONSENSUS:\s*(\w+)\s+(\d+)", _re_module.IGNORECASE)
+
+# Words that always pass Chatty through, even when price barely moved —
+# they signal something material the user should see (volume spike, alarm,
+# regime change). Match on uppercased prose so case doesn't matter.
+_CHATTY_ALARM_TOKENS = (
+    "FALLING", "RISING", "SPIKE", "ELEVATED VOLUME", "CAUTION",
+    "BREAKING", "BREAKOUT", "BREAKDOWN", "FLIP", "REVERSAL", "GAP",
+)
+
+
+def _extract_price(text: str) -> float | None:
+    """First $XX.XX in the prose, or None."""
+    if not text:
+        return None
+    m = _PRICE_RE.search(text)
+    if not m:
+        return None
+    try:
+        return float(m.group(1))
+    except ValueError:
+        return None
+
+
+def _extract_consensus(text: str) -> tuple[str | None, int | None]:
+    """Returns (direction_upper, percent) from a Synthesis brief, or
+    (None, None) if no CONSENSUS line."""
+    if not text:
+        return None, None
+    m = _CONSENSUS_RE.search(text)
+    if not m:
+        return None, None
+    direction = m.group(1).upper()
+    try:
+        return direction, int(m.group(2))
+    except ValueError:
+        return direction, None
+
+
+def _synthesis_low_consensus(content: str, min_pct: int = 60) -> bool:
+    """Suppress Synthesis bursts whose consensus confidence is below
+    `min_pct`. Below ~60% is the no-information regime — the brief is
+    saying 'agents disagree' or 'one agent said neutral', which is mush,
+    not signal. Real edge lives at ≥60% conviction (and especially flips).
+    """
+    _, pct = _extract_consensus(content or "")
+    if pct is None:
+        return False
+    return pct < min_pct
+
+
+def _synthesis_unchanged_state(
+    conn: sqlite3.Connection, row_id: int, content: str,
+    last_pushed_at: datetime | None,
+    max_silence_min: int = 30,
+    price_tol_pct: float = 0.5,
+    conf_tol_pp: int = 10,
+) -> bool:
+    """Suppress Synthesis if price + consensus dir + consensus % are all
+    within tolerance of the last produced brief AND we've pushed something
+    within max_silence_min. Heartbeat after silence: if it's been longer
+    than max_silence_min since last push, we let it through so the user
+    knows the agent is alive."""
+    if not content:
+        return False
+    if last_pushed_at is None:
+        return False  # never pushed → fire so user sees current state
+    age_min = (datetime.now(timezone.utc) - last_pushed_at).total_seconds() / 60.0
+    if age_min > max_silence_min:
+        return False  # heartbeat: long enough silence, fire even if unchanged
+    prev = conn.execute(
+        "SELECT content FROM agent_logs "
+        "WHERE agent_name='Synthesis' AND task_type='synthesis' AND status='ok' "
+        "AND id < ? ORDER BY id DESC LIMIT 1",
+        (row_id,),
+    ).fetchone()
+    if not prev or not prev[0]:
+        return False
+    cur_price = _extract_price(content)
+    prev_price = _extract_price(prev[0])
+    cur_dir, cur_pct = _extract_consensus(content)
+    prev_dir, prev_pct = _extract_consensus(prev[0])
+    if None in (cur_price, prev_price, cur_dir, prev_dir, cur_pct, prev_pct):
+        return False
+    if prev_price == 0:
+        return False
+    if abs(cur_price - prev_price) / prev_price * 100.0 >= price_tol_pct:
+        return False
+    if cur_dir != prev_dir:
+        return False
+    if abs(cur_pct - prev_pct) >= conf_tol_pp:
+        return False
+    return True
+
+
+def _chatty_unchanged_state(
+    conn: sqlite3.Connection, row_id: int, content: str,
+    last_pushed_at: datetime | None,
+    max_silence_min: int = 30,
+    price_tol_pct: float = 0.5,
+) -> bool:
+    """Suppress Chatty if price hasn't moved and prose has no alarm tokens
+    AND we've pushed within max_silence_min. Same heartbeat rule as
+    Synthesis — long silences always pass through."""
+    if not content:
+        return False
+    if last_pushed_at is None:
+        return False
+    age_min = (datetime.now(timezone.utc) - last_pushed_at).total_seconds() / 60.0
+    if age_min > max_silence_min:
+        return False
+    upper = content.upper()
+    if any(tok in upper for tok in _CHATTY_ALARM_TOKENS):
+        return False
+    prev = conn.execute(
+        "SELECT content FROM agent_logs "
+        "WHERE agent_name='Chatty' AND task_type='commentary' AND status='ok' "
+        "AND id < ? ORDER BY id DESC LIMIT 1",
+        (row_id,),
+    ).fetchone()
+    if not prev or not prev[0]:
+        return False
+    cur_price = _extract_price(content)
+    prev_price = _extract_price(prev[0])
+    if cur_price is None or prev_price is None or prev_price == 0:
+        return False
+    return abs(cur_price - prev_price) / prev_price * 100.0 < price_tol_pct
 
 
 def _chatty_echoes_synthesis(conn: sqlite3.Connection, row_id: int, content: str,
@@ -704,6 +878,8 @@ def forward_pending(db_path: str = DB_PATH) -> dict[str, int]:
             sent_count = 0
             skipped_count = 0
             new_watermark = watermark
+            # Capture once per voice — used by state-diff suppression below.
+            last_pushed_at = _get_last_pushed_at(conn, v)
             for row_id, ts, content in rows:
                 if _is_stale(ts or "", stale_cutoff_min):
                     new_watermark = row_id
@@ -711,12 +887,34 @@ def forward_pending(db_path: str = DB_PATH) -> dict[str, int]:
                     continue
                 if sent_count >= v.max_per_run:
                     break
+                # Synthesis: low-consensus floor. Below 60% conviction is the
+                # no-information regime ("CONSENSUS: NEUTRAL 50%" = coin flip).
+                if v.agent_name == "Synthesis":
+                    if _synthesis_low_consensus(content or "", min_pct=60):
+                        log.info(f"[voice] Synthesis low consensus (<60%) — suppressed")
+                        new_watermark = row_id
+                        continue
+                    # Synthesis: state-diff. Same price/dir/conf within tolerance
+                    # AND we've pushed recently → suppress. Heartbeat at most every
+                    # 30 min if state stays unchanged.
+                    if _synthesis_unchanged_state(conn, row_id, content or "",
+                                                    last_pushed_at):
+                        log.info(f"[voice] Synthesis unchanged state — suppressed")
+                        new_watermark = row_id
+                        continue
                 # Chatty echo suppression: if this Chatty row's bias matches
                 # the most recent Synthesis (within 60s), don't re-notify.
                 if v.agent_name == "Chatty":
                     echo_dir = _chatty_echoes_synthesis(conn, row_id, content or "", ts or "")
                     if echo_dir:
                         log.info(f"[voice] Chatty echo of Synthesis ({echo_dir}) — suppressed")
+                        new_watermark = row_id
+                        continue
+                    # Chatty: state-diff. Same price within tolerance, no alarm
+                    # words, recent push → suppress.
+                    if _chatty_unchanged_state(conn, row_id, content or "",
+                                                 last_pushed_at):
+                        log.info(f"[voice] Chatty unchanged state — suppressed")
                         new_watermark = row_id
                         continue
                 # Newsie zero-score repeat suppression
@@ -750,6 +948,13 @@ def forward_pending(db_path: str = DB_PATH) -> dict[str, int]:
                     break  # leave this and remaining rows for next tick
                 sent_count += 1
                 new_watermark = row_id
+                # Stamp the push time so state-diff suppression can enforce
+                # the heartbeat window on subsequent ticks. Update locally
+                # too so the loop's next iteration sees the fresh timestamp.
+                _set_watermark(conn, v, new_watermark)
+                _mark_pushed_now(conn, v)
+                conn.commit()
+                last_pushed_at = datetime.now(timezone.utc)
 
             if skipped_count:
                 log.info(f"[voice] {v.agent_name} skipped {skipped_count} stale row(s) "
