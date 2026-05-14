@@ -81,9 +81,16 @@ class FundamentalsFeed:
             "fifty_two_week_low":   info.get("fiftyTwoWeekLow"),
             "fifty_two_week_high":  info.get("fiftyTwoWeekHigh"),
             "prev_close":           info.get("regularMarketPreviousClose") or info.get("previousClose"),
-            "next_earnings_date":   self._next_earnings_date(info),
+            **self._earnings(info),
             **self._dark_pool(),
             **self._youtube(),
+        }
+
+    def _earnings(self, info: dict) -> dict:
+        e = self._next_earnings_info(info)
+        return {
+            "next_earnings_date":      e["date"],
+            "next_earnings_projected": e["projected"],
         }
 
     @staticmethod
@@ -144,10 +151,11 @@ class FundamentalsFeed:
                 shares_out, shares_out_yoy_pct,
                 pe_ratio, beta,
                 fifty_two_week_low, fifty_two_week_high,
-                prev_close, next_earnings_date,
+                prev_close,
+                next_earnings_date, next_earnings_projected,
                 dark_pool_pct, dark_pool_volume, dark_pool_date,
                 yt_handle, yt_subscribers)
-               VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
+               VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
             (
                 datetime.now(ET).isoformat(),
                 snap["market_cap"], snap["market_cap_yoy_pct"],
@@ -157,7 +165,8 @@ class FundamentalsFeed:
                 snap["shares_out"], snap["shares_out_yoy_pct"],
                 snap["pe_ratio"], snap["beta"],
                 snap["fifty_two_week_low"], snap["fifty_two_week_high"],
-                snap["prev_close"], snap["next_earnings_date"],
+                snap["prev_close"],
+                snap["next_earnings_date"], int(bool(snap["next_earnings_projected"])),
                 snap["dark_pool_pct"], snap["dark_pool_volume"], snap["dark_pool_date"],
                 snap["yt_handle"], snap["yt_subscribers"],
             ),
@@ -228,15 +237,66 @@ class FundamentalsFeed:
         except Exception:
             return None
 
-    @staticmethod
-    def _next_earnings_date(info: dict):
-        ts = info.get("earningsTimestamp") or info.get("earningsTimestampStart")
-        if not ts:
-            return None
+    def _next_earnings_info(self, info: dict) -> dict:
+        """Return {'date': ISO YYYY-MM-DD, 'projected': bool}.
+
+        Source priority:
+          1. Ticker.calendar["Earnings Date"] — the authoritative next-date
+             that powers stockanalysis.com, Yahoo's quote page, etc.
+          2. Ticker.earnings_dates DataFrame — first future row.
+          3. info["earningsTimestamp"] — often stale (lags the prior report).
+        If all three are in the past, project ~one fiscal quarter forward
+        from the most recent known date and flag projected=True.
+        """
+        from datetime import date as _date, timedelta
+        today = datetime.now(ET).date()
+
+        # 1. Ticker.calendar
         try:
-            return datetime.fromtimestamp(int(ts), tz=ET).date().isoformat()
-        except Exception:
-            return None
+            cal = self._ticker.calendar or {}
+            ed = cal.get("Earnings Date")
+            if ed:
+                d = ed[0] if isinstance(ed, list) else ed
+                if isinstance(d, _date) and d >= today:
+                    return {"date": d.isoformat(), "projected": False}
+        except Exception as e:
+            log.debug(f"[fundamentals] Ticker.calendar failed: {e}")
+
+        # 2. earnings_dates DataFrame
+        most_recent_past = None
+        try:
+            ed_df = self._ticker.earnings_dates
+            if ed_df is not None and not ed_df.empty:
+                import pandas as pd
+                idx = ed_df.index.tz_localize(None) if ed_df.index.tz is not None else ed_df.index
+                future = idx[idx >= pd.Timestamp(today)]
+                if len(future):
+                    return {"date": future.min().date().isoformat(), "projected": False}
+                most_recent_past = idx.max().date()
+        except Exception as e:
+            log.debug(f"[fundamentals] earnings_dates failed: {e}")
+
+        # 3. info["earningsTimestamp"]
+        ts = info.get("earningsTimestamp") or info.get("earningsTimestampStart")
+        if ts:
+            try:
+                d = datetime.fromtimestamp(int(ts), tz=ET).date()
+                if d >= today:
+                    return {"date": d.isoformat(), "projected": False}
+                if most_recent_past is None or d > most_recent_past:
+                    most_recent_past = d
+            except Exception:
+                pass
+
+        # 4. Projection fallback. GME reports ~91 days apart on a stable
+        #    cadence (early Jun / Sep / Dec / late Mar). Roll forward from
+        #    the most recent past date until we land in the future.
+        if most_recent_past is None:
+            return {"date": None, "projected": False}
+        projected = most_recent_past + timedelta(days=91)
+        while projected < today:
+            projected += timedelta(days=91)
+        return {"date": projected.isoformat(), "projected": True}
 
 
 if __name__ == "__main__":

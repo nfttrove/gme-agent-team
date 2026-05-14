@@ -203,6 +203,7 @@ CREATE TABLE IF NOT EXISTS market_fundamentals (
     fifty_two_week_high    REAL,
     prev_close             REAL,
     next_earnings_date     TEXT,
+    next_earnings_projected INTEGER DEFAULT 0,
     dark_pool_pct          REAL,
     dark_pool_volume       INTEGER,
     dark_pool_date         TEXT,

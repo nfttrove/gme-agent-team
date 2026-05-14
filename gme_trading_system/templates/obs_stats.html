@@ -190,7 +190,7 @@
   </div>
 
   <div class="footer">
-    <div class="line">Earnings <span class="accent" data-f="earnings_quarter">—</span> expected on <strong data-f="next_earnings_date" data-fmt="dateOrdinal">—</strong></div>
+    <div class="line">Earnings <span class="accent" data-f="earnings_quarter">—</span> <span data-f="earnings_verb">expected on</span> <strong data-f="next_earnings_date" data-fmt="dateOrdinal">—</strong></div>
     <div class="line">The max pain for <strong data-f="symbol">GME</strong> on <strong data-f="max_pain_expiration" data-fmt="dateOrdinal">—</strong> is <strong data-f="max_pain_strike" data-fmt="usd">—</strong></div>
   </div>
 
@@ -289,6 +289,11 @@
 
     // Prefix the handle with @ when present (raw column doesn't include it).
     payload.yt_handle_at = payload.yt_handle ? "@" + payload.yt_handle : "";
+
+    // When yfinance's calendar is stale we project the next earnings date
+    // forward ~one fiscal quarter; flag it as a guess so viewers don't take
+    // the day too literally.
+    payload.earnings_verb = payload.next_earnings_projected ? "projected for" : "expected on";
 
     // GME fiscal year ends in late Jan / early Feb, so the calendar quarter
     // of the earnings date maps to the fiscal quarter being reported:

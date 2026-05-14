@@ -39,7 +39,8 @@ _FUNDAMENTALS_COLS = [
     "shares_out", "shares_out_yoy_pct",
     "pe_ratio", "beta",
     "fifty_two_week_low", "fifty_two_week_high",
-    "prev_close", "next_earnings_date",
+    "prev_close",
+    "next_earnings_date", "next_earnings_projected",
     "dark_pool_pct", "dark_pool_volume", "dark_pool_date",
     "yt_handle", "yt_subscribers",
 ]
