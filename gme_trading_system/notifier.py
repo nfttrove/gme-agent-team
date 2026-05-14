@@ -421,10 +421,15 @@ def notify_signal_alert(agent_name: str, signal_type: str, confidence: float,
         # Trend: Z" — all redundant with the header), emit the burst with no
         # bullets rather than echoing the metadata back as one ugly line.
 
-    # Format as single SIGNAL burst message — use the agent's own emoji as identity
+    # Format as single SIGNAL burst message — use the agent's own emoji as identity.
+    # Entry + stop flow through so BUY/SELL bursts carry the full price block
+    # ("Buy near $X / Stop $X / Target $X / R:R 1:Y.Y") per the commit-17dcbce
+    # design. Formatter falls back to target-only when entry/stop are missing.
     msg = format_signal_burst(
         direction=direction,
         target=take_profit,
+        entry=entry_price,
+        stop=stop_loss,
         confidence=f"{confidence:.0%}",
         reasons=reasons,
         timestamp_et=ts,

@@ -148,21 +148,34 @@ def format_signal_burst(
     reasons: list[str] | None = None,
     timestamp_et: str | None = None,
     emoji: str = "🔮",
+    *,
+    entry: float | None = None,
+    stop: float | None = None,
 ) -> str:
     """Format a signal recommendation burst.
 
-    Returns ~4–5 line message with direction, target, confidence, and 3 bullet reasons.
+    Returns ~5–8 line message with directive (Buy/Sell near $X), full price
+    block (stop · target · R:R), confidence, and up to 3 bullet reasons.
+
+    When `entry` is present and direction is BULLISH/BEARISH, the line is
+    rewritten as a directive ("🟢 Buy near $23.45") and a compact price
+    block is emitted on the next line. When `entry` or `stop` is missing,
+    falls back to the bare "🟢 BULLISH" + "Target: $X" rendering for
+    backward compatibility with legacy callers.
+
+    HOLD/WAIT/NEUTRAL never get a price block — commit 17dcbce policy:
+    the reader is not placing an order on a HOLD/WAIT so prices are noise.
 
     Args:
         emoji: Agent emoji to use as identity. Default 🔮 (Futurist) since
                structured signal alerts are almost always Futurist predictions.
                Callers can override for other agents.
 
-    Example:
+    Example (BUY/SELL with full block):
         🔮 14:30 ET
 
-        🟢 Bullish
-        Target: $25.50
+        🟢 Buy near $23.45
+        Stop: $22.80 · Target: $25.50 · R:R 1:3.2
         Confidence: 78%
 
         • RSI oversold
@@ -171,15 +184,39 @@ def format_signal_burst(
     """
     lines = [format_header(emoji, timestamp_et=timestamp_et), ""]
 
-    # Direction with emoji
+    dir_upper = direction.upper()
     dir_emoji = {"BULLISH": "🟢", "BEARISH": "🔴", "NEUTRAL": "⚪", "HOLD": "🟡", "WAIT": "⏳"}.get(
-        direction.upper(), "⚪"
+        dir_upper, "⚪"
     )
-    lines.append(f"{dir_emoji} {direction}")
 
-    # Target
-    if target:
-        lines.append(f"Target: ${target:.2f}")
+    # Directional signal with full price block: directive headline + compact
+    # stop/target/R:R line. Triggers only when ALL three prices are present
+    # and the call is BUY/SELL — preserves the HOLD/WAIT "no prices" policy.
+    is_directional = dir_upper in ("BULLISH", "BEARISH")
+    has_full_block = is_directional and entry is not None and stop is not None and target is not None
+
+    if has_full_block:
+        verb = "Buy near" if dir_upper == "BULLISH" else "Sell near"
+        lines.append(f"{dir_emoji} {verb} ${entry:.2f}")
+
+        price_parts = [f"Stop: ${stop:.2f}", f"Target: ${target:.2f}"]
+        # Risk:Reward = reward / risk. For BULLISH: (target-entry)/(entry-stop).
+        # For BEARISH: (entry-target)/(stop-entry). abs() handles both.
+        risk = abs(entry - stop)
+        reward = abs(target - entry)
+        if risk > 0:
+            rr = reward / risk
+            # Suppress degenerate ratios — they signal a bad setup, not info.
+            if 0.1 <= rr <= 99:
+                price_parts.append(f"R:R 1:{rr:.1f}")
+        lines.append(" · ".join(price_parts))
+    else:
+        # Fallback: bare direction line + optional Target. Legacy callers
+        # (Pattern, anything without full price data) land here. HOLD/WAIT/
+        # NEUTRAL also land here and intentionally skip the price block.
+        lines.append(f"{dir_emoji} {direction}")
+        if target and is_directional:
+            lines.append(f"Target: ${target:.2f}")
 
     # Confidence
     if confidence:

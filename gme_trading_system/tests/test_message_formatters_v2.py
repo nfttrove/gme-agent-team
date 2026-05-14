@@ -99,6 +99,102 @@ class TestBurstFormatting:
         assert self.count_lines(msg) <= 8
         assert "NEUTRAL" in msg
 
+    # ─── SIGNAL BURST — ENRICHED (entry + stop + R:R) ─────────────────────
+
+    def test_bullish_signal_with_full_price_block_renders_directive_and_rr(self):
+        """Given entry=23.45, stop=22.80, target=25.50, direction=BULLISH,
+        When formatted, Then the burst contains a directive ("Buy near $X"),
+        the full price block (Stop / Target), and the R:R ratio
+        (computed: (25.50−23.45)/(23.45−22.80) ≈ 3.15)."""
+        msg = format_signal_burst(
+            direction="BULLISH",
+            entry=23.45,
+            stop=22.80,
+            target=25.50,
+            confidence="78%",
+            reasons=["RSI oversold", "Volume spike", "Support hold"],
+            timestamp_et="14:30 ET",
+        )
+        assert "Buy near $23.45" in msg
+        assert "Stop: $22.80" in msg
+        assert "Target: $25.50" in msg
+        assert "R:R 1:3.2" in msg
+        assert "78%" in msg
+        assert self.count_lines(msg) <= 8
+        assert self.count_emojis(msg) <= 4
+        assert not self.has_calibration_metadata(msg)
+
+    def test_bearish_signal_inverts_directive_and_rr(self):
+        """Given direction=BEARISH and entry>target (short setup), When
+        formatted, Then the directive is "Sell near $X" and the R:R uses
+        (entry−target)/(stop−entry). Example: entry=23.45, stop=24.10,
+        target=22.00 → reward=1.45, risk=0.65, R:R≈2.2."""
+        msg = format_signal_burst(
+            direction="BEARISH",
+            entry=23.45,
+            stop=24.10,
+            target=22.00,
+            confidence="62%",
+            reasons=["Below VWAP", "RSI weak"],
+            timestamp_et="14:30 ET",
+        )
+        assert "Sell near $23.45" in msg
+        assert "Stop: $24.10" in msg
+        assert "Target: $22.00" in msg
+        assert "R:R 1:2.2" in msg
+        assert "🔴" in msg
+
+    def test_missing_entry_falls_back_to_target_only(self):
+        """Given entry=None and target=25.50 (legacy caller / partial agent),
+        When formatted, Then today's "🟢 BULLISH" + "Target: $25.50" shape
+        is preserved — no caller breaks."""
+        msg = format_signal_burst(
+            direction="BULLISH",
+            target=25.50,
+            confidence="78%",
+            timestamp_et="14:30 ET",
+        )
+        assert "BULLISH" in msg            # bare direction line preserved
+        assert "Target: $25.50" in msg
+        assert "Buy near" not in msg       # directive only appears with entry
+        assert "R:R" not in msg            # R:R only appears with full block
+
+    def test_degenerate_rr_is_suppressed(self):
+        """Given entry==stop (zero-risk degenerate setup), When formatted,
+        Then the price block omits the R:R fragment rather than crashing on
+        division-by-zero. The stop/target line still renders."""
+        msg = format_signal_burst(
+            direction="BULLISH",
+            entry=23.45,
+            stop=23.45,
+            target=25.50,
+            confidence="78%",
+            timestamp_et="14:30 ET",
+        )
+        assert "Stop: $23.45" in msg
+        assert "Target: $25.50" in msg
+        assert "R:R" not in msg
+
+    def test_hold_signal_omits_price_block_even_with_full_data(self):
+        """Given direction=HOLD/WAIT with entry+stop+target set, When
+        formatted, Then no Stop/Target/R:R line appears. Preserves the
+        commit-17dcbce policy ("HOLD/WAIT drop the price block entirely")
+        even if a future caller wires through full data."""
+        msg = format_signal_burst(
+            direction="WAIT",
+            entry=23.45,
+            stop=22.80,
+            target=25.50,
+            confidence="45%",
+            timestamp_et="14:30 ET",
+        )
+        assert "Stop:" not in msg
+        assert "Target:" not in msg
+        assert "R:R" not in msg
+        assert "Buy near" not in msg
+        assert "⏳" in msg                  # WAIT emoji preserved
+        assert "45%" in msg
+
     # ─── MARKET BURST ─────────────────────────────────────────────────────
 
     def test_market_burst_with_range(self):
