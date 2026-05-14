@@ -77,6 +77,8 @@ OWNER_ONLY_COMMANDS = {
     "/compare",                                    # Gemma + DeepSeek (~60s)
     "/brief",                                      # CrewAI chain w/ LLM
     "/dv",                                         # Finnhub / SEC fan-out
+    "/dvburst",                                    # CTO DV burst + LLM + Polygon
+    "/exchange",                                   # Polygon trades (paid feed)
     "/lessons",                                    # subprocess + LLM recall
 }
 
@@ -1071,6 +1073,56 @@ def handle_command(text: str, user: str = "team"):
             _reply(f"❌ DV error: {str(e)[:200]}")
             log.error(f"[tgbot] /dv failed: {e}")
 
+    elif cmd == "/dvburst":
+        # Trigger the CTO DV burst for one or more tickers — each ticker's
+        # block (DV score + short vol + venue mix) is written as its own
+        # agent_logs row, so the voice forwarder pushes one Telegram burst
+        # per ticker, stacked one after another. Defaults to GME when no
+        # ticker is given.
+        ticker_args = [a.strip("'\"/").upper() for a in args if a.strip("'\"/")]
+        tickers = ticker_args if ticker_args else ["GME"]
+        _reply(f"⏳ Running DV burst for {', '.join(tickers)}…")
+        try:
+            from orchestrator import run_cto_dv_score
+            inner = run_cto_dv_score
+            while hasattr(inner, "__wrapped__"):
+                inner = inner.__wrapped__
+            inner(tickers=tickers)
+            # Push bursts to Telegram immediately rather than waiting for
+            # the next forwarder tick.
+            try:
+                import agent_voice
+                sent = agent_voice.forward_pending()
+                log.info(f"[tgbot] /dvburst forwarder flush: {sent}")
+            except Exception as e:
+                log.warning(f"[tgbot] /dvburst forwarder flush failed: {e}")
+            _reply(f"✅ DV burst complete for {', '.join(tickers)}.")
+        except Exception as e:
+            _reply(f"❌ /dvburst error: {str(e)[:200]}")
+            log.error(f"[tgbot] /dvburst failed: {e}")
+
+    elif cmd == "/exchange":
+        # Per-venue daily volume breakdown (DARK POOL = TRF/ADF aggregation).
+        # Mirrors redstripedtie.com/_/{TICKER}?view=volume. Defaults to GME.
+        ticker_args = [a.strip("'\"/").upper() for a in args if a.strip("'\"/")]
+        ticker = ticker_args[0] if ticker_args else "GME"
+        try:
+            from exchange_volume import (
+                get_exchange_volume_summary,
+                format_full_table,
+            )
+            ev = get_exchange_volume_summary(ticker)
+            if not ev:
+                _reply(
+                    f"❌ No exchange-volume data for {ticker}. "
+                    "POLYGON_API_KEY may be unset, or Polygon is down."
+                )
+            else:
+                _reply(f"<pre>{format_full_table(ev)}</pre>")
+        except Exception as e:
+            _reply(f"❌ /exchange error: {str(e)[:200]}")
+            log.error(f"[tgbot] /exchange failed: {e}")
+
     elif cmd == "/lessons":
         import subprocess, sys
         import os as os_module
@@ -1817,6 +1869,8 @@ def _register_commands():
         {"command": "force",     "description": "Run an agent on demand — /force valerie|newsie|futurist|…"},
         {"command": "compare",   "description": "Gemma vs DeepSeek side-by-side — /compare <question>"},
         {"command": "dv",        "description": "Deep-value (DV) screen — /dv [TICKERS]"},
+        {"command": "dvburst",   "description": "Full DV burst (score + venue mix) — /dvburst [TICKERS]"},
+        {"command": "exchange",  "description": "Per-venue volume breakdown — /exchange [TICKER]"},
         {"command": "learn",     "description": "Teach agents a rule — /learn \"…\" --why \"…\""},
         {"command": "lessons",   "description": "Show rules agents have learned"},
         {"command": "update",    "description": "Sync local SQLite → Supabase now"},

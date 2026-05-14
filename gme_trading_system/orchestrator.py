@@ -2005,22 +2005,42 @@ def run_social_scan():
         write_log("Social", str(e)[:300], "social", "error")
 
 
-def run_cto_dv_score():
-    """CTO — DV (deep-value) score for GME with delta vs previous run.
+def run_cto_dv_score(tickers: list[str] | None = None):
+    """CTO — DV (deep-value) score with delta vs previous run.
 
-    Writes a formatted score card to agent_logs (task_type='dv_score', agent='CTO')
-    which the voice forwarder picks up for Telegram. LLM is used only for the
-    one-paragraph interpretation at the end — the numerical scoring is
-    deterministic (dv_score.score()), so it can't hallucinate points.
+    Writes one formatted score card per ticker to agent_logs
+    (task_type='dv_score', agent='CTO'); each row produces its own Telegram
+    burst via the voice forwarder. LLM interpretation runs only for GME
+    (the GME turnaround thesis is hard-coded into the prompt). Other
+    tickers get the deterministic numerical block + short-vol + venue mix.
+
+    Args:
+        tickers: list of symbols to score. Defaults to ["GME"] for the
+            9:10 ET cron. /dvburst passes user-supplied lists like
+            ["GME", "EBAY"]; each row writes sequentially so the
+            Telegram bursts stack one after another.
     """
-    log.info("[CTO] Running DV score")
-    write_log("CTO", "Computing DV deep-value score for GME", "dv_score", "running")
+    if tickers is None:
+        tickers = ["GME"]
+    tickers = [t.upper() for t in tickers if t and t.strip()]
+    if not tickers:
+        return
+    log.info(f"[CTO] Running DV score for {', '.join(tickers)}")
+    for ticker in tickers:
+        _run_cto_dv_score_for(ticker)
+
+
+def _run_cto_dv_score_for(ticker: str):
+    """Per-ticker DV brief. Extracted so run_cto_dv_score can loop without
+    duplicating the ~150 lines of scoring + formatting."""
+    write_log("CTO", f"Computing DV deep-value score for {ticker}", "dv_score", "running")
     try:
         from dv_score import fetch, score as dv_score_fn
 
-        inp = fetch("GME")
+        inp = fetch(ticker)
         if inp is None:
-            write_log("CTO", "dv_score.fetch returned None (data source down?)", "dv_score", "error")
+            write_log("CTO", f"dv_score.fetch({ticker}) returned None (data source down?)",
+                      "dv_score", "error")
             return
         r = dv_score_fn(inp)
         total = r["total"]
@@ -2037,12 +2057,15 @@ def run_cto_dv_score():
         imm_count = r["immunity_count"]
         net_cash_pct = (inp.cash_mm - inp.total_debt_mm) / inp.market_cap_mm if inp.market_cap_mm else 0
 
-        # Look up previous run for delta
+        # Look up previous run for delta — ticker-keyed so multi-ticker
+        # bursts don't bleed prior scores across symbols.
         conn = sqlite3.connect(DB_PATH)
         prev_row = conn.execute(
             "SELECT content FROM agent_logs WHERE agent_name='CTO' "
             "AND task_type='dv_score' AND status='ok' "
-            "ORDER BY timestamp DESC LIMIT 1"
+            "AND content LIKE ? "
+            "ORDER BY timestamp DESC LIMIT 1",
+            (f"{ticker} DV Score%",),
         ).fetchone()
         conn.close()
 
@@ -2082,41 +2105,44 @@ def run_cto_dv_score():
         # Ask Gemma for the interpretation paragraph only — numbers are locked above.
         # Primed with the GME turnaround thesis so it doesn't default to generic
         # "stretched valuation" framing that contradicts the actual setup.
-        prompt = (
-            "You are the CTO — a deep-value analyst covering GME. Write ONE paragraph "
-            "(max 350 chars, no preamble, no markdown, no quotes) interpreting today's "
-            "DV (deep-value) score through the turnaround lens below.\n\n"
-            "SCORING RUBRIC (so you use the right language):\n"
-            "  ≥80 exceptional · ≥65 strong · ≥50 investment-grade deep value · "
-            "≥35 speculative · <35 avoid. Do NOT call a 50+ score 'low' or 'weak'.\n\n"
-            "GME CONTEXT (use this framing, don't contradict it):\n"
-            "  • Pre-2021: private equity overleveraged the company and stripped it, "
-            "Blockbuster/Toys-R-Us playbook. Weak historical P&L and depressed sales "
-            "are LEGACY PE DAMAGE being worked off — not current mismanagement.\n"
-            "  • Ryan Cohen took the board in 2021, cleared house, executed a turnaround.\n"
-            "  • 4-year swing: ~$400M loss → ~$400M profit (~$800M). Raised ~$9B, "
-            "now debt-light with a large cash pile.\n"
-            "  • Heavily shorted; thesis analogy is early Tesla.\n"
-            "  • If Valuation pillar is weak but Capital Structure + Quality are strong, "
-            "that IS the thesis shape — call it out, don't flag it as a contradiction.\n\n"
-            f"TODAY'S SCORE — {tier_hint}:\n"
-            f"GME | Score {total:.1f}/100 ({rating}) | Immunity {imm_count}/5\n"
-            f"Pillars — Valuation: {A:.1f}/25 · Capital: {B:.1f}/40 · Quality: {C:.1f}/20 · "
-            f"Insider Conviction: {D:.1f}/15\n"
-            f"Inputs: EV/FCF {inp.ev_fcf:.1f} · EV/EBITDA {inp.ev_ebitda:.1f} · P/B {inp.pb:.2f} · "
-            f"Altman Z {inp.altman_z:.1f} · D/E {inp.debt_equity:.2f} · "
-            f"Net Cash {net_cash_pct*100:.1f}% of MCap · Op Margin {inp.operating_margin*100:.1f}% · "
-            f"ROE {inp.roe*100:.1f}% · Net Margin {inp.net_margin*100:.1f}%\n"
-            f"Insider open-market buys (dir/officer, last 3y): {ins_count} purchases / {ins_str} total"
-        )
+        # Other tickers skip the LLM (the prompt is GME-specific and the deterministic
+        # numerics + venue mix already carry the load).
         interpretation = ""
-        try:
-            from llm_config import llm_generate
-            interpretation = llm_generate(prompt, num_predict=200, temperature=0.4, timeout=30)
-            interpretation = interpretation.strip().strip('"').strip("'")
-            interpretation = " ".join(interpretation.split())[:600]
-        except Exception as e:
-            log.warning(f"[CTO] DV interpretation LLM failed: {e}")
+        if ticker == "GME":
+            prompt = (
+                "You are the CTO — a deep-value analyst covering GME. Write ONE paragraph "
+                "(max 350 chars, no preamble, no markdown, no quotes) interpreting today's "
+                "DV (deep-value) score through the turnaround lens below.\n\n"
+                "SCORING RUBRIC (so you use the right language):\n"
+                "  ≥80 exceptional · ≥65 strong · ≥50 investment-grade deep value · "
+                "≥35 speculative · <35 avoid. Do NOT call a 50+ score 'low' or 'weak'.\n\n"
+                "GME CONTEXT (use this framing, don't contradict it):\n"
+                "  • Pre-2021: private equity overleveraged the company and stripped it, "
+                "Blockbuster/Toys-R-Us playbook. Weak historical P&L and depressed sales "
+                "are LEGACY PE DAMAGE being worked off — not current mismanagement.\n"
+                "  • Ryan Cohen took the board in 2021, cleared house, executed a turnaround.\n"
+                "  • 4-year swing: ~$400M loss → ~$400M profit (~$800M). Raised ~$9B, "
+                "now debt-light with a large cash pile.\n"
+                "  • Heavily shorted; thesis analogy is early Tesla.\n"
+                "  • If Valuation pillar is weak but Capital Structure + Quality are strong, "
+                "that IS the thesis shape — call it out, don't flag it as a contradiction.\n\n"
+                f"TODAY'S SCORE — {tier_hint}:\n"
+                f"GME | Score {total:.1f}/100 ({rating}) | Immunity {imm_count}/5\n"
+                f"Pillars — Valuation: {A:.1f}/25 · Capital: {B:.1f}/40 · Quality: {C:.1f}/20 · "
+                f"Insider Conviction: {D:.1f}/15\n"
+                f"Inputs: EV/FCF {inp.ev_fcf:.1f} · EV/EBITDA {inp.ev_ebitda:.1f} · P/B {inp.pb:.2f} · "
+                f"Altman Z {inp.altman_z:.1f} · D/E {inp.debt_equity:.2f} · "
+                f"Net Cash {net_cash_pct*100:.1f}% of MCap · Op Margin {inp.operating_margin*100:.1f}% · "
+                f"ROE {inp.roe*100:.1f}% · Net Margin {inp.net_margin*100:.1f}%\n"
+                f"Insider open-market buys (dir/officer, last 3y): {ins_count} purchases / {ins_str} total"
+            )
+            try:
+                from llm_config import llm_generate
+                interpretation = llm_generate(prompt, num_predict=200, temperature=0.4, timeout=30)
+                interpretation = interpretation.strip().strip('"').strip("'")
+                interpretation = " ".join(interpretation.split())[:600]
+            except Exception as e:
+                log.warning(f"[CTO] DV interpretation LLM failed: {e}")
 
         imm_line = (
             f"{'✓' if imm['debt_free'] else '✗'} Debt-free · "
@@ -2132,14 +2158,30 @@ def run_cto_dv_score():
         short_vol_line = ""
         try:
             from finra_short_vol import get_short_vol_summary, format_brief_line
-            sv = get_short_vol_summary("GME")
+            sv = get_short_vol_summary(ticker)
             if sv:
-                short_vol_line = format_brief_line(sv)
+                short_vol_line = format_brief_line(sv, ticker=ticker)
         except Exception as e:
             log.warning(f"[CTO] FINRA short-vol fetch failed: {e}")
 
+        # Venue-mix intel from Polygon trades (per-MIC daily aggregation).
+        # Shows how much volume cleared off-exchange (DARK POOL = TRF/ADF
+        # prints) vs. lit venues. Soft-fails to nothing without
+        # POLYGON_API_KEY or on Polygon outage.
+        venue_line = ""
+        try:
+            from exchange_volume import (
+                get_exchange_volume_summary,
+                format_brief_line as ex_brief,
+            )
+            ev = get_exchange_volume_summary(ticker)
+            if ev:
+                venue_line = ex_brief(ev, ticker=ticker)
+        except Exception as e:
+            log.warning(f"[CTO] Exchange-volume fetch failed: {e}")
+
         brief = (
-            f"GME DV Score: {total:.1f}/100 {rating} {delta_str}\n"
+            f"{ticker} DV Score: {total:.1f}/100 {rating} {delta_str}\n"
             f"Pillars — Valuation {A:.1f}/25 · Capital {B:.1f}/40 · Quality {C:.1f}/20 · Insider {D:.1f}/15\n"
             f"Insider 3y buys: {ins_count} purchases / {ins_str}\n"
             f"Immunity {imm_count}/5: {imm_line}\n"
@@ -2149,14 +2191,16 @@ def run_cto_dv_score():
         )
         if short_vol_line:
             brief += f"\n{short_vol_line}"
+        if venue_line:
+            brief += f"\n{venue_line}"
         if interpretation:
             brief += f"\n— {interpretation}"
 
-        log.info(f"[CTO] DV: {total:.1f}/100 {delta_str}")
+        log.info(f"[CTO] {ticker} DV: {total:.1f}/100 {delta_str}")
         write_log("CTO", brief, "dv_score", "ok")
     except Exception as e:
-        log.error(f"[CTO] DV score failed: {e}")
-        write_log("CTO", str(e), "dv_score", "error")
+        log.error(f"[CTO] {ticker} DV score failed: {e}")
+        write_log("CTO", f"{ticker}: {e}", "dv_score", "error")
 
 
 def run_dv_history_log():

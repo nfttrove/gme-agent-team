@@ -164,6 +164,18 @@ class TestBriefLineFormat:
         assert "30d avg 61%" in line
         assert "2026-05-13" in line
 
+    def test_ticker_prefix_when_provided(self):
+        """Given a ticker arg, When formatted, Then the line is prefixed
+        so multi-ticker bursts stay unambiguous when stacked."""
+        line = format_brief_line({
+            "latest_date": "2026-05-13",
+            "latest_pct":  0.58,
+            "avg_30d_pct": 0.61,
+            "n_samples":   25,
+            "delta_pp":    -3.0,
+        }, ticker="ebay")  # case-insensitive — uppercased on output
+        assert line.startswith("EBAY Short Vol: 58%")
+
 
 class TestCTOBurstExtractsShortVol:
     """The voice-layer CTO burst formatter should extract Short Vol and
@@ -211,3 +223,44 @@ class TestCTOBurstExtractsShortVol:
         )
         burst = _try_cto_burst(content, "2026-05-14T13:10:00-04:00")
         assert "Short Vol" not in burst
+
+
+class TestCTOBurstShowsTicker:
+    """The CTO burst must surface the ticker so multi-ticker bursts
+    stacked one after another (e.g. /dvburst GME EBAY) are unambiguous."""
+
+    def test_headline_includes_ticker_when_prefixed_in_brief(self):
+        from agent_voice import _try_cto_burst
+        content = (
+            "EBAY DV Score: 58.2/100 ★★★☆☆ (first score)\n"
+            "Insider 3y buys: 3 purchases / $1.2M\n"
+            "Inputs — Net Cash 12.0% · Altman Z 4.2"
+        )
+        burst = _try_cto_burst(content, "2026-05-14T13:10:00-04:00")
+        assert burst is not None
+        assert "EBAY DV: 58.2/100" in burst
+
+    def test_headline_defaults_to_gme_when_no_ticker_prefix(self):
+        """Backward-compat: old briefs that didn't write the ticker into
+        the content (pre-multi-ticker era) should still render as GME."""
+        from agent_voice import _try_cto_burst
+        content = (
+            "DV Score: 65.4/100 ★★★★☆ (first score)\n"
+            "Insider 3y buys: 21 purchases / $44.2M"
+        )
+        burst = _try_cto_burst(content, "2026-05-14T13:10:00-04:00")
+        assert burst is not None
+        assert "GME DV: 65.4/100" in burst
+
+    def test_short_vol_line_parses_with_ticker_prefix(self):
+        """The short-vol regex must tolerate the new tickerised line
+        format ('EBAY Short Vol: ...') without losing the arrow logic."""
+        from agent_voice import _try_cto_burst
+        content = (
+            "EBAY DV Score: 58.0/100 ★★★☆☆ (first score)\n"
+            "EBAY Short Vol: 45% (30d avg 60%, as of 2026-05-13)"
+        )
+        burst = _try_cto_burst(content, "2026-05-14T13:10:00-04:00")
+        assert "EBAY DV: 58.0/100" in burst
+        assert "Short Vol: 45% ↓" in burst
+        assert "(30d 60%)" in burst

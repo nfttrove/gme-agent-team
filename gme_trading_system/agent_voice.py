@@ -706,15 +706,19 @@ def _try_cto_burst(content: str, ts: str) -> str | None:
     """
     import re as _re
 
+    # Optional ticker prefix is captured so multi-ticker bursts can label
+    # each headline. Falls back to "GME" when absent — the GME-only era
+    # didn't write the ticker into the brief.
     score_m = _re.search(
-        r"(?:GME\s+)?DV\s*Score:\s*([\d.]+)/100\s*([★☆]+)?\s*=?\s*(\w+)?",
+        r"(?:([A-Z]{1,6})\s+)?DV\s*Score:\s*([\d.]+)/100\s*([★☆]+)?\s*=?\s*(\w+)?",
         content, flags=_re.IGNORECASE
     )
     if not score_m:
         return None  # minimum signal missing
-    score = float(score_m.group(1))
-    stars = score_m.group(2) or ""
-    delta = score_m.group(3) or ""
+    ticker = (score_m.group(1) or "GME").upper()
+    score = float(score_m.group(2))
+    stars = score_m.group(3) or ""
+    delta = score_m.group(4) or ""
 
     # Immunity: 'Immunity 4/5: ✗ Debt-free · ✓ Cash>$1B · ...'
     imm_m = _re.search(r"Immunity\s+(\d+)/(\d+):\s*(.+?)(?:\n|$)", content, flags=_re.IGNORECASE)
@@ -742,9 +746,11 @@ def _try_cto_burst(content: str, ts: str) -> str | None:
     insider_count = int(insider_m.group(1)) if insider_m else None
     insider_dollars = insider_m.group(2) if insider_m else None
 
-    # Short Vol: 'Short Vol: 58% (30d avg 61%, as of 2026-05-13)' from FINRA Reg SHO
+    # Short Vol: 'Short Vol: 58% (30d avg 61%, as of 2026-05-13)' from FINRA
+    # Reg SHO. Tolerates an optional ticker prefix ("GME Short Vol: ...")
+    # added when multi-ticker bursts are stacked.
     sv_m = _re.search(
-        r"Short\s*Vol:\s*([\d.]+)%\s*\(30d\s*avg\s+([\d.]+)%",
+        r"(?:[A-Z]{1,6}\s+)?Short\s*Vol:\s*([\d.]+)%\s*\(30d\s*avg\s+([\d.]+)%",
         content, flags=_re.IGNORECASE
     )
     short_vol_today = float(sv_m.group(1)) if sv_m else None
@@ -752,8 +758,9 @@ def _try_cto_burst(content: str, ts: str) -> str | None:
 
     lines = [f"🛡️ {_ny_hhmm(ts)}", ""]
 
-    # Headline: score + delta. Make delta scannable.
-    headline = f"DV: {score:.1f}/100"
+    # Headline: ticker + score + delta. Ticker prefix is mandatory so
+    # multi-ticker bursts stay unambiguous when stacked one after another.
+    headline = f"{ticker} DV: {score:.1f}/100"
     if stars:
         headline += f" {stars}"
     if delta:

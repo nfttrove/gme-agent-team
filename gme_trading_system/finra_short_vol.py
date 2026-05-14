@@ -182,11 +182,16 @@ def get_short_vol_summary(ticker: str, db_path: str = DB_PATH) -> dict | None:
     }
 
 
-def format_brief_line(summary: dict) -> str:
+def format_brief_line(summary: dict, ticker: str = "") -> str:
     """Format a one-line summary suitable for inclusion in the CTO DV
-    brief. Caller is responsible for handling the None case (no row)."""
+    brief. Caller is responsible for handling the None case (no row).
+
+    When `ticker` is provided, the line is prefixed so multi-ticker
+    bursts stay unambiguous: "GME Short Vol: 58% (30d avg 61%, ...)".
+    """
+    prefix = f"{ticker.upper()} " if ticker else ""
     return (
-        f"Short Vol: {summary['latest_pct']*100:.0f}% "
+        f"{prefix}Short Vol: {summary['latest_pct']*100:.0f}% "
         f"(30d avg {summary['avg_30d_pct']*100:.0f}%, "
         f"as of {summary['latest_date']})"
     )
