@@ -171,6 +171,14 @@ class SupabaseEdgeClient:
         }
 
     def get_recent_tweets(self, username: str, limit: int = 5) -> list[dict]:
+        """Returns the recent tweets list. Raises EdgeUnavailable when the
+        Edge function is unreachable / errored — callers should fall back to
+        another backend rather than treat that as 'no posts'.
+
+        An empty list (return value) means the call succeeded but there were
+        no posts in the window. Caller MUST distinguish those two outcomes —
+        conflating them is what produced 'no new posts' for weeks while the
+        Edge function was timing out (social_posts had 0 rows ever)."""
         try:
             resp = requests.get(
                 self._endpoint,
@@ -178,27 +186,38 @@ class SupabaseEdgeClient:
                 headers=self._headers,
                 timeout=15,
             )
-            if resp.status_code != 200:
-                log.warning(f"[twitter/supabase] Edge function {resp.status_code}: {resp.text[:200]}")
-                return []
-
-            data = resp.json()
-            # Handle both {tweets: [...]} and plain list responses
-            tweets_raw = data.get("tweets", data) if isinstance(data, dict) else data
-            if not isinstance(tweets_raw, list):
-                return []
-
-            results = []
-            for t in tweets_raw[:limit]:
-                results.append({
-                    "id":         str(t.get("id", t.get("tweet_id", hash(t.get("text", ""))))),
-                    "text":       t.get("text", t.get("full_text", "")),
-                    "created_at": t.get("created_at", t.get("timestamp", datetime.utcnow().isoformat())),
-                })
-            return results
         except Exception as e:
             log.warning(f"[twitter/supabase] Edge call failed for @{username}: {e}")
-            return []
+            raise EdgeUnavailable(str(e)) from e
+
+        if resp.status_code != 200:
+            log.warning(f"[twitter/supabase] Edge function {resp.status_code}: {resp.text[:200]}")
+            raise EdgeUnavailable(f"HTTP {resp.status_code}")
+
+        try:
+            data = resp.json()
+        except Exception as e:
+            raise EdgeUnavailable(f"non-JSON response: {e}") from e
+
+        # Handle both {tweets: [...]} and plain list responses
+        tweets_raw = data.get("tweets", data) if isinstance(data, dict) else data
+        if not isinstance(tweets_raw, list):
+            raise EdgeUnavailable(f"unexpected response shape: {type(tweets_raw).__name__}")
+
+        results = []
+        for t in tweets_raw[:limit]:
+            results.append({
+                "id":         str(t.get("id", t.get("tweet_id", hash(t.get("text", ""))))),
+                "text":       t.get("text", t.get("full_text", "")),
+                "created_at": t.get("created_at", t.get("timestamp", datetime.utcnow().isoformat())),
+            })
+        return results
+
+
+class EdgeUnavailable(Exception):
+    """Supabase Edge function (or X API) is unreachable / returned an error.
+    Callers should fall back to a secondary backend (e.g. Nitter RSS) rather
+    than interpret as 'no posts found'."""
 
 
 # ── Nitter fallback (no API key needed) ──────────────────────────────────────
@@ -253,32 +272,48 @@ class TwitterMonitor:
         self._ensure_tables()
         self._user_id_cache: dict[str, str] = {}
         self._last_tweet_id: dict[str, str] = {}
+        # Per-call backend stats so the orchestrator can distinguish
+        # "every backend errored" from "scrape ok, no new posts".
+        self.last_scan_stats: dict[str, int] = {"tried": 0, "failed": 0, "posts": 0}
+
+        # Backend chain — primary is whatever creds are configured, secondary
+        # is always Nitter so a transient Edge/X outage doesn't blackhole the
+        # scan. Was: pick exactly one and silently fail. That's how the
+        # social_posts table accumulated 0 rows over months — Edge timed out
+        # and Nitter was never tried.
+        self._fallback = NitterFallback()
 
         if X_BEARER_TOKEN:
             self._client = XAPIClient(X_BEARER_TOKEN)
             self._edge = None
-            self._fallback = None
-            log.info("[twitter] Using X API v2 (authenticated)")
+            log.info("[twitter] Primary: X API v2; fallback: Nitter")
         elif SUPABASE_URL and SUPABASE_KEY:
             self._client = None
             self._edge = SupabaseEdgeClient(SUPABASE_URL, SUPABASE_KEY)
-            self._fallback = None
-            log.info("[twitter] Using Supabase Edge Function → TwitterAPI.io")
+            log.info("[twitter] Primary: Supabase Edge → TwitterAPI.io; fallback: Nitter")
         else:
             self._client = None
             self._edge = None
-            self._fallback = NitterFallback()
-            log.warning("[twitter] No API keys — using Nitter fallback (less reliable)")
+            log.warning("[twitter] No API keys — Nitter only (less reliable)")
 
     def scan_all(self) -> list[dict]:
-        """Scan all tracked accounts for new posts. Returns list of new signal dicts."""
+        """Scan all tracked accounts for new posts. Returns list of new signal dicts.
+
+        Side-effect: populates self.last_scan_stats so callers (orchestrator's
+        run_social_scan) can flag silent-rot patterns instead of logging
+        'no new posts' when every backend died.
+        """
+        self.last_scan_stats = {"tried": 0, "failed": 0, "posts": 0}
         all_signals = []
         for username in TRACKED_ACCOUNTS:
+            self.last_scan_stats["tried"] += 1
             try:
                 signals = self._scan_account(username)
                 all_signals.extend(signals)
+                self.last_scan_stats["posts"] += len(signals)
                 time.sleep(1)  # polite rate limit
             except Exception as e:
+                self.last_scan_stats["failed"] += 1
                 log.error(f"[twitter] Error scanning @{username}: {e}")
         return all_signals
 
@@ -286,18 +321,33 @@ class TwitterMonitor:
         account = TRACKED_ACCOUNTS[username]
         signals = []
 
+        # Try primary backend; on EdgeUnavailable fall back to Nitter so a
+        # broken Supabase function doesn't silently zero out the whole feed.
+        tweets: list[dict] = []
         if self._client:
             if username not in self._user_id_cache:
                 uid = self._client.get_user_id(username)
                 if not uid:
-                    return []
-                self._user_id_cache[username] = uid
-            tweets = self._client.get_recent_tweets(
-                self._user_id_cache[username],
-                since_id=self._last_tweet_id.get(username),
-            )
+                    # X API failed to resolve username — try Nitter
+                    tweets = self._fallback.get_recent_tweets(username)
+                else:
+                    self._user_id_cache[username] = uid
+            if not tweets and username in self._user_id_cache:
+                try:
+                    tweets = self._client.get_recent_tweets(
+                        self._user_id_cache[username],
+                        since_id=self._last_tweet_id.get(username),
+                    )
+                except Exception as e:
+                    log.warning(f"[twitter] X API call failed for @{username}: {e} — trying Nitter")
+                    tweets = self._fallback.get_recent_tweets(username)
         elif self._edge:
-            tweets = self._edge.get_recent_tweets(username)
+            try:
+                tweets = self._edge.get_recent_tweets(username)
+            except EdgeUnavailable:
+                # Edge timed out / errored — fall back to Nitter rather than
+                # silently treating it as "no posts".
+                tweets = self._fallback.get_recent_tweets(username)
         else:
             tweets = self._fallback.get_recent_tweets(username)
 

@@ -1966,19 +1966,40 @@ def run_monday_weekend_digest():
 
 @market_hours_required
 def run_social_scan():
-    """Every 15 min during market hours — scan Twitter/X for key account posts."""
+    """Every 15 min during market hours — scan Twitter/X for key account posts.
+
+    Distinguish three outcomes so the log doesn't lie:
+      - posts found → log each one
+      - 0 posts AND every backend failed → status='error' so future me can spot
+        the silent-rot pattern that produced "no new posts" forever
+      - 0 posts AND ≥1 backend succeeded → genuine quiet day, status='ok'
+    """
     write_log("Social", "Scanning tracked accounts", "social", "running")
     try:
-        from twitter_monitor import TwitterMonitor
+        from twitter_monitor import TwitterMonitor, TRACKED_ACCOUNTS
         monitor = TwitterMonitor()
         results = monitor.scan_all()
+        scan_stats = monitor.last_scan_stats  # {'tried': N, 'failed': M, 'posts': K}
+
         if results:
             log.info(f"[Social] {len(results)} new posts found")
             for r in results:
-                write_log("Social", f"@{r['username']} [{r['signal_type']}]: {r['text'][:200]}", "social")
+                write_log("Social", f"@{r['username']} [{r['signal_type']}]: {r['text'][:200]}",
+                          "social")
+        elif scan_stats.get("failed", 0) >= scan_stats.get("tried", len(TRACKED_ACCOUNTS)):
+            # Every single backend call failed — that's not "no news", that's
+            # a broken pipe. Flag it so it shows up in /freshness instead of
+            # silently rotting (this is exactly how social_posts ended up at
+            # 0 rows ever — Supabase Edge timed out and we logged 'no posts').
+            write_log("Social",
+                      f"All {scan_stats['failed']}/{scan_stats['tried']} backend "
+                      "calls failed — Twitter/Nitter unreachable",
+                      "social", "error")
         else:
-            from twitter_monitor import TRACKED_ACCOUNTS
-            write_log("Social", f"Scanned {len(TRACKED_ACCOUNTS)} accounts — no new posts", "social")
+            write_log("Social",
+                      f"Scanned {scan_stats.get('tried', len(TRACKED_ACCOUNTS))} accounts — "
+                      f"no new posts ({scan_stats.get('failed', 0)} backend failures)",
+                      "social")
     except Exception as e:
         log.error(f"[Social] Scan failed: {e}")
         write_log("Social", str(e)[:300], "social", "error")
@@ -2277,15 +2298,22 @@ def run_investor_intel_scan():
 
 
 def run_cto_structural_scan():
-    """Sundays 8:00 AM ET — Weekly deep structural scan and short watchlist update."""
+    """Daily 08:00 ET — EDGAR scan + agent narrative.
+
+    Was Sundays-only (id='cto_scan' in configure_schedule), but a missed Sunday
+    meant a 7-day blind spot for new 8-K triggers (CRO hires, sale-leasebacks,
+    benefit cuts). Going daily with days_back=2 gives 1-day overlap so a
+    single missed run never costs more than a day.
+    """
     from agents import cto_agent
     from tasks import cto_structural_scan_task
-    log.info("[CTO] === Weekly structural scan ===")
+    log.info("[CTO] === Daily structural scan ===")
     try:
-        # Run live EDGAR scan before the agent brief
+        # Run live EDGAR scan before the agent brief. days_back=2 = today +
+        # yesterday, with overlap so a missed run is recoverable next day.
         from sec_scanner import SECScanner
         scanner = SECScanner()
-        scanner.scan_watchlist(days_back=7)
+        scanner.scan_watchlist(days_back=2)
         log.info("[CTO] EDGAR scan complete — launching CTO analysis agent")
 
         crew = Crew(agents=[cto_agent], tasks=[cto_structural_scan_task],
@@ -3160,7 +3188,7 @@ class TradingSystemOrchestrator:
         self.scheduler.add_job(run_cto_dv_score,       CronTrigger(hour=9,  minute=10, timezone=ET),                   id="cto_dv")
         self.scheduler.add_job(run_dv_history_log,     CronTrigger(hour=9,  minute=15, timezone=ET),                   id="dv_history_log")
         self.scheduler.add_job(run_dv_history_resolve, CronTrigger(hour=3, minute=30, timezone=ET),                    id="dv_history_resolve")
-        self.scheduler.add_job(run_cto_structural_scan, CronTrigger(day_of_week="sun", hour=8, minute=0, timezone=ET), id="cto_scan")
+        self.scheduler.add_job(run_cto_structural_scan, CronTrigger(hour=8, minute=0, timezone=ET), id="cto_scan")
         self.scheduler.add_job(run_investor_intel_scan, CronTrigger(hour=8, minute=0, timezone=ET),                    id="investor_intel")
 
         # Monday weekend digest — pre-open news + gap-risk read before the 09:00 huddle
