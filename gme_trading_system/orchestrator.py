@@ -1847,6 +1847,20 @@ def run_options_update():
         write_log("Options", str(e), "max_pain", "error")
 
 
+def run_fundamentals_update():
+    """Daily 08:35 ET (Mon-Fri) — refresh yfinance fundamentals + earnings date
+    feeding the local OBS dashboard panel (/obs/stats)."""
+    log.info("[Fundamentals] Refreshing OBS panel snapshot...")
+    try:
+        from fundamentals_feed import FundamentalsFeed
+        ok = FundamentalsFeed().update_db()
+        if not ok:
+            write_log("Fundamentals", "yfinance returned no fields — skipped write", "fundamentals", "warn")
+    except Exception as e:
+        log.error(f"[Fundamentals] Update failed: {e}")
+        write_log("Fundamentals", str(e), "fundamentals", "error")
+
+
 def run_monday_weekend_digest():
     """Monday 08:00 ET — pre-open digest of weekend news + gap risk.
 
@@ -3255,6 +3269,7 @@ class TradingSystemOrchestrator:
 
         # Options intelligence — max pain every Monday pre-market
         self.scheduler.add_job(run_options_update, CronTrigger(day_of_week="mon", hour=8, minute=30, timezone=ET), id="options")
+        self.scheduler.add_job(run_fundamentals_update, CronTrigger(day_of_week="mon-fri", hour=8, minute=35, timezone=ET), id="fundamentals")
 
         # Weekly coffee nudge — Sundays 10:00 AM ET
         self.scheduler.add_job(run_sunday_support_message, CronTrigger(day_of_week="sun", hour=10, minute=0, timezone=ET), id="sunday_support")

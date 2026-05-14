@@ -29,7 +29,7 @@ from datetime import datetime
 from zoneinfo import ZoneInfo
 from pathlib import Path
 
-from flask import Flask, request, jsonify
+from flask import Flask, request, jsonify, render_template
 from dotenv import load_dotenv
 from prometheus_client import Counter, Gauge, Histogram, generate_latest, CONTENT_TYPE_LATEST
 
@@ -47,7 +47,12 @@ GIT_REPO  = os.getenv("GIT_REPO_PATH", "")
 SYMBOL    = "GME"
 PORT      = int(os.getenv("LOGGER_PORT", "8765"))
 
-app = Flask(__name__)
+app = Flask(
+    __name__,
+    template_folder=os.path.join(os.path.dirname(__file__), "templates"),
+    static_folder=os.path.join(os.path.dirname(__file__), "static"),
+    static_url_path="/obs/static",
+)
 
 # Shared: time of last webhook tick (used by fallback watchdog)
 _last_webhook_ts: float = 0.0
@@ -229,6 +234,21 @@ def metrics():
     """Prometheus metrics endpoint."""
     _refresh_metrics()
     return generate_latest(), 200, {"Content-Type": CONTENT_TYPE_LATEST}
+
+
+# ── OBS stats panel ────────────────────────────────────────────────────────────
+
+@app.route("/obs/stats", methods=["GET"])
+def obs_stats():
+    """Unified OBS dashboard panel. Add as a Browser Source in OBS."""
+    return render_template("obs_stats.html")
+
+
+@app.route("/obs/stats.json", methods=["GET"])
+def obs_stats_json():
+    """Payload polled by obs_stats.html every 30s."""
+    from obs_panel_data import assemble_panel_payload
+    return jsonify(assemble_panel_payload())
 
 
 # ── yfinance fallback watchdog ─────────────────────────────────────────────────
