@@ -184,6 +184,30 @@ CREATE TABLE IF NOT EXISTS options_snapshots (
     net_oi_bias         TEXT
 );
 
+CREATE TABLE IF NOT EXISTS market_fundamentals (
+    id                     INTEGER PRIMARY KEY AUTOINCREMENT,
+    timestamp              TEXT    NOT NULL,
+    market_cap             REAL,
+    market_cap_yoy_pct     REAL,
+    revenue_ttm            REAL,
+    revenue_yoy_pct        REAL,
+    net_income_ttm         REAL,
+    net_income_yoy_pct     REAL,
+    eps_ttm                REAL,
+    eps_yoy_pct            REAL,
+    shares_out             REAL,
+    shares_out_yoy_pct     REAL,
+    pe_ratio               REAL,
+    beta                   REAL,
+    fifty_two_week_low     REAL,
+    fifty_two_week_high    REAL,
+    prev_close             REAL,
+    next_earnings_date     TEXT,
+    dark_pool_pct          REAL,
+    dark_pool_volume       INTEGER,
+    dark_pool_date         TEXT
+);
+
 CREATE INDEX IF NOT EXISTS idx_stream_comments_displayed ON stream_comments(displayed);
 CREATE INDEX IF NOT EXISTS idx_price_ticks_timestamp ON price_ticks(timestamp);
 CREATE INDEX IF NOT EXISTS idx_daily_candles_date ON daily_candles(date);
@@ -195,3 +219,4 @@ CREATE INDEX IF NOT EXISTS idx_structural_signals_ticker ON structural_signals(t
 CREATE INDEX IF NOT EXISTS idx_structural_signals_date ON structural_signals(filing_date);
 CREATE INDEX IF NOT EXISTS idx_social_posts_timestamp ON social_posts(timestamp);
 CREATE INDEX IF NOT EXISTS idx_options_snapshots_timestamp ON options_snapshots(timestamp);
+CREATE INDEX IF NOT EXISTS idx_market_fundamentals_ts ON market_fundamentals(timestamp DESC);

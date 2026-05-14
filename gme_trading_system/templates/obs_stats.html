@@ -1,0 +1,246 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>GME — OBS Stats Panel</title>
+<style>
+  :root {
+    --bg: #0a0a0a;
+    --ink: #ffffff;
+    --muted: #9aa0a6;
+    --accent: #ffe200;
+    --green: #2bd66a;
+    --red: #f25c5c;
+    --rule: #1f1f1f;
+  }
+  * { box-sizing: border-box; }
+  html, body {
+    margin: 0; padding: 0;
+    background: transparent;       /* OBS browser source layers cleanly */
+    color: var(--ink);
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", system-ui, sans-serif;
+    font-size: 16px;
+  }
+  .card {
+    width: 800px;
+    background: var(--bg);
+    border: 1px solid var(--rule);
+    border-radius: 6px;
+    padding: 18px 22px 14px;
+    box-shadow: 0 4px 22px rgba(0,0,0,0.6);
+  }
+  .header {
+    display: flex; justify-content: space-between; align-items: center;
+    border-bottom: 1px solid var(--accent);
+    padding-bottom: 10px; margin-bottom: 14px;
+  }
+  .date { font-weight: 700; font-size: 19px; letter-spacing: 0.2px; }
+  .flag { height: 34px; width: auto; }
+  .grid {
+    display: grid; grid-template-columns: 1fr 1fr;
+    column-gap: 28px; row-gap: 8px;
+  }
+  .row {
+    display: flex; justify-content: space-between; align-items: baseline;
+    padding: 4px 0;
+    border-bottom: 1px solid var(--rule);
+  }
+  .row:last-child { border-bottom: none; }
+  .label { color: var(--accent); font-weight: 600; font-size: 14px; }
+  .value { font-variant-numeric: tabular-nums; font-weight: 500; }
+  .delta { margin-left: 6px; font-size: 13px; font-variant-numeric: tabular-nums; }
+  .delta.pos { color: var(--green); }
+  .delta.neg { color: var(--red); }
+  .footer {
+    margin-top: 14px; padding-top: 10px;
+    border-top: 1px solid var(--rule);
+    font-size: 14px; color: var(--muted);
+  }
+  .footer .line { margin: 3px 0; }
+  .footer strong { color: var(--ink); font-weight: 600; }
+  .footer .accent { color: var(--accent); font-weight: 600; }
+  .subscribe {
+    margin: 10px 0 4px; text-align: center;
+  }
+  .subscribe img { max-width: 100%; height: auto; }
+  .darkpool {
+    display: flex; justify-content: space-between; align-items: center;
+    margin-top: 10px; padding-top: 8px;
+    border-top: 1px solid var(--rule);
+    color: var(--muted); font-size: 13px; letter-spacing: 1px;
+  }
+  .darkpool .dp-label { font-weight: 700; letter-spacing: 2px; }
+  .darkpool .dp-pct { color: var(--ink); font-weight: 600; font-variant-numeric: tabular-nums; }
+  .darkpool .dp-vol { color: var(--ink); font-variant-numeric: tabular-nums; }
+</style>
+</head>
+<body>
+<div class="card">
+  <div class="header">
+    <div class="date" id="date">—</div>
+    <img class="flag" src="/obs/static/pirate.gif" alt="" onerror="this.style.display='none'">
+  </div>
+
+  <div class="grid">
+    <div class="row"><span class="label">Market Cap</span>
+      <span><span class="value" data-f="market_cap" data-fmt="bignum">—</span><span class="delta" data-f="market_cap_yoy_pct" data-fmt="pct"></span></span>
+    </div>
+    <div class="row"><span class="label">Volume</span>
+      <span class="value" data-f="day_volume" data-fmt="int">—</span>
+    </div>
+
+    <div class="row"><span class="label">Revenue (ttm)</span>
+      <span><span class="value" data-f="revenue_ttm" data-fmt="bignum">—</span><span class="delta" data-f="revenue_yoy_pct" data-fmt="pct"></span></span>
+    </div>
+    <div class="row"><span class="label">Open</span>
+      <span class="value" data-f="day_open" data-fmt="price">—</span>
+    </div>
+
+    <div class="row"><span class="label">Net Income</span>
+      <span><span class="value" data-f="net_income_ttm" data-fmt="bignum">—</span><span class="delta" data-f="net_income_yoy_pct" data-fmt="pct"></span></span>
+    </div>
+    <div class="row"><span class="label">Previous Close</span>
+      <span class="value" data-f="prev_close" data-fmt="price">—</span>
+    </div>
+
+    <div class="row"><span class="label">EPS</span>
+      <span><span class="value" data-f="eps_ttm" data-fmt="dec2">—</span><span class="delta" data-f="eps_yoy_pct" data-fmt="pct"></span></span>
+    </div>
+    <div class="row"><span class="label">Day's Range</span>
+      <span class="value" data-f="day_range" data-fmt="range">—</span>
+    </div>
+
+    <div class="row"><span class="label">Shares Out</span>
+      <span><span class="value" data-f="shares_out" data-fmt="bignum">—</span><span class="delta" data-f="shares_out_yoy_pct" data-fmt="pct"></span></span>
+    </div>
+    <div class="row"><span class="label">52-Week Range</span>
+      <span class="value" data-f="week52_range" data-fmt="range">—</span>
+    </div>
+
+    <div class="row"><span class="label">PE Ratio</span>
+      <span class="value" data-f="pe_ratio" data-fmt="dec2">—</span>
+    </div>
+    <div class="row"><span class="label">Beta</span>
+      <span class="value" data-f="beta" data-fmt="dec2">—</span>
+    </div>
+  </div>
+
+  <div class="footer">
+    <div class="line">Earnings <span class="accent" data-f="earnings_quarter">—</span> expected on <strong data-f="next_earnings_date" data-fmt="dateOrdinal">—</strong></div>
+    <div class="line">The max pain for <strong data-f="symbol">GME</strong> on <strong data-f="max_pain_expiration" data-fmt="dateOrdinal">—</strong> is <strong data-f="max_pain_strike" data-fmt="usd">—</strong></div>
+  </div>
+
+  <div class="subscribe">
+    <img src="/obs/static/subscribe.png" alt="" onerror="this.style.display='none'">
+  </div>
+
+  <div class="darkpool">
+    <span class="dp-label">DARK POOL</span>
+    <span class="dp-pct" data-f="dark_pool_pct" data-fmt="pctSimple">—</span>
+    <span class="dp-vol" data-f="dark_pool_volume" data-fmt="int">—</span>
+  </div>
+</div>
+
+<script>
+  const REFRESH_MS = 30_000;
+
+  const fmt = {
+    bignum(v) {
+      if (v == null) return "—";
+      const abs = Math.abs(v);
+      if (abs >= 1e9) return (v / 1e9).toFixed(2) + "B";
+      if (abs >= 1e6) return (v / 1e6).toFixed(2) + "M";
+      if (abs >= 1e3) return (v / 1e3).toFixed(2) + "K";
+      return String(Math.round(v));
+    },
+    int(v)   { return v == null ? "—" : v.toLocaleString("en-US"); },
+    price(v) { return v == null ? "—" : Number(v).toFixed(2); },
+    usd(v)   { return v == null ? "—" : "$" + Number(v).toFixed(2); },
+    dec2(v)  { return v == null ? "—" : Number(v).toFixed(2); },
+    pct(v) {
+      if (v == null) return "";
+      const sign = v > 0 ? "+" : "";
+      return ` ${sign}${Number(v).toFixed(1)}%`;
+    },
+    pctSimple(v) {
+      if (v == null) return "—";
+      return Number(v).toFixed(2) + "%";
+    },
+    date(v) {
+      if (!v) return "—";
+      const d = new Date(v + "T12:00:00");
+      if (isNaN(d)) return v;
+      return d.toLocaleDateString("en-US", { month: "long", day: "numeric", year: "numeric" });
+    },
+    dateOrdinal(v) {
+      if (!v) return "—";
+      const d = new Date(v + "T12:00:00");
+      if (isNaN(d)) return v;
+      const day = d.getDate();
+      const month = d.toLocaleDateString("en-US", { month: "long" });
+      const year = d.getFullYear();
+      const j = day % 10, k = day % 100;
+      const suffix = (k >= 11 && k <= 13) ? "th"
+                   : j === 1 ? "st" : j === 2 ? "nd" : j === 3 ? "rd" : "th";
+      return `${month} ${day}${suffix}, ${year}`;
+    },
+    range(v) { return v ?? "—"; },
+  };
+
+  function applyDeltaClass(el, raw) {
+    el.classList.remove("pos", "neg");
+    if (raw == null) return;
+    if (raw > 0) el.classList.add("pos");
+    else if (raw < 0) el.classList.add("neg");
+  }
+
+  function render(payload) {
+    document.getElementById("date").textContent = payload.date_header ?? "—";
+
+    // Derived ranges
+    payload.day_range = (payload.day_low != null && payload.day_high != null)
+      ? `${Number(payload.day_low).toFixed(2)} - ${Number(payload.day_high).toFixed(2)}`
+      : null;
+    payload.week52_range = (payload.fifty_two_week_low != null && payload.fifty_two_week_high != null)
+      ? `${Number(payload.fifty_two_week_low).toFixed(2)} - ${Number(payload.fifty_two_week_high).toFixed(2)}`
+      : null;
+
+    // GME fiscal year ends in late Jan / early Feb, so the calendar quarter
+    // of the earnings date maps to the fiscal quarter being reported:
+    //   Mar earnings  → Q4 (prior FY)   |  Jun → Q1  |  Sep → Q2  |  Dec → Q3
+    payload.earnings_quarter = (() => {
+      if (!payload.next_earnings_date) return "";
+      const d = new Date(payload.next_earnings_date + "T12:00:00");
+      if (isNaN(d)) return "";
+      const m = d.getMonth();  // 0-11
+      const y = d.getFullYear();
+      if (m <= 3)  return `(Q4 ${y - 1})`;
+      if (m <= 6)  return `(Q1 ${y})`;
+      if (m <= 9)  return `(Q2 ${y})`;
+      return `(Q3 ${y})`;
+    })();
+
+    for (const el of document.querySelectorAll("[data-f]")) {
+      const key = el.dataset.f;
+      const f   = el.dataset.fmt;
+      const raw = payload[key];
+      el.textContent = f ? fmt[f](raw) : (raw ?? "—");
+      if (el.classList.contains("delta")) applyDeltaClass(el, raw);
+    }
+  }
+
+  async function tick() {
+    try {
+      const r = await fetch("/obs/stats.json", { cache: "no-store" });
+      if (!r.ok) return;
+      render(await r.json());
+    } catch (e) {
+      console.warn("[obs-stats] fetch failed:", e);
+    }
+  }
+
+  tick();
+  setInterval(tick, REFRESH_MS);
+</script>
+</body>
+</html>
