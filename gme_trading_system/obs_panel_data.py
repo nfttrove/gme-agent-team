@@ -63,13 +63,41 @@ def assemble_panel_payload() -> dict:
 
 
 def _latest_fundamentals(conn) -> dict:
+    """Latest snapshot, with per-field last-known-good fallback.
+
+    Every refresh writes one row containing whatever each upstream
+    (yfinance / FINRA / YouTube) returned that minute. Any of them can
+    transiently return None — yfinance hiccups, FINRA hasn't published
+    yet, YouTube serves a stripped page. Without a fallback the panel
+    would flicker "—" until the next refresh.
+
+    For each field where the most recent row is NULL, scan back through
+    recent rows and use the last non-null value. Caps at 200 rows back
+    (~4 days of 30-min refreshes) so a permanently-broken field doesn't
+    cause unbounded scans.
+    """
     row = conn.execute(
         f"SELECT {', '.join(_FUNDAMENTALS_COLS)} "
         "FROM market_fundamentals ORDER BY timestamp DESC LIMIT 1"
     ).fetchone()
     if row is None:
         return {col: None for col in _FUNDAMENTALS_COLS}
-    return {col: row[col] for col in _FUNDAMENTALS_COLS}
+    out = {col: row[col] for col in _FUNDAMENTALS_COLS}
+
+    null_cols = [c for c in _FUNDAMENTALS_COLS if out[c] is None]
+    if not null_cols:
+        return out
+
+    rows = conn.execute(
+        f"SELECT {', '.join(null_cols)} FROM market_fundamentals "
+        "ORDER BY timestamp DESC LIMIT 200"
+    ).fetchall()
+    for col in null_cols:
+        for r in rows:
+            if r[col] is not None:
+                out[col] = r[col]
+                break
+    return out
 
 
 def _today_market_data(conn) -> dict:
