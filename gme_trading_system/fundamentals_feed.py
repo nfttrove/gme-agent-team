@@ -32,6 +32,7 @@ log = logging.getLogger(__name__)
 
 DB_PATH = os.path.join(os.path.dirname(__file__), "agent_memory.db")
 SYMBOL  = "GME"
+YT_HANDLE = os.getenv("OBS_YT_HANDLE", "TroveIsland")
 
 
 class FundamentalsFeed:
@@ -82,7 +83,21 @@ class FundamentalsFeed:
             "prev_close":           info.get("regularMarketPreviousClose") or info.get("previousClose"),
             "next_earnings_date":   self._next_earnings_date(info),
             **self._dark_pool(),
+            **self._youtube(),
         }
+
+    @staticmethod
+    def _youtube() -> dict:
+        """Latest subscriber count for the configured channel handle."""
+        try:
+            from youtube_feed import get_subscriber_count
+            return {
+                "yt_handle":      YT_HANDLE,
+                "yt_subscribers": get_subscriber_count(YT_HANDLE),
+            }
+        except Exception as e:
+            log.debug(f"[fundamentals] youtube fetch failed: {e}")
+            return {"yt_handle": YT_HANDLE, "yt_subscribers": None}
 
     @staticmethod
     def _dark_pool() -> dict:
@@ -130,8 +145,9 @@ class FundamentalsFeed:
                 pe_ratio, beta,
                 fifty_two_week_low, fifty_two_week_high,
                 prev_close, next_earnings_date,
-                dark_pool_pct, dark_pool_volume, dark_pool_date)
-               VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
+                dark_pool_pct, dark_pool_volume, dark_pool_date,
+                yt_handle, yt_subscribers)
+               VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
             (
                 datetime.now(ET).isoformat(),
                 snap["market_cap"], snap["market_cap_yoy_pct"],
@@ -143,6 +159,7 @@ class FundamentalsFeed:
                 snap["fifty_two_week_low"], snap["fifty_two_week_high"],
                 snap["prev_close"], snap["next_earnings_date"],
                 snap["dark_pool_pct"], snap["dark_pool_volume"], snap["dark_pool_date"],
+                snap["yt_handle"], snap["yt_subscribers"],
             ),
         )
         conn.commit()

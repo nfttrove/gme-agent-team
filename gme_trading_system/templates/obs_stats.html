@@ -93,12 +93,37 @@
   .footer .line { margin: 3px 0; }
   .footer strong { color: var(--ink); font-weight: 600; }
   .footer .accent { color: var(--accent); font-weight: 600; }
+  /* Side-by-side: channel info on the left, SUBSCRIBE button on the right. */
   .subscribe {
-    margin: 10px 0 4px; text-align: center;
+    margin: 12px 0 4px;
+    display: flex; align-items: center; justify-content: space-between;
+    gap: 14px;
   }
-  /* Cap height tightly — users frequently drop oversized print-res assets
-     in here. max-height keeps it a reasonable CTA strip regardless. */
-  .subscribe img { max-width: 100%; max-height: 64px; height: auto; width: auto; object-fit: contain; }
+  .subscribe .sub-info {
+    display: flex; flex-direction: column; gap: 1px; min-width: 0;
+  }
+  .subscribe .sub-handle {
+    color: var(--ink); font-weight: 600; font-size: 14px;
+    white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+  }
+  .subscribe .sub-count {
+    color: var(--muted); font-size: 12px; font-variant-numeric: tabular-nums;
+  }
+  /* Styled YouTube-style SUBSCRIBE button. Mono theme keeps it white-on-black
+     for the B&W look; other themes use the canonical YouTube red. */
+  .subscribe .sub-btn {
+    flex-shrink: 0;
+    display: inline-block;
+    background: #cc0000; color: #ffffff;
+    text-decoration: none; font-weight: 700; letter-spacing: 1px;
+    font-size: 12px; padding: 8px 14px; border-radius: 4px;
+    text-transform: uppercase;
+    transition: filter 120ms ease;
+  }
+  .subscribe .sub-btn:hover { filter: brightness(1.08); }
+  :root[data-theme="mono"] .subscribe .sub-btn {
+    background: #ffffff; color: #000000;
+  }
   .flag { max-height: 38px; width: auto; }
   .darkpool {
     display: flex; justify-content: space-between; align-items: center;
@@ -170,7 +195,11 @@
   </div>
 
   <div class="subscribe">
-    <img src="/obs/static/subscribe.png" alt="" onerror="this.style.display='none'">
+    <div class="sub-info">
+      <span class="sub-handle" data-f="yt_handle_at">@TroveIsland</span>
+      <span class="sub-count"><span data-f="yt_subscribers" data-fmt="int">—</span> subscribers</span>
+    </div>
+    <a class="sub-btn" href="https://www.youtube.com/@TroveIsland?sub_confirmation=1" target="_blank" rel="noopener">SUBSCRIBE</a>
   </div>
 
   <div class="darkpool">
@@ -257,6 +286,9 @@
     payload.week52_range = (payload.fifty_two_week_low != null && payload.fifty_two_week_high != null)
       ? `${Number(payload.fifty_two_week_low).toFixed(2)} - ${Number(payload.fifty_two_week_high).toFixed(2)}`
       : null;
+
+    // Prefix the handle with @ when present (raw column doesn't include it).
+    payload.yt_handle_at = payload.yt_handle ? "@" + payload.yt_handle : "";
 
     // GME fiscal year ends in late Jan / early Feb, so the calendar quarter
     // of the earnings date maps to the fiscal quarter being reported:

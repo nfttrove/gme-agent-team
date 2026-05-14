@@ -41,6 +41,7 @@ _FUNDAMENTALS_COLS = [
     "fifty_two_week_low", "fifty_two_week_high",
     "prev_close", "next_earnings_date",
     "dark_pool_pct", "dark_pool_volume", "dark_pool_date",
+    "yt_handle", "yt_subscribers",
 ]
 
 

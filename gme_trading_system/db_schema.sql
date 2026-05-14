@@ -205,7 +205,9 @@ CREATE TABLE IF NOT EXISTS market_fundamentals (
     next_earnings_date     TEXT,
     dark_pool_pct          REAL,
     dark_pool_volume       INTEGER,
-    dark_pool_date         TEXT
+    dark_pool_date         TEXT,
+    yt_handle              TEXT,
+    yt_subscribers         INTEGER
 );
 
 CREATE INDEX IF NOT EXISTS idx_stream_comments_displayed ON stream_comments(displayed);
