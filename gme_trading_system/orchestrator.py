@@ -3206,8 +3206,15 @@ class TradingSystemOrchestrator:
         # invocation; re-add a single cron entry here if a scheduled promo
         # becomes wanted again.
 
-        # Social monitor — scan tracked accounts every 15 minutes during market hours
-        self.scheduler.add_job(run_social_scan, IntervalTrigger(minutes=15), id="social")
+        # Social monitor — DISABLED 2026-05-14. Both backend paths are dead:
+        # Nitter instances (poast.org/privacydev.net) return 403/DNS-fail in
+        # 2026 (X actively blocks them); the Supabase Edge function silently
+        # returns [] for every account (likely TwitterAPI.io key expired or
+        # function not deployed). Re-enable by uncommenting the line below
+        # after either (a) setting X_BEARER_TOKEN in .env or (b) repairing
+        # the Supabase Edge function. The run_social_scan implementation
+        # already correctly distinguishes failure from no-posts.
+        # self.scheduler.add_job(run_social_scan, IntervalTrigger(minutes=15), id="social")
 
         # Periodic intelligence digest — every 4 hours to Telegram
         self.scheduler.add_job(run_periodic_brief, IntervalTrigger(hours=4), id="periodic_brief")
