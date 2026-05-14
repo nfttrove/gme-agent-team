@@ -742,6 +742,14 @@ def _try_cto_burst(content: str, ts: str) -> str | None:
     insider_count = int(insider_m.group(1)) if insider_m else None
     insider_dollars = insider_m.group(2) if insider_m else None
 
+    # Short Vol: 'Short Vol: 58% (30d avg 61%, as of 2026-05-13)' from FINRA Reg SHO
+    sv_m = _re.search(
+        r"Short\s*Vol:\s*([\d.]+)%\s*\(30d\s*avg\s+([\d.]+)%",
+        content, flags=_re.IGNORECASE
+    )
+    short_vol_today = float(sv_m.group(1)) if sv_m else None
+    short_vol_avg = float(sv_m.group(2)) if sv_m else None
+
     lines = [f"🛡️ {_ny_hhmm(ts)}", ""]
 
     # Headline: score + delta. Make delta scannable.
@@ -764,6 +772,14 @@ def _try_cto_burst(content: str, ts: str) -> str | None:
     # Insider conviction
     if insider_count is not None and insider_dollars:
         lines.append(f"Insider 3y: {insider_count} buys / ${insider_dollars}")
+
+    # Short volume (FINRA Reg SHO consolidated feed). Arrow shows today vs.
+    # 30-day baseline — ↑ = pressure building, ↓ = pressure easing. 2pp
+    # threshold filters daily noise; only material moves get an arrow.
+    if short_vol_today is not None and short_vol_avg is not None:
+        delta = short_vol_today - short_vol_avg
+        arrow = "↑" if delta > 2 else "↓" if delta < -2 else "→"
+        lines.append(f"Short Vol: {short_vol_today:.0f}% {arrow} (30d {short_vol_avg:.0f}%)")
 
     # Immunity (shown last so failing items pop)
     if immunity_passed and immunity_total:

@@ -2125,6 +2125,19 @@ def run_cto_dv_score():
             f"{'✓' if imm['profitable'] else '✗'} Profitable · "
             f"{'✓' if imm['altman_safe'] else '✗'} Altman Safe"
         )
+        # Short-vol intel from FINRA Reg SHO daily feed. Independent of the
+        # DV pillar math (rubric stays untouched) — adds a one-line context
+        # tag to the brief so the burst surfaces today's short pressure vs.
+        # the 30-day baseline. Soft-fails to nothing on FINRA outage.
+        short_vol_line = ""
+        try:
+            from finra_short_vol import get_short_vol_summary, format_brief_line
+            sv = get_short_vol_summary("GME")
+            if sv:
+                short_vol_line = format_brief_line(sv)
+        except Exception as e:
+            log.warning(f"[CTO] FINRA short-vol fetch failed: {e}")
+
         brief = (
             f"GME DV Score: {total:.1f}/100 {rating} {delta_str}\n"
             f"Pillars — Valuation {A:.1f}/25 · Capital {B:.1f}/40 · Quality {C:.1f}/20 · Insider {D:.1f}/15\n"
@@ -2134,6 +2147,8 @@ def run_cto_dv_score():
             f"Altman Z {inp.altman_z:.1f} · D/E {inp.debt_equity:.2f} · Net Cash {net_cash_pct*100:.1f}% · "
             f"OpMgn {inp.operating_margin*100:.1f}% · ROE {inp.roe*100:.1f}% · NetMgn {inp.net_margin*100:.1f}%"
         )
+        if short_vol_line:
+            brief += f"\n{short_vol_line}"
         if interpretation:
             brief += f"\n— {interpretation}"
 
