@@ -86,14 +86,28 @@ class FundamentalsFeed:
 
     @staticmethod
     def _dark_pool() -> dict:
-        """FINRA short-volume proxy for dark pool participation. 2-week delayed."""
+        """FINRA short-volume proxy for dark pool participation.
+
+        Uses finra_short_vol (the canonical FINRA wiring — circuit breaker,
+        30-day cached backfill) rather than the inline scraper in
+        options_feed.py which only goes back 10 days uncached.
+        """
         try:
-            from options_feed import OptionsFeed
-            dp = OptionsFeed().dark_pool_summary() or {}
+            from finra_short_vol import get_short_vol_summary, DB_PATH as FINRA_DB
+            summary = get_short_vol_summary("GME")
+            if not summary:
+                return {"dark_pool_pct": None, "dark_pool_volume": None, "dark_pool_date": None}
+            conn = sqlite3.connect(FINRA_DB)
+            row = conn.execute(
+                "SELECT short_volume FROM finra_short_vol "
+                "WHERE ticker='GME' AND date=? LIMIT 1",
+                (summary["latest_date"],),
+            ).fetchone()
+            conn.close()
             return {
-                "dark_pool_pct":    dp.get("short_pct"),
-                "dark_pool_volume": dp.get("short_volume"),
-                "dark_pool_date":   dp.get("date"),
+                "dark_pool_pct":    round(summary["latest_pct"] * 100, 2),
+                "dark_pool_volume": int(row[0]) if row else None,
+                "dark_pool_date":   summary["latest_date"],
             }
         except Exception as e:
             log.debug(f"[fundamentals] dark pool fetch failed: {e}")

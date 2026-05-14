@@ -53,6 +53,10 @@ app = Flask(
     static_folder=os.path.join(os.path.dirname(__file__), "static"),
     static_url_path="/obs/static",
 )
+# Pick up template edits without a process restart — handy while iterating
+# on the OBS panel during a stream.
+app.config["TEMPLATES_AUTO_RELOAD"] = True
+app.jinja_env.auto_reload = True
 
 # Shared: time of last webhook tick (used by fallback watchdog)
 _last_webhook_ts: float = 0.0

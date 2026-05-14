@@ -4,14 +4,40 @@
 <meta charset="utf-8">
 <title>GME — OBS Stats Panel</title>
 <style>
+  /* Default theme: dark + gold (matches the original screenshot). */
   :root {
-    --bg: #0a0a0a;
-    --ink: #ffffff;
-    --muted: #9aa0a6;
+    --bg:     #0a0a0a;
+    --ink:    #ffffff;
+    --muted:  #9aa0a6;
     --accent: #ffe200;
-    --green: #2bd66a;
-    --red: #f25c5c;
-    --rule: #1f1f1f;
+    --green:  #2bd66a;
+    --red:    #f25c5c;
+    --rule:   #1f1f1f;
+    --shadow: 0 4px 22px rgba(0,0,0,0.6);
+  }
+  /* White / paper theme — append ?theme=white to the URL. */
+  :root[data-theme="white"] {
+    --bg:     #ffffff;
+    --ink:    #111111;
+    --muted:  #6b7280;
+    --accent: #b88500;
+    --green:  #0e8a3e;
+    --red:    #c2362f;
+    --rule:   #e3e3e3;
+    --shadow: 0 4px 22px rgba(0,0,0,0.10);
+  }
+  /* Mono theme — black/white with the gold replaced by white.
+     Deltas stay green/red — that's the one place color is load-bearing.
+     Append ?theme=mono to the URL. */
+  :root[data-theme="mono"] {
+    --bg:     #0a0a0a;
+    --ink:    #ffffff;
+    --muted:  #b0b0b0;
+    --accent: #ffffff;
+    --green:  #2bd66a;
+    --red:    #f25c5c;
+    --rule:   #2a2a2a;
+    --shadow: 0 4px 22px rgba(0,0,0,0.6);
   }
   * { box-sizing: border-box; }
   html, body {
@@ -19,15 +45,22 @@
     background: transparent;       /* OBS browser source layers cleanly */
     color: var(--ink);
     font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", system-ui, sans-serif;
-    font-size: 16px;
+    font-size: clamp(13px, 1.2vw + 9px, 16px);
   }
   .card {
-    width: 800px;
+    width: 100%;
+    max-width: 800px;
     background: var(--bg);
     border: 1px solid var(--rule);
     border-radius: 6px;
     padding: 18px 22px 14px;
-    box-shadow: 0 4px 22px rgba(0,0,0,0.6);
+    box-shadow: var(--shadow);
+  }
+  @media (max-width: 540px) {
+    .card { padding: 14px 16px 12px; }
+    .grid { grid-template-columns: 1fr; column-gap: 0; }
+    .date { font-size: 17px !important; }
+    .footer { font-size: 13px; }
   }
   .header {
     display: flex; justify-content: space-between; align-items: center;
@@ -38,14 +71,15 @@
   .flag { height: 34px; width: auto; }
   .grid {
     display: grid; grid-template-columns: 1fr 1fr;
-    column-gap: 28px; row-gap: 8px;
+    column-gap: 28px;
   }
+  .col { display: flex; flex-direction: column; }
   .row {
     display: flex; justify-content: space-between; align-items: baseline;
     padding: 4px 0;
     border-bottom: 1px solid var(--rule);
   }
-  .row:last-child { border-bottom: none; }
+  .col .row:last-child { border-bottom: none; }
   .label { color: var(--accent); font-weight: 600; font-size: 14px; }
   .value { font-variant-numeric: tabular-nums; font-weight: 500; }
   .delta { margin-left: 6px; font-size: 13px; font-variant-numeric: tabular-nums; }
@@ -82,46 +116,45 @@
   </div>
 
   <div class="grid">
-    <div class="row"><span class="label">Market Cap</span>
-      <span><span class="value" data-f="market_cap" data-fmt="bignum">—</span><span class="delta" data-f="market_cap_yoy_pct" data-fmt="pct"></span></span>
+    <div class="col">
+      <div class="row"><span class="label">Market Cap</span>
+        <span><span class="value" data-f="market_cap" data-fmt="bignum">—</span><span class="delta" data-f="market_cap_yoy_pct" data-fmt="pct"></span></span>
+      </div>
+      <div class="row"><span class="label">Revenue (ttm)</span>
+        <span><span class="value" data-f="revenue_ttm" data-fmt="bignum">—</span><span class="delta" data-f="revenue_yoy_pct" data-fmt="pct"></span></span>
+      </div>
+      <div class="row"><span class="label">Net Income</span>
+        <span><span class="value" data-f="net_income_ttm" data-fmt="bignum">—</span><span class="delta" data-f="net_income_yoy_pct" data-fmt="pct"></span></span>
+      </div>
+      <div class="row"><span class="label">EPS</span>
+        <span><span class="value" data-f="eps_ttm" data-fmt="dec2">—</span><span class="delta" data-f="eps_yoy_pct" data-fmt="pct"></span></span>
+      </div>
+      <div class="row"><span class="label">Shares Out</span>
+        <span><span class="value" data-f="shares_out" data-fmt="bignum">—</span><span class="delta" data-f="shares_out_yoy_pct" data-fmt="pct"></span></span>
+      </div>
+      <div class="row"><span class="label">PE Ratio</span>
+        <span class="value" data-f="pe_ratio" data-fmt="dec2">—</span>
+      </div>
     </div>
-    <div class="row"><span class="label">Volume</span>
-      <span class="value" data-f="day_volume" data-fmt="int">—</span>
-    </div>
-
-    <div class="row"><span class="label">Revenue (ttm)</span>
-      <span><span class="value" data-f="revenue_ttm" data-fmt="bignum">—</span><span class="delta" data-f="revenue_yoy_pct" data-fmt="pct"></span></span>
-    </div>
-    <div class="row"><span class="label">Open</span>
-      <span class="value" data-f="day_open" data-fmt="price">—</span>
-    </div>
-
-    <div class="row"><span class="label">Net Income</span>
-      <span><span class="value" data-f="net_income_ttm" data-fmt="bignum">—</span><span class="delta" data-f="net_income_yoy_pct" data-fmt="pct"></span></span>
-    </div>
-    <div class="row"><span class="label">Previous Close</span>
-      <span class="value" data-f="prev_close" data-fmt="price">—</span>
-    </div>
-
-    <div class="row"><span class="label">EPS</span>
-      <span><span class="value" data-f="eps_ttm" data-fmt="dec2">—</span><span class="delta" data-f="eps_yoy_pct" data-fmt="pct"></span></span>
-    </div>
-    <div class="row"><span class="label">Day's Range</span>
-      <span class="value" data-f="day_range" data-fmt="range">—</span>
-    </div>
-
-    <div class="row"><span class="label">Shares Out</span>
-      <span><span class="value" data-f="shares_out" data-fmt="bignum">—</span><span class="delta" data-f="shares_out_yoy_pct" data-fmt="pct"></span></span>
-    </div>
-    <div class="row"><span class="label">52-Week Range</span>
-      <span class="value" data-f="week52_range" data-fmt="range">—</span>
-    </div>
-
-    <div class="row"><span class="label">PE Ratio</span>
-      <span class="value" data-f="pe_ratio" data-fmt="dec2">—</span>
-    </div>
-    <div class="row"><span class="label">Beta</span>
-      <span class="value" data-f="beta" data-fmt="dec2">—</span>
+    <div class="col">
+      <div class="row"><span class="label">Volume</span>
+        <span class="value" data-f="day_volume" data-fmt="int">—</span>
+      </div>
+      <div class="row"><span class="label">Open</span>
+        <span class="value" data-f="day_open" data-fmt="price">—</span>
+      </div>
+      <div class="row"><span class="label">Previous Close</span>
+        <span class="value" data-f="prev_close" data-fmt="price">—</span>
+      </div>
+      <div class="row"><span class="label">Day's Range</span>
+        <span class="value" data-f="day_range" data-fmt="range">—</span>
+      </div>
+      <div class="row"><span class="label">52-Week Range</span>
+        <span class="value" data-f="week52_range" data-fmt="range">—</span>
+      </div>
+      <div class="row"><span class="label">Beta</span>
+        <span class="value" data-f="beta" data-fmt="dec2">—</span>
+      </div>
     </div>
   </div>
 
@@ -143,6 +176,13 @@
 
 <script>
   const REFRESH_MS = 30_000;
+
+  // Theme via ?theme=white | ?theme=mono. Anything else falls through to the
+  // default dark+gold look. OBS users add the param to their Browser Source URL.
+  (() => {
+    const t = new URLSearchParams(location.search).get("theme");
+    if (t === "white" || t === "mono") document.documentElement.dataset.theme = t;
+  })();
 
   const fmt = {
     bignum(v) {
@@ -226,6 +266,14 @@
       const raw = payload[key];
       el.textContent = f ? fmt[f](raw) : (raw ?? "—");
       if (el.classList.contains("delta")) applyDeltaClass(el, raw);
+    }
+
+    // Hide the dark pool strip entirely when FINRA has nothing for us —
+    // showing "DARK POOL — —" looks like a broken widget.
+    const dp = document.querySelector(".darkpool");
+    if (dp) {
+      const empty = payload.dark_pool_pct == null && payload.dark_pool_volume == null;
+      dp.style.display = empty ? "none" : "";
     }
   }
 
