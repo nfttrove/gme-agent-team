@@ -1,0 +1,24 @@
+# Cycle scheduling. Times in ET. All cycles gated by market_hours.is_active_window().
+cycles:
+  validator:
+    interval_minutes: 5
+    fan_out: per_symbol
+
+  synthesist:
+    interval_minutes: 5
+    fan_out: per_symbol
+
+  newsroom:
+    interval_minutes: 30
+    fan_out: per_symbol
+
+  predictor:
+    interval_hours: 2
+    fan_out: per_symbol
+
+# Cron-driven Telegram digest replaces v1 Boss/CTO agents.
+digests:
+  morning_brief:
+    cron: "0 9 * * 1-5"   # 9am ET, weekdays
+  end_of_day:
+    cron: "0 17 * * 1-5"  # 5pm ET, weekdays

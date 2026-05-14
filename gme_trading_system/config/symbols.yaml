@@ -1,0 +1,40 @@
+# Active universe. Disable a symbol by setting enabled: false (no code changes).
+# Source: Trove basket from trove_screen.py:51-55, plus EBAY for the merger thesis.
+symbols:
+  - ticker: GME
+    exchange: NYSE
+    thesis_ref: theses/gme.md
+    enabled: true
+  - ticker: EBAY
+    exchange: NASDAQ
+    thesis_ref: theses/ebay.md
+    enabled: true
+  - { ticker: VIPS,  exchange: NASDAQ, thesis_ref: theses/_default.md, enabled: false }
+  - { ticker: ROIV,  exchange: NASDAQ, thesis_ref: theses/_default.md, enabled: false }
+  - { ticker: INTC,  exchange: NASDAQ, thesis_ref: theses/_default.md, enabled: false }
+  - { ticker: JHG,   exchange: NYSE,   thesis_ref: theses/_default.md, enabled: false }
+  - { ticker: CART,  exchange: NASDAQ, thesis_ref: theses/_default.md, enabled: false }
+  - { ticker: FSLR,  exchange: NASDAQ, thesis_ref: theses/_default.md, enabled: false }
+  - { ticker: MNST,  exchange: NASDAQ, thesis_ref: theses/_default.md, enabled: false }
+  - { ticker: REGN,  exchange: NASDAQ, thesis_ref: theses/_default.md, enabled: false }
+  - { ticker: PATH,  exchange: NYSE,   thesis_ref: theses/_default.md, enabled: false }
+  - { ticker: TWLO,  exchange: NYSE,   thesis_ref: theses/_default.md, enabled: false }
+  - { ticker: NOK,   exchange: NYSE,   thesis_ref: theses/_default.md, enabled: false }
+  - { ticker: AMKR,  exchange: NASDAQ, thesis_ref: theses/_default.md, enabled: false }
+  - { ticker: ALGN,  exchange: NASDAQ, thesis_ref: theses/_default.md, enabled: false }
+  - { ticker: PINS,  exchange: NYSE,   thesis_ref: theses/_default.md, enabled: false }
+  - { ticker: GROV,  exchange: NYSE,   thesis_ref: theses/_default.md, enabled: false }
+  - { ticker: PUMP,  exchange: NYSE,   thesis_ref: theses/_default.md, enabled: false }
+  - { ticker: CTRA,  exchange: NYSE,   thesis_ref: theses/_default.md, enabled: false }
+  - { ticker: PHM,   exchange: NYSE,   thesis_ref: theses/_default.md, enabled: false }
+  - { ticker: GFS,   exchange: NASDAQ, thesis_ref: theses/_default.md, enabled: false }
+  - { ticker: AAPL,  exchange: NASDAQ, thesis_ref: theses/_default.md, enabled: false }
+  - { ticker: UA,    exchange: NYSE,   thesis_ref: theses/_default.md, enabled: false }
+  - { ticker: NWSA,  exchange: NASDAQ, thesis_ref: theses/_default.md, enabled: false }
+  - { ticker: AMC,   exchange: NYSE,   thesis_ref: theses/_default.md, enabled: false }
+  - { ticker: CPNG,  exchange: NYSE,   thesis_ref: theses/_default.md, enabled: false }
+  - { ticker: CHWY,  exchange: NYSE,   thesis_ref: theses/_default.md, enabled: false }
+  - { ticker: BKNG,  exchange: NASDAQ, thesis_ref: theses/_default.md, enabled: false }
+
+# Concurrency cap for per-symbol fan-out. Keep low for local Gemma.
+max_parallel_symbols: 3
