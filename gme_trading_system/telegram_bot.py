@@ -79,6 +79,7 @@ OWNER_ONLY_COMMANDS = {
     "/dv",                                         # Finnhub / SEC fan-out
     "/dvburst",                                    # CTO DV burst + LLM + Polygon
     "/exchange",                                   # Polygon trades (paid feed)
+    "/ftd",                                        # SEC zip downloads (multi-MB)
     "/lessons",                                    # subprocess + LLM recall
 }
 
@@ -1123,6 +1124,37 @@ def handle_command(text: str, user: str = "team"):
             _reply(f"❌ /exchange error: {str(e)[:200]}")
             log.error(f"[tgbot] /exchange failed: {e}")
 
+    elif cmd == "/ftd":
+        # SEC Fails-to-Deliver intel. Bi-weekly publication, ~30-day lag.
+        # Free feed but each cold call may pull several multi-MB zips,
+        # so it's owner-only to avoid DOS. Mirrors /exchange shape: fetch,
+        # format, reply — no LLM, no orchestrator cycle.
+        ticker_args = [a.strip("'\"/").upper() for a in args if a.strip("'\"/")]
+        ticker = ticker_args[0] if ticker_args else "GME"
+        try:
+            from sec_ftd import get_ftd_summary
+            summary = get_ftd_summary(ticker)
+            if not summary:
+                _reply(
+                    f"❌ No FTD data for {ticker}. SEC may be unreachable, "
+                    "or there's no recent fails activity yet (files publish "
+                    "twice a month with ~30-day lag)."
+                )
+            else:
+                lines = [
+                    f"<b>📉 {ticker} Fails-to-Deliver</b>",
+                    f"Latest: <b>{summary['latest_qty']:,}</b> shares failed",
+                    f"Settled: {summary['latest_date']}",
+                    f"30d rolling total: {summary['rolling_30d_qty']:,} "
+                    f"({summary['n_samples']} fail-days)",
+                ]
+                if summary["latest_price"] is not None:
+                    lines.append(f"Price on settle: ${summary['latest_price']:.2f}")
+                _reply("\n".join(lines))
+        except Exception as e:
+            _reply(f"❌ /ftd error: {str(e)[:200]}")
+            log.error(f"[tgbot] /ftd failed: {e}")
+
     elif cmd == "/lessons":
         import subprocess, sys
         import os as os_module
@@ -1871,6 +1903,7 @@ def _register_commands():
         {"command": "dv",        "description": "Deep-value (DV) screen — /dv [TICKERS]"},
         {"command": "dvburst",   "description": "Full DV burst (score + venue mix) — /dvburst [TICKERS]"},
         {"command": "exchange",  "description": "Per-venue volume breakdown — /exchange [TICKER]"},
+        {"command": "ftd",       "description": "SEC Fails-to-Deliver — /ftd [TICKER]"},
         {"command": "learn",     "description": "Teach agents a rule — /learn \"…\" --why \"…\""},
         {"command": "lessons",   "description": "Show rules agents have learned"},
         {"command": "update",    "description": "Sync local SQLite → Supabase now"},

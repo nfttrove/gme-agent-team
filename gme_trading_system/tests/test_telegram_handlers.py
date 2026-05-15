@@ -715,3 +715,55 @@ def test_signals_shows_multiple_agents(seeded_db, captured_sends):
     body = captured_sends[0]
     assert "Pattern" in body
     assert "Trendy" in body
+
+
+def test_ftd_renders_summary(captured_sends, monkeypatch):
+    """/ftd with a populated summary surfaces qty + date + 30d total."""
+    fake = types.ModuleType("sec_ftd")
+    fake.get_ftd_summary = lambda ticker: {
+        "latest_date":     "2026-04-13",
+        "latest_qty":      48242,
+        "rolling_30d_qty": 220183,
+        "n_samples":       8,
+        "latest_price":    22.91,
+    }
+    monkeypatch.setitem(sys.modules, "sec_ftd", fake)
+    telegram_bot.handle_command("/ftd")
+    body = "\n".join(captured_sends)
+    assert "GME Fails-to-Deliver" in body
+    assert "48,242" in body
+    assert "2026-04-13" in body
+    assert "220,183" in body
+    assert "8 fail-days" in body
+    assert "$22.91" in body
+
+
+def test_ftd_empty_returns_friendly_error(captured_sends, monkeypatch):
+    """/ftd with no data should explain why (publication lag), not crash."""
+    fake = types.ModuleType("sec_ftd")
+    fake.get_ftd_summary = lambda ticker: None
+    monkeypatch.setitem(sys.modules, "sec_ftd", fake)
+    telegram_bot.handle_command("/ftd")
+    body = "\n".join(captured_sends)
+    assert "No FTD data" in body
+    assert "30-day lag" in body or "publication" in body.lower()
+
+
+def test_ftd_with_ticker_arg(captured_sends, monkeypatch):
+    """/ftd AAPL should call summary for the requested ticker."""
+    seen = {"ticker": None}
+    fake = types.ModuleType("sec_ftd")
+
+    def fake_summary(ticker):
+        seen["ticker"] = ticker
+        return {
+            "latest_date": "2026-04-10", "latest_qty": 1000,
+            "rolling_30d_qty": 5000, "n_samples": 3, "latest_price": 180.0,
+        }
+
+    fake.get_ftd_summary = fake_summary
+    monkeypatch.setitem(sys.modules, "sec_ftd", fake)
+    telegram_bot.handle_command("/ftd AAPL")
+    assert seen["ticker"] == "AAPL"
+    body = "\n".join(captured_sends)
+    assert "AAPL Fails-to-Deliver" in body
