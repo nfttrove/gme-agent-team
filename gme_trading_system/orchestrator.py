@@ -2605,6 +2605,28 @@ def run_synthesis():
         write_log("Synthesis", brief, "synthesis")
         # Record new state_key for the next cycle's dedup check
         write_log("Synthesis", state_key, "synthesis_state")
+
+        # Append to episodic memory — only on material shifts (dedup above
+        # already short-circuited unchanged states). Bounded growth: ~5-20
+        # distinct emits/day. Soft-fail so logging never breaks the cycle.
+        if parsed is not None:
+            try:
+                from episodic_integration import log_synthesis
+                log_synthesis(
+                    price=parsed.price,
+                    data_quality=parsed.data_quality,
+                    news_sentiment=parsed.news_sentiment,
+                    pattern_type=parsed.pattern_type,
+                    trend_direction=parsed.trend_direction,
+                    trend_strength=parsed.trend_strength,
+                    prediction_bias=parsed.prediction_bias,
+                    prediction_confidence=parsed.prediction_confidence,
+                    structural_status=parsed.structural_status,
+                    consensus=parsed.consensus,
+                    consensus_pct=parsed.consensus_pct,
+                )
+            except Exception as e:
+                log.warning(f"[Synthesis] episodic log failed: {e}")
     except requests.Timeout:
         log.error("[Synthesis] LLM timeout")
         write_log("Synthesis", "LLM timeout after 45s", "synthesis", "timeout")
