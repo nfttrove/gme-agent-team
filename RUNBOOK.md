@@ -53,6 +53,17 @@ cd gme_trading_system && python telegram_bot.py
 
 The bot is not under launchd by default; if you want it supervised, add a second plist.
 
+### Logger daemon (Flask :8765 — TradingView webhook + /obs/stats.json + /metrics)
+
+```bash
+pkill -f logger_daemon.py
+cd gme_trading_system && nohup ../venv/bin/python logger_daemon.py >> logs/logger_daemon.log 2>&1 &
+```
+
+**Not under launchd by default.** Started manually once and detaches (PPID=1). Has the same supervisor gap as `telegram_bot.py` — if it crashes, the OBS panel goes dark, the TradingView webhook stops receiving ticks, and `/metrics` stops serving. See Known issues item 5.
+
+**Deploy gotcha — restart this alongside the orchestrator** whenever you change a module both processes import (`obs_panel_data.py`, `fundamentals_feed.py`, `notifier.py`, `circuit_breaker.py`, etc.). Symptom of forgetting: `/obs/stats.json` returns stale shape (missing newly-added fields) even though the DB has them and the orchestrator has the new code. Discovered 2026-05-15 when FTD fields landed in `market_fundamentals` but didn't render — the daemon was still running the pre-deploy `_FUNDAMENTALS_COLS` list.
+
 ### Ollama
 
 Ollama runs under launchd as `homebrew.mxcl.ollama`. Same kickstart pattern.
@@ -173,7 +184,7 @@ These are documented so a future maintainer doesn't waste time rediscovering the
 2. **`migrations_add_goals.sql` is not in Alembic** — see Database section above.
 3. **`twitter_monitor.py`, `sec_scanner.py`, `insider_buys.py`, `options_feed.py`** — defined modules with no wiring in `orchestrator.py`. May be invoked via Telegram commands or be partially built; needs runtime investigation before deciding to wire or delete.
 4. **One pre-existing test failure** — `test_dv_default_watchlist` in `test_telegram_handlers.py` (`KeyError: 'pillar_D'`). The other historical failure, `test_signal_scorer_detects_sl_first_touch_as_loss`, was fixed on 2026-05-15 — it was a time-of-day flake (test ran before `made_at + 4h` had elapsed in real time), not a scorer bug. See item 6.
-5. **No Telegram bot supervisor.** If `telegram_bot.py` crashes, alerts stop. Either add a launchd plist or accept the manual restart cost.
+5. **Two unsupervised processes.** Both `telegram_bot.py` and `logger_daemon.py` run as manual / nohup'd Python processes, not under launchd. If `telegram_bot.py` crashes, alerts stop. If `logger_daemon.py` crashes, the OBS panel goes dark + the TradingView webhook can't receive ticks + `/metrics` stops serving. Adding two more plists (`com.gme.telegram_bot`, `com.gme.logger_daemon`) closes the gap; until then, restart manually when needed (see Restart procedures above).
 6. **Pattern Intraday / Futurist directional hit rates suspiciously low — but the scorer is sound.** As of 2026-05-15 the active fade-side lessons in `.agent/memory/semantic/lessons.jsonl` claim:
    - Pattern Intraday `intraday_pattern_signal`: **22% directional hit over n=179** (39/179)
    - Futurist `price_prediction`: **26% directional hit over n=65** (17/65)
