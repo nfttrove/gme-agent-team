@@ -83,6 +83,7 @@ class FundamentalsFeed:
             "prev_close":           info.get("regularMarketPreviousClose") or info.get("previousClose"),
             **self._earnings(info),
             **self._dark_pool(),
+            **self._fail_to_deliver(),
             **self._youtube(),
         }
 
@@ -105,6 +106,29 @@ class FundamentalsFeed:
         except Exception as e:
             log.debug(f"[fundamentals] youtube fetch failed: {e}")
             return {"yt_handle": YT_HANDLE, "yt_subscribers": None}
+
+    @staticmethod
+    def _fail_to_deliver() -> dict:
+        """SEC fails-to-deliver intel — bi-weekly publication, ~30-day lag.
+
+        Surfaces the latest FTD quantity + settlement date + 30d rolling
+        total on the OBS panel. Soft-fails to None across all three fields
+        on SEC outage or pre-publication windows, so the panel just shows
+        '—' rather than going dark.
+        """
+        try:
+            from sec_ftd import get_ftd_summary
+            summary = get_ftd_summary("GME")
+            if not summary:
+                return {"ftd_latest_qty": None, "ftd_latest_date": None, "ftd_30d_qty": None}
+            return {
+                "ftd_latest_qty":  int(summary["latest_qty"]),
+                "ftd_latest_date": summary["latest_date"],
+                "ftd_30d_qty":     int(summary["rolling_30d_qty"]),
+            }
+        except Exception as e:
+            log.debug(f"[fundamentals] FTD fetch failed: {e}")
+            return {"ftd_latest_qty": None, "ftd_latest_date": None, "ftd_30d_qty": None}
 
     @staticmethod
     def _dark_pool() -> dict:
@@ -154,8 +178,9 @@ class FundamentalsFeed:
                 prev_close,
                 next_earnings_date, next_earnings_projected,
                 dark_pool_pct, dark_pool_volume, dark_pool_date,
+                ftd_latest_qty, ftd_latest_date, ftd_30d_qty,
                 yt_handle, yt_subscribers)
-               VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
+               VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
             (
                 datetime.now(ET).isoformat(),
                 snap["market_cap"], snap["market_cap_yoy_pct"],
@@ -168,6 +193,7 @@ class FundamentalsFeed:
                 snap["prev_close"],
                 snap["next_earnings_date"], int(bool(snap["next_earnings_projected"])),
                 snap["dark_pool_pct"], snap["dark_pool_volume"], snap["dark_pool_date"],
+                snap["ftd_latest_qty"], snap["ftd_latest_date"], snap["ftd_30d_qty"],
                 snap["yt_handle"], snap["yt_subscribers"],
             ),
         )

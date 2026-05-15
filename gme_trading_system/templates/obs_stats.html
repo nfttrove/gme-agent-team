@@ -137,6 +137,19 @@
   .darkpool .dp-date  { color: var(--muted); font-weight: 500; letter-spacing: 1px; margin-left: 6px; }
   .darkpool .dp-pct { color: var(--ink); font-weight: 600; font-variant-numeric: tabular-nums; }
   .darkpool .dp-vol { color: var(--ink); font-variant-numeric: tabular-nums; }
+  /* FTD strip mirrors DARK POOL — same row shape, settlement date
+     subordinate to the label, both numbers tabular. ~30-day SEC
+     publication lag is the data, not a freshness bug. */
+  .ftd {
+    display: flex; justify-content: space-between; align-items: center;
+    margin-top: 6px; padding-top: 8px;
+    border-top: 1px solid var(--rule);
+    color: var(--muted); font-size: 13px; letter-spacing: 1px;
+  }
+  .ftd .ftd-label  { font-weight: 700; letter-spacing: 2px; }
+  .ftd .ftd-date   { color: var(--muted); font-weight: 500; letter-spacing: 1px; margin-left: 6px; }
+  .ftd .ftd-30d    { color: var(--ink); font-weight: 600; font-variant-numeric: tabular-nums; }
+  .ftd .ftd-latest { color: var(--ink); font-variant-numeric: tabular-nums; }
 </style>
 </head>
 <body>
@@ -206,6 +219,12 @@
     <span class="dp-label">DARK POOL <span class="dp-date" data-f="dark_pool_date" data-fmt="dateShort">—</span></span>
     <span class="dp-pct" data-f="dark_pool_pct" data-fmt="pctSimple">—</span>
     <span class="dp-vol" data-f="dark_pool_volume" data-fmt="int">—</span>
+  </div>
+
+  <div class="ftd">
+    <span class="ftd-label">FTDS <span class="ftd-date" data-f="ftd_latest_date" data-fmt="dateShort">—</span></span>
+    <span class="ftd-30d" data-f="ftd_30d_qty" data-fmt="bignum">—</span>
+    <span class="ftd-latest" data-f="ftd_latest_qty" data-fmt="bignum">—</span>
   </div>
 </div>
 
@@ -324,6 +343,14 @@
     if (dp) {
       const empty = payload.dark_pool_pct == null && payload.dark_pool_volume == null;
       dp.style.display = empty ? "none" : "";
+    }
+    // Same treatment for the FTD strip — SEC publishes bi-weekly with
+    // ~30-day lag, so a fresh install or post-rollover gap will leave
+    // these fields null until the next file lands.
+    const ftd = document.querySelector(".ftd");
+    if (ftd) {
+      const empty = payload.ftd_latest_qty == null && payload.ftd_30d_qty == null;
+      ftd.style.display = empty ? "none" : "";
     }
   }
 

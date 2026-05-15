@@ -42,6 +42,7 @@ _FUNDAMENTALS_COLS = [
     "prev_close",
     "next_earnings_date", "next_earnings_projected",
     "dark_pool_pct", "dark_pool_volume", "dark_pool_date",
+    "ftd_latest_qty", "ftd_latest_date", "ftd_30d_qty",
     "yt_handle", "yt_subscribers",
 ]
 
