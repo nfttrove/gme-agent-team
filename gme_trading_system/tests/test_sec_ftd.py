@@ -202,6 +202,34 @@ class TestUpdateForTicker:
         assert inserted == 1
         assert call_count[0] > 0  # actually re-fetched the file for AAPL
 
+    def test_migrates_legacy_sec_ftd_files_schema(self, tmp_db):
+        """A DB created by the first version of this module had
+        sec_ftd_files keyed by file_id alone (no ticker column). The
+        migration in _ensure_schema must drop and recreate so the new
+        per-ticker dedup INSERT/SELECT works without crashing."""
+        # Seed the legacy schema by hand
+        conn = sqlite3.connect(tmp_db)
+        conn.execute(
+            "CREATE TABLE sec_ftd_files ("
+            "  file_id TEXT PRIMARY KEY, "
+            "  fetched_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP"
+            ")"
+        )
+        conn.execute("INSERT INTO sec_ftd_files (file_id) VALUES ('202604a')")
+        conn.commit()
+        conn.close()
+
+        # Now run a normal update — should silently migrate and succeed
+        with patch("sec_ftd._fetch_one_file", return_value=_SAMPLE_ZIP):
+            inserted = update_for_ticker("GME", months_back=1, db_path=tmp_db)
+        assert inserted == 3  # 3 GME rows from sample
+
+        # Verify schema is now the new shape
+        conn = sqlite3.connect(tmp_db)
+        cols = {c[1] for c in conn.execute("PRAGMA table_info(sec_ftd_files)").fetchall()}
+        conn.close()
+        assert "ticker" in cols, "migration did not add ticker column"
+
     def test_failed_fetch_not_marked_done(self, tmp_db):
         """A None response (404 / outage) must NOT mark the file as
         processed, so the next cron retries it."""

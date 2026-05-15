@@ -65,6 +65,17 @@ _SEC_URL = "https://www.sec.gov/files/data/fails-deliver-data/cnsfails{file_id}.
 
 
 def _ensure_schema(conn: sqlite3.Connection) -> None:
+    # Migration: the first version of sec_ftd_files used PRIMARY KEY (file_id)
+    # alone, which starves a second ticker (see commit history). CREATE TABLE
+    # IF NOT EXISTS won't add the new `ticker` column, so detect the legacy
+    # shape and drop it — the table holds only dedup state and is rebuilt
+    # from idempotent re-fetches on the next update_for_ticker call.
+    try:
+        cols = conn.execute("PRAGMA table_info(sec_ftd_files)").fetchall()
+        if cols and not any(c[1] == "ticker" for c in cols):
+            conn.execute("DROP TABLE sec_ftd_files")
+    except sqlite3.Error:
+        pass
     conn.executescript(SCHEMA)
 
 
