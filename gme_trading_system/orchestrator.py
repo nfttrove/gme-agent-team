@@ -2194,6 +2194,19 @@ def _run_cto_dv_score_for(ticker: str):
         except Exception as e:
             log.warning(f"[CTO] Exchange-volume fetch failed: {e}")
 
+        # Fails-to-Deliver intel from SEC bi-weekly publication. ~30-day
+        # publication lag is the data, not a bug — context for whether
+        # recent settlement cycles cleared cleanly. Soft-fails to
+        # nothing on SEC outage or pre-publication windows.
+        ftd_line = ""
+        try:
+            from sec_ftd import get_ftd_summary, format_brief_line as ftd_brief
+            ftd = get_ftd_summary(ticker)
+            if ftd:
+                ftd_line = ftd_brief(ftd, ticker=ticker)
+        except Exception as e:
+            log.warning(f"[CTO] SEC FTD fetch failed: {e}")
+
         brief = (
             f"{ticker} DV Score: {total:.1f}/100 {rating} {delta_str}\n"
             f"Pillars — Valuation {A:.1f}/25 · Capital {B:.1f}/40 · Quality {C:.1f}/20 · Insider {D:.1f}/15\n"
@@ -2207,6 +2220,8 @@ def _run_cto_dv_score_for(ticker: str):
             brief += f"\n{short_vol_line}"
         if venue_line:
             brief += f"\n{venue_line}"
+        if ftd_line:
+            brief += f"\n{ftd_line}"
         if interpretation:
             brief += f"\n— {interpretation}"
 
