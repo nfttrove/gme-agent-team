@@ -164,7 +164,7 @@ class TestUpdateForTicker:
         assert rows[0] == 3
 
     def test_idempotent_second_run_does_not_refetch(self, tmp_db):
-        """Files marked done in sec_ftd_files should not be refetched."""
+        """Files marked done in sec_ftd_files for THIS ticker should not be refetched."""
         with patch("sec_ftd._fetch_one_file", return_value=_SAMPLE_ZIP):
             update_for_ticker("GME", months_back=1, db_path=tmp_db)
 
@@ -178,6 +178,29 @@ class TestUpdateForTicker:
             second = update_for_ticker("GME", months_back=1, db_path=tmp_db)
         assert second == 0
         assert call_count[0] == 0
+
+    def test_different_ticker_not_starved_by_prior_ticker(self, tmp_db):
+        """Per-ticker dedup: when GME has marked files done, fetching
+        AAPL should still refetch (the file contains every ticker; we
+        just hadn't parsed it for AAPL yet). Regression test for the
+        bug where file-level (not (file, ticker)-level) dedup starved
+        subsequent tickers."""
+        # Process GME first — marks files done for GME
+        with patch("sec_ftd._fetch_one_file", return_value=_SAMPLE_ZIP):
+            update_for_ticker("GME", months_back=1, db_path=tmp_db)
+
+        # Now process AAPL — must refetch and find its row
+        call_count = [0]
+
+        def counting_fetch(_file_id):
+            call_count[0] += 1
+            return _SAMPLE_ZIP
+
+        with patch("sec_ftd._fetch_one_file", side_effect=counting_fetch):
+            inserted = update_for_ticker("AAPL", months_back=1, db_path=tmp_db)
+        # Sample has 1 AAPL row
+        assert inserted == 1
+        assert call_count[0] > 0  # actually re-fetched the file for AAPL
 
     def test_failed_fetch_not_marked_done(self, tmp_db):
         """A None response (404 / outage) must NOT mark the file as
@@ -203,10 +226,36 @@ class TestSummary:
         # ORDER BY settlement_date DESC → 2026-04-10 is latest in sample
         assert summary["latest_date"] == "2026-04-10"
         assert summary["latest_qty"] == 47202
-        # Rolling 14-record window over all 3 GME rows
-        assert summary["rolling_14d_qty"] == 62913 + 48242 + 47202
+        # All 3 sample rows are within 30 calendar days of latest (Apr 8-10)
+        assert summary["rolling_30d_qty"] == 62913 + 48242 + 47202
         assert summary["n_samples"] == 3
         assert summary["latest_price"] == 22.87
+
+    def test_summary_window_excludes_rows_older_than_30d(self, tmp_db):
+        """Rows older than 30 calendar days from the latest settlement
+        must NOT be included in rolling_30d_qty. Regression test for
+        the prior 'last 14 rows' semantics."""
+        # Manually seed: one recent row + one >30 days older
+        import sqlite3 as _sqlite3
+        conn = _sqlite3.connect(tmp_db)
+        from sec_ftd import _ensure_schema
+        _ensure_schema(conn)
+        conn.executescript(
+            "INSERT INTO sec_ftd (settlement_date, ticker, fails_quantity) "
+            "VALUES ('2026-04-10', 'GME', 100);"
+            "INSERT INTO sec_ftd (settlement_date, ticker, fails_quantity) "
+            "VALUES ('2026-02-01', 'GME', 999);"
+        )
+        conn.commit()
+        conn.close()
+        with patch("sec_ftd._fetch_one_file", return_value=None):
+            # _fetch returns None → no new rows added; we read seeded data
+            summary = get_ftd_summary("GME", db_path=tmp_db)
+        assert summary is not None
+        assert summary["latest_date"] == "2026-04-10"
+        # Only the recent row counts; the Feb row is >30 days older
+        assert summary["rolling_30d_qty"] == 100
+        assert summary["n_samples"] == 1
 
 
 class TestBriefLineFormat:
@@ -214,30 +263,30 @@ class TestBriefLineFormat:
         line = format_brief_line({
             "latest_date":     "2026-04-13",
             "latest_qty":      600,
-            "rolling_14d_qty": 420_239,
-            "n_samples":       14,
+            "rolling_30d_qty": 420_239,
+            "n_samples":       8,
             "latest_price":    23.22,
         })
         assert "FTDs: 600" in line
         assert "settled 2026-04-13" in line
-        assert "14d total 420.2K" in line
+        assert "30d total 420.2K" in line
 
     def test_format_large_qty_uses_k_suffix(self):
         line = format_brief_line({
             "latest_date":     "2026-04-08",
             "latest_qty":      62_913,
-            "rolling_14d_qty": 159_357,
+            "rolling_30d_qty": 159_357,
             "n_samples":       3,
             "latest_price":    23.43,
         })
         assert "FTDs: 62.9K" in line
-        assert "14d total 159.4K" in line
+        assert "30d total 159.4K" in line
 
     def test_format_million_uses_m_suffix(self):
         line = format_brief_line({
             "latest_date":     "2026-04-08",
             "latest_qty":      1_500_000,
-            "rolling_14d_qty": 12_000_000,
+            "rolling_30d_qty": 12_000_000,
             "n_samples":       14,
             "latest_price":    23.43,
         })
@@ -248,8 +297,8 @@ class TestBriefLineFormat:
         line = format_brief_line({
             "latest_date":     "2026-04-13",
             "latest_qty":      600,
-            "rolling_14d_qty": 420_000,
-            "n_samples":       14,
+            "rolling_30d_qty": 420_000,
+            "n_samples":       8,
             "latest_price":    23.22,
         }, ticker="gme")  # case-insensitive — uppercased on output
         assert line.startswith("GME FTDs:")

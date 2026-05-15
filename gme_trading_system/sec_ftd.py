@@ -54,8 +54,10 @@ CREATE TABLE IF NOT EXISTS sec_ftd (
 );
 CREATE INDEX IF NOT EXISTS idx_sec_ftd_ticker_date ON sec_ftd(ticker, settlement_date);
 CREATE TABLE IF NOT EXISTS sec_ftd_files (
-    file_id    TEXT PRIMARY KEY,
-    fetched_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+    file_id    TEXT NOT NULL,
+    ticker     TEXT NOT NULL,
+    fetched_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    PRIMARY KEY (file_id, ticker)
 );
 """
 
@@ -162,9 +164,14 @@ def update_for_ticker(
     try:
         _ensure_schema(conn)
         for file_id in _iter_recent_file_ids(months_back):
+            # Dedup is per (file_id, ticker) — each file contains every
+            # ticker, so we still re-fetch the file for a new ticker,
+            # but skip if we've already processed THIS file for THIS
+            # ticker. Avoids the bug where the first ticker through
+            # would mark a file done globally and starve other tickers.
             if conn.execute(
-                "SELECT 1 FROM sec_ftd_files WHERE file_id=?",
-                (file_id,),
+                "SELECT 1 FROM sec_ftd_files WHERE file_id=? AND ticker=?",
+                (file_id, target),
             ).fetchone():
                 continue
             content = _fetch_one_file(file_id)
@@ -184,8 +191,9 @@ def update_for_ticker(
                 except sqlite3.IntegrityError:
                     pass  # already cached
             conn.execute(
-                "INSERT OR IGNORE INTO sec_ftd_files (file_id) VALUES (?)",
-                (file_id,),
+                "INSERT OR IGNORE INTO sec_ftd_files (file_id, ticker) "
+                "VALUES (?, ?)",
+                (file_id, target),
             )
         conn.commit()
     finally:
@@ -198,39 +206,55 @@ def update_for_ticker(
 def get_ftd_summary(ticker: str, db_path: str = DB_PATH) -> dict | None:
     """Return a small dict summarising recent FTD activity for a ticker.
 
-    Refreshes any missing files first, then computes the rolling 14-day
-    total of fails quantity from cached rows. Returns None when no data
-    is available for the ticker.
+    Refreshes any missing files first, then computes the rolling
+    30-calendar-day total of fails quantity (settlement_date within
+    30 days of the latest cached settlement). Returns None when no
+    data is available for the ticker.
+
+    Window note: FTDs are sparse — only days with fails get rows. A
+    30-calendar-day window typically captures 5-12 rows depending on
+    activity. Calendar-based (not row-based) so the label means what
+    it says.
 
     Shape:
         {
           'latest_date':     '2026-04-13',
           'latest_qty':       48242,
-          'rolling_14d_qty':  163651,
-          'n_samples':        5,
+          'rolling_30d_qty':  220183,
+          'n_samples':        8,
           'latest_price':     22.91,
         }
     """
+    from datetime import datetime as _dt, timedelta as _td
+
     update_for_ticker(ticker, months_back=3, db_path=db_path)
     conn = sqlite3.connect(db_path)
     conn.row_factory = sqlite3.Row
     try:
         _ensure_schema(conn)
+        latest_row = conn.execute(
+            "SELECT settlement_date, fails_quantity, price FROM sec_ftd "
+            "WHERE ticker=? ORDER BY settlement_date DESC LIMIT 1",
+            (ticker.upper(),),
+        ).fetchone()
+        if not latest_row:
+            return None
+        latest_d = _dt.strptime(latest_row["settlement_date"], "%Y-%m-%d").date()
+        window_start = (latest_d - _td(days=30)).isoformat()
         rows = conn.execute(
             "SELECT settlement_date, fails_quantity, price FROM sec_ftd "
-            "WHERE ticker=? ORDER BY settlement_date DESC LIMIT 14",
-            (ticker.upper(),),
+            "WHERE ticker=? AND settlement_date >= ? "
+            "ORDER BY settlement_date DESC",
+            (ticker.upper(), window_start),
         ).fetchall()
     finally:
         conn.close()
-    if not rows:
-        return None
     latest = rows[0]
-    total_14d = sum(r["fails_quantity"] for r in rows)
+    total_window = sum(r["fails_quantity"] for r in rows)
     return {
         "latest_date":     latest["settlement_date"],
         "latest_qty":      int(latest["fails_quantity"]),
-        "rolling_14d_qty": int(total_14d),
+        "rolling_30d_qty": int(total_window),
         "n_samples":       len(rows),
         "latest_price":    float(latest["price"]) if latest["price"] is not None else None,
     }
@@ -252,7 +276,7 @@ def format_brief_line(summary: dict, ticker: str = "") -> str:
     return (
         f"{prefix}FTDs: {_fmt_qty(summary['latest_qty'])} "
         f"(settled {summary['latest_date']}, "
-        f"14d total {_fmt_qty(summary['rolling_14d_qty'])})"
+        f"30d total {_fmt_qty(summary['rolling_30d_qty'])})"
     )
 
 
