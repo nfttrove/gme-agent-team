@@ -131,9 +131,9 @@ pkill -9 -f orchestrator.py
 launchctl kickstart -k gui/$(id -u)/com.gme.orchestrator
 ```
 
-### Tests fail with `pillar_D` or `signal_scorer` errors
+### Tests fail with `pillar_D` errors
 
-Pre-existing failures unrelated to recent commits — `test_dv_default_watchlist` (DV pillar_D bug) and `test_signal_scorer_detects_sl_first_touch_as_loss` (calibration scoring). Current baseline is **180 passed, 2 failed**. If you see *new* failures, investigate.
+Pre-existing failure unrelated to recent commits — `test_dv_default_watchlist` (DV `pillar_D` KeyError). Current baseline is **436 passed, 1 failed**. The historical second failure, `test_signal_scorer_detects_sl_first_touch_as_loss`, was fixed on 2026-05-15 (flaky timestamp setup, not a scorer bug — details in "Known issues / tech debt" item 6). If you see *new* failures, investigate.
 
 ### `/progress` (private £5k tracker) shows the wrong number
 
@@ -172,18 +172,22 @@ These are documented so a future maintainer doesn't waste time rediscovering the
 1. **`.agent/` and `.agent/tools/` duplicates.** Three module pairs (`auto_dream`, `graduate`, `recall`) live in both locations with diverged implementations. `.agent/tools/recall.py` is dead — `orchestrator.py` line ~64 explicitly says so, and `learning.py` replaced it. The other duplicates have callers on both sides, including user CLI invocations documented in `.agent/README.md`. Picking a single canonical path requires manually running each CLI to verify behaviour.
 2. **`migrations_add_goals.sql` is not in Alembic** — see Database section above.
 3. **`twitter_monitor.py`, `sec_scanner.py`, `insider_buys.py`, `options_feed.py`** — defined modules with no wiring in `orchestrator.py`. May be invoked via Telegram commands or be partially built; needs runtime investigation before deciding to wire or delete.
-4. **Two pre-existing test failures** as noted above. Not regressions from recent cleanup commits.
+4. **One pre-existing test failure** — `test_dv_default_watchlist` in `test_telegram_handlers.py` (`KeyError: 'pillar_D'`). The other historical failure, `test_signal_scorer_detects_sl_first_touch_as_loss`, was fixed on 2026-05-15 — it was a time-of-day flake (test ran before `made_at + 4h` had elapsed in real time), not a scorer bug. See item 6.
 5. **No Telegram bot supervisor.** If `telegram_bot.py` crashes, alerts stop. Either add a launchd plist or accept the manual restart cost.
-6. **Pattern Intraday / Futurist directional hit rates suspiciously low.** As of 2026-05-11 the active fade-side lessons in `.agent/memory/semantic/lessons.jsonl` claim:
-   - Pattern Intraday `intraday_pattern_signal`: **14% directional hit over n=134** (19/134)
+6. **Pattern Intraday / Futurist directional hit rates suspiciously low — but the scorer is sound.** As of 2026-05-15 the active fade-side lessons in `.agent/memory/semantic/lessons.jsonl` claim:
+   - Pattern Intraday `intraday_pattern_signal`: **22% directional hit over n=179** (39/179)
    - Futurist `price_prediction`: **26% directional hit over n=65** (17/65)
 
-   A genuine 50/50 process has a probability < 1e-15 of producing ≤14% over n=134, so this is almost certainly **not noise**. Two hypotheses, in order of likelihood:
+   A genuine 50/50 process has probability < 1e-15 of producing ≤22% over n=179, so this is almost certainly **not noise**.
 
-   1. **Direction-label bug in `signal_scorer`.** Somewhere between the signal's emitted direction (e.g. `signal_type='pattern_signal'` with bullish/bearish framing) and `signal_scores.directional_hit`, the polarity may be inverted. If true, Synthesis has been **inverting correct signals for weeks** — the system looks worse than it is.
-   2. **Real anti-edge.** The pattern detector might systematically find setups that misfire (e.g. counter-trend bounces that fail in the prevailing trend). Possible but unusual at this magnitude.
+   On 2026-05-15 the previously-leading hypothesis ("direction-label bug in `signal_scorer`") was disconfirmed: the failing `test_signal_scorer_detects_sl_first_touch_as_loss` turned out to be a flaky test (time-of-day-dependent setup, not a scorer logic bug). The scorer's first-touch polarity logic is verified sound — see `calibration.py:461-490`. The 22-26% numbers are real.
 
-   Audit path when investigating: `gme_trading_system/signal_scorer.py` → trace how `directional_hit` is set against the signal's intended direction; compare a hand-picked sample of `signal_alerts` rows to the corresponding `signal_scores` row and verify the polarity matches the price move between `entry_price` and `end_price`. Until resolved, the two fade-side lessons remain active in Synthesis, so consensus inverts Pattern Intraday and Futurist's directional calls — fine if the lessons are correct, an own-goal if hypothesis 1 holds.
+   That leaves **real anti-edge** as the live hypothesis: Pattern Intraday and Futurist may be systematically finding setups that misfire (counter-trend bounces that fail in the prevailing trend, overconfident horizon-1h calls in chop, etc.). The two auto-graduated fade-side lessons in Synthesis are correctly inverting their direction — that's working as intended.
+
+   Future investigation: rather than re-auditing the scorer, look at *why* these agents are wrong-direction. Candidate angles: regime-conditioned hit rate (do they do better in trending vs. ranging markets — see proposed Markov-regime feature), feature recency (are they trained/prompted on stale lookbacks), horizon mismatch (is 1h the right window for what Futurist sees).
+7. **Three other tests in `test_calibration.py` use the same flaky `datetime.now(ET).replace(hour=10, …)` pattern** that broke item 6's test — lines ~235, ~274, ~314 (`test_brier_penalises_overconfident_wrong_calls`, `test_write_performance_scores_is_idempotent`, `test_perfect_calibration_gives_zero_brier`). They currently pass because their windows (1h horizon) are smaller and the suite tends to run later in the day. Defensive fix is the same one applied on 2026-05-15 — switch each to a hardcoded past `datetime(2026, 4, 23, 10, 0, tzinfo=ET)`. Low priority unless one starts failing.
+8. **`log_futurist_prediction` and `log_signal` hooks in `episodic_integration.py` are still orphaned** as of 2026-05-15. Only `log_synthesis` was wired (orchestrator's Synthesis path, on material-shift dedup). Wiring the prediction hook is the highest-leverage next step — it captures Futurist's `1h`/`4h`/`24h` price calls so `auto_dream`/`cluster_patterns` can mine prediction→outcome chains. Pattern follows the synthesis wiring exactly: parse via `extract_prediction_from_output`, then call `log_prediction` post-emit with a try/except. `log_manager_trade` is a deeper rabbit-hole — system has no autonomous execution, so the hook only fires if the human-in-the-loop trade flow ever logs back.
+9. **Codex pre-push hook is local-only** (`.git/hooks/pre-push`), not in the repo. Installed on the main checkout 2026-05-15 to give second-lineage review on every push to `main`. Advisory mode — runs Codex on the diff being pushed, prints findings, never blocks. To make it reproducible across machines, add a `scripts/install_codex_hook.sh` that drops the same file into `.git/hooks/`. Treat Codex output as a prompt to verify, not as a verdict — has produced two confirmed false positives (hallucinated column counts, hallucinated import-style risks) alongside two real HIGH catches (per-ticker dedup bug, schema migration gap).
 
 ## Rolling back
 

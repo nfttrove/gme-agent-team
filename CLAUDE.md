@@ -109,7 +109,7 @@ curl http://localhost:8765/metrics
 ./venv/bin/python -m pytest gme_trading_system/tests/ -v
 ```
 
-Baseline: **144 pass, 2 pre-existing failures** (`test_signal_scorer_detects_sl_first_touch_as_loss`, `test_dv_default_watchlist`). House style for new tests: behaviour-focused names, Given/When/Then docstrings — see [gme_trading_system/tests/README.md](gme_trading_system/tests/README.md).
+Baseline: **436 pass, 1 pre-existing failure** (`test_dv_default_watchlist` — DV `pillar_D` KeyError; the historical `test_signal_scorer_detects_sl_first_touch_as_loss` was fixed 2026-05-15, see RUNBOOK item 6). House style for new tests: behaviour-focused names, Given/When/Then docstrings — see [gme_trading_system/tests/README.md](gme_trading_system/tests/README.md).
 
 ## Environment
 
