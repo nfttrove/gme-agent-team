@@ -414,10 +414,17 @@ def test_signal_scorer_detects_tp_first_touch_as_win(tmp_path):
 
 
 def test_signal_scorer_detects_sl_first_touch_as_loss(tmp_path):
-    """Bullish signal: SL hit before TP → directional_hit=0, sl_hit=1."""
+    """Bullish signal: SL hit before TP → directional_hit=0, sl_hit=1.
+
+    Uses a hardcoded past timestamp (mirrors test_signal_scorer_detects_tp_
+    first_touch_as_win above) so the test is deterministic. Earlier version
+    used datetime.now(ET).replace(hour=10, ...) which silently failed any
+    time the suite ran before 14:00 ET — window_end (made+4h=14:00) > now
+    meant score_due_signals returned 0 instead of scoring the signal.
+    """
     db = _make_db(tmp_path)
     conn = sqlite3.connect(db)
-    made = datetime.now(ET).replace(hour=10, minute=0, second=0, microsecond=0)
+    made = datetime(2026, 4, 23, 10, 0, tzinfo=ET)
     _insert_signal(conn, sig_id="sig-loss", agent="Pattern", ts=made,
                    entry=25.0, tp=26.0, sl=24.0, conf=0.80)
     conn.execute(
