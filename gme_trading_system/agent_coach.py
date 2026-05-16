@@ -9,12 +9,18 @@ trust, the coach explains why the bad ones are bad so a human can fix them.
 """
 from __future__ import annotations
 
+import os
 import sqlite3
 from dataclasses import dataclass
 
 SAMPLE_LIMIT = 50  # most recent N resolved signals
 MIN_SCORED_SIGNALS = 5  # need at least this many to bother diagnosing
 PRO_MODEL = "gemini-2.5-pro"
+# Pro's internal "thinking" budget eats into max_output_tokens. The shared
+# llm_generate_gemini doesn't cap it, so we bypass it and call the raw client
+# with an explicit budget — caps thinking spend AND guarantees output room.
+PRO_THINKING_BUDGET = 2048
+PRO_MAX_OUTPUT_TOKENS = 4096
 
 
 @dataclass
@@ -231,10 +237,9 @@ def diagnose_agent(db_path: str, agent_query: str, llm_caller=None) -> CoachRepo
     prompt = _build_prompt(canonical, signals, stats)
 
     if llm_caller is None:
-        from llm_config import llm_generate_gemini
-        llm_caller = llm_generate_gemini
+        llm_caller = _call_pro_with_bounded_thinking
     try:
-        raw = llm_caller(prompt, model=PRO_MODEL, num_predict=600, temperature=0.3)
+        raw = llm_caller(prompt, model=PRO_MODEL, num_predict=PRO_MAX_OUTPUT_TOKENS, temperature=0.3)
     except Exception as e:
         return CoachReport(
             ok=False, agent_name=canonical, sample_size=len(signals),
@@ -275,3 +280,24 @@ def format_coach_report(report: CoachReport) -> str:
 
 def _esc(s: str) -> str:
     return (s or "").replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
+
+
+def _call_pro_with_bounded_thinking(prompt: str, model: str, num_predict: int, temperature: float) -> str:
+    """Raw Gemini Pro call with thinking_budget capped so it can't eat the
+    entire max_output_tokens before producing visible text."""
+    from google import genai as google_genai
+    from google.genai import types as genai_types
+    api_key = os.getenv("GOOGLE_API_KEY", "")
+    if not api_key:
+        raise RuntimeError("GOOGLE_API_KEY missing for coach Pro call")
+    client = google_genai.Client(api_key=api_key)
+    resp = client.models.generate_content(
+        model=model,
+        contents=prompt,
+        config=genai_types.GenerateContentConfig(
+            temperature=temperature,
+            max_output_tokens=num_predict,
+            thinking_config=genai_types.ThinkingConfig(thinking_budget=PRO_THINKING_BUDGET),
+        ),
+    )
+    return (resp.text or "").strip()
