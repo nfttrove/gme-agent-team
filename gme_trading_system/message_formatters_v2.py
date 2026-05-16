@@ -853,6 +853,56 @@ def burst_signal_with_market(
     return [signal_msg, market_msg]
 
 
+def format_week_ahead(snapshot, timestamp_et: str | None = None) -> str:
+    """Sunday-evening week-ahead preview — calendar + the week's anchors.
+
+    snapshot is a week_ahead.WeekAheadSnapshot; kept duck-typed so this file
+    doesn't import week_ahead and create a cycle.
+    """
+    today = snapshot.today
+    friday = snapshot.next_friday
+    lines = [
+        f"🔭 <b>GME · Week ahead</b>",
+        f"<i>{today.strftime('%a %d %b %Y')}</i>",
+        "",
+    ]
+
+    lines.append(f"<b>Friday expiry:</b> {friday.strftime('%a %d %b')}")
+    if snapshot.last_max_pain and snapshot.last_spot_at_snapshot:
+        bias = f" · {escape_html(snapshot.last_oi_bias)} bias" if snapshot.last_oi_bias else ""
+        lines.append(
+            f"   Last snapshot ({escape_html(snapshot.last_snapshot_expiration or '')}): "
+            f"max pain ${snapshot.last_max_pain:.2f} vs spot ${snapshot.last_spot_at_snapshot:.2f}{bias}"
+        )
+    lines.append("   <i>Fresh brief Monday 13:30 BST.</i>")
+    lines.append("")
+
+    lines.append("📅 <b>Calendar</b>")
+    lines.append("   • Mon 13:30 BST — options brief")
+    lines.append(f"   • Fri close — {snapshot.trading_days_this_week} trading days this week")
+    lines.append("")
+
+    if snapshot.earnings_days_away is not None and snapshot.earnings_days_away <= EARNINGS_HORIZON_DAYS_DISPLAY:
+        earnings_dt = snapshot.next_earnings_date or ""
+        lines.append(
+            f"💼 <b>Earnings:</b> {escape_html(earnings_dt[:10])} "
+            f"({snapshot.earnings_days_away} days)"
+        )
+        lines.append("")
+
+    if snapshot.trading_days_to_deadline is not None:
+        lines.append(
+            f"🎯 <b>£5k target:</b> {snapshot.trading_days_to_deadline} trading days to 31 May"
+        )
+        lines.append("")
+
+    lines.append("<i>Have a calm Sunday.</i>")
+    return "\n".join(lines)
+
+
+EARNINGS_HORIZON_DAYS_DISPLAY = 30  # only surface earnings if within this many days
+
+
 _VOL_REGIME_EMOJI = {"elevated": "🌡", "subdued": "❄️", "in line": "📏"}
 
 

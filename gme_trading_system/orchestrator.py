@@ -1542,6 +1542,27 @@ def run_sunday_support_message():
         log.error(f"[Support] Failed: {e}")
 
 
+def run_sunday_week_ahead():
+    """Sunday 13:00 ET (18:00 BST) — calendar setup for the upcoming week.
+
+    One-ping preview: this Friday's expiry, last-seen max pain, upcoming earnings
+    if within 30 days, trading-day count to the user's end-of-May deadline.
+    Pairs with the morning sunday_support_message; together they're the only
+    two weekend pings.
+    """
+    try:
+        from week_ahead import build_week_ahead_snapshot
+        from notifier import notify_week_ahead
+
+        snapshot = build_week_ahead_snapshot(DB_PATH)
+        notify_week_ahead(snapshot)
+        write_log("WeekAhead", f"sent · friday={snapshot.next_friday} earnings_days={snapshot.earnings_days_away}", "week_ahead")
+        log.info("[WeekAhead] Sunday preview sent")
+    except Exception as e:
+        log.error(f"[WeekAhead] Failed: {e}")
+        write_log("WeekAhead", str(e), "week_ahead", "error")
+
+
 def run_promo_broadcast():
     """Broadcast the @mygmebot promo card (mascot/QR + caption) to Telegram."""
     try:
@@ -3378,6 +3399,7 @@ class TradingSystemOrchestrator:
 
         # Weekly coffee nudge — Sundays 10:00 AM ET
         self.scheduler.add_job(run_sunday_support_message, CronTrigger(day_of_week="sun", hour=10, minute=0, timezone=ET), id="sunday_support")
+        self.scheduler.add_job(run_sunday_week_ahead, CronTrigger(day_of_week="sun", hour=13, minute=0, timezone=ET), id="sunday_week_ahead")
 
         # NOTE: The twice-daily run_promo_broadcast cron entries (10:00 + 15:30)
         # were removed — they duplicated context already in /briefing and
