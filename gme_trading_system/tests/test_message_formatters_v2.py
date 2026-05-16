@@ -566,3 +566,83 @@ class TestBurstFormatting:
         msg = format_signal_burst("BULLISH", 25.50, "78% (calibrated from 80%)")
         # The function should strip calibration from the displayed confidence
         assert "calibrated" not in msg.lower() or "78%" in msg  # 78% is shown, not metadata
+
+
+class TestOptionsBriefFormatting:
+    """Monday options brief — explicitly NOT subject to the ≤8-line burst rule,
+    since it's a weekly digest with persona labels + WoW deltas + takeaway."""
+
+    def _candidate(self, strike: float, ask: float, iv: float, oi: int):
+        return {"strike": strike, "ask": ask, "iv": iv, "open_interest": oi}
+
+    def test_brief_renders_personas_vol_and_takeaway(self):
+        from message_formatters_v2 import format_options_brief
+        candidates = [
+            self._candidate(23.0, 0.18, 0.52, 4067),
+            self._candidate(22.0, 0.33, 0.44, 1651),
+            self._candidate(21.5, 0.55, 0.42, 451),
+        ]
+        personas = [("🎰", "lottery ticket"), ("⚖️", "balanced"), ("🎯", "sensible")]
+
+        msg = format_options_brief(
+            expiration="2026-05-22",
+            spot_price=21.59,
+            candidates=candidates,
+            candidate_personas=personas,
+            wow_diff={23.0: {"is_new": False, "oi_delta_pct": 35.2, "prev_oi": 3000}},
+            gone=[25.0],
+            vol_predicted_pct=2.89,
+            vol_long_term_pct=2.01,
+            vol_regime="elevated",
+            shares_takeaway="Crowd reaching for upside lottery tickets — premium-rich.",
+            timestamp_et="14:30",
+        )
+
+        assert "GME options" in msg
+        assert "2026-05-22" in msg
+        assert "Vol elevated" in msg
+        assert "$21.59" in msg
+        assert "2.89%" in msg and "90d 2.01%" in msg
+        assert "lottery ticket" in msg and "sensible" in msg and "balanced" in msg
+        assert "$18/contract" in msg  # 0.18 * 100 rounded
+        assert "OI ↑35% WoW" in msg
+        assert "Off the list this week" in msg and "$25.00" in msg
+        assert "For shares" in msg
+        assert "Not an execution rec" in msg
+
+    def test_brief_omits_wow_chip_when_change_under_threshold(self):
+        from message_formatters_v2 import format_options_brief
+        candidates = [self._candidate(22.0, 0.33, 0.44, 1651)]
+        msg = format_options_brief(
+            expiration="2026-05-22",
+            spot_price=21.59,
+            candidates=candidates,
+            candidate_personas=[("⚖️", "balanced")],
+            wow_diff={22.0: {"is_new": False, "oi_delta_pct": 4.0, "prev_oi": 1588}},
+            gone=[],
+            vol_predicted_pct=None,
+            vol_long_term_pct=None,
+            vol_regime="",
+            shares_takeaway="",
+        )
+        assert "WoW" not in msg
+        assert "Off the list" not in msg
+        assert "For shares" not in msg
+        assert "Not an execution rec" in msg
+
+    def test_brief_marks_new_strikes(self):
+        from message_formatters_v2 import format_options_brief
+        candidates = [self._candidate(24.0, 0.10, 0.55, 2000)]
+        msg = format_options_brief(
+            expiration="2026-05-22",
+            spot_price=21.59,
+            candidates=candidates,
+            candidate_personas=[("🎰", "lottery ticket")],
+            wow_diff={24.0: {"is_new": True, "oi_delta_pct": None, "prev_oi": None}},
+            gone=[],
+            vol_predicted_pct=2.89,
+            vol_long_term_pct=2.01,
+            vol_regime="elevated",
+            shares_takeaway="Mixed.",
+        )
+        assert "<b>NEW</b>" in msg

@@ -851,3 +851,81 @@ def burst_signal_with_market(
     signal_msg = format_signal_burst(direction, target, confidence, reasons, timestamp_et)
     market_msg = format_market_burst(price, price_change_pct, price_range, volume_context, timestamp_et)
     return [signal_msg, market_msg]
+
+
+_VOL_REGIME_EMOJI = {"elevated": "🌡", "subdued": "❄️", "in line": "📏"}
+
+
+def format_options_brief(
+    expiration: str,
+    spot_price: float,
+    candidates: list[dict],
+    candidate_personas: list[tuple[str, str]],
+    wow_diff: dict,
+    gone: list[float],
+    vol_predicted_pct: float | None,
+    vol_long_term_pct: float | None,
+    vol_regime: str,
+    shares_takeaway: str,
+    timestamp_et: str | None = None,
+) -> str:
+    """Compact Monday options brief — persona labels, WoW deltas, shares takeaway.
+
+    candidates are the top-N call_contract_candidates payload rows. personas is
+    parallel: same length, each (emoji, label) tuple from options_brief.persona_label.
+    wow_diff is {strike: {is_new, oi_delta_pct, prev_oi}}; gone is strikes that
+    fell off vs last week.
+    """
+    ts = timestamp_et or get_ny_time_short()
+    vol_emoji = _VOL_REGIME_EMOJI.get(vol_regime, "📊")
+
+    header_bits = [f"📊 <b>GME options</b> · exp {escape_html(expiration)}"]
+    if vol_regime:
+        header_bits.append(f"{vol_emoji} Vol {escape_html(vol_regime)}")
+    header_bits.append(f"{ts} ET")
+    lines = [" · ".join(header_bits), ""]
+
+    if vol_predicted_pct is not None:
+        vol_line = f"Spot <b>${spot_price:.2f}</b> · expecting ~{vol_predicted_pct:.2f}%/day"
+        if vol_long_term_pct:
+            vol_line += f" (90d {vol_long_term_pct:.2f}%)"
+        lines.append(vol_line)
+    else:
+        lines.append(f"Spot <b>${spot_price:.2f}</b>")
+    lines.append("")
+
+    for c, (emoji, label) in zip(candidates, candidate_personas):
+        strike = float(c["strike"])
+        ask = float(c["ask"])
+        iv = float(c.get("iv", 0.0))
+        oi = int(c.get("open_interest") or 0)
+        per_contract = ask * 100
+
+        diff_chip = ""
+        info = wow_diff.get(round(strike, 2)) if wow_diff else None
+        if info:
+            if info.get("is_new"):
+                diff_chip = " · <b>NEW</b>"
+            elif info.get("oi_delta_pct") is not None:
+                delta = info["oi_delta_pct"]
+                if abs(delta) >= 10:
+                    arrow = "↑" if delta > 0 else "↓"
+                    diff_chip = f" · OI {arrow}{abs(delta):.0f}% WoW"
+
+        lines.append(f"{emoji} <b>${strike:.2f}</b> · <i>{label}</i>")
+        lines.append(
+            f"   ${per_contract:.0f}/contract · IV {iv:.0%} · OI {oi}{diff_chip}"
+        )
+
+    if gone:
+        lines.append("")
+        gone_str = ", ".join(f"${s:.2f}" for s in gone[:3])
+        lines.append(f"<i>Off the list this week:</i> {escape_html(gone_str)}")
+
+    if shares_takeaway:
+        lines.append("")
+        lines.append(f"📈 <b>For shares:</b> {escape_html(shares_takeaway)}")
+
+    lines.append("")
+    lines.append("<i>Not an execution rec.</i>")
+    return "\n".join(lines)

@@ -24,21 +24,28 @@ class VolatilityForecast:
     sample_size: int = 0
     reason: str = ""
 
+    @property
+    def regime(self) -> str:
+        """One-word regime label vs the 90d baseline, or empty string."""
+        if not self.ok or not self.long_term_abs_move_pct or self.long_term_abs_move_pct <= 0:
+            return ""
+        ratio = self.predicted_abs_move_pct / self.long_term_abs_move_pct
+        if ratio >= 1.25:
+            return "elevated"
+        if ratio <= 0.80:
+            return "subdued"
+        return "in line"
+
     def summary(self) -> str:
         if not self.ok:
             return f"Realized-vol baseline unavailable: {self.reason}"
-        regime = ""
-        if self.long_term_abs_move_pct and self.long_term_abs_move_pct > 0:
-            ratio = self.predicted_abs_move_pct / self.long_term_abs_move_pct
-            if ratio >= 1.25:
-                regime = f" (elevated vs 90d {self.long_term_abs_move_pct:.2f}%)"
-            elif ratio <= 0.80:
-                regime = f" (subdued vs 90d {self.long_term_abs_move_pct:.2f}%)"
-            else:
-                regime = f" (in line with 90d {self.long_term_abs_move_pct:.2f}%)"
+        regime_txt = ""
+        if self.regime:
+            connector = "vs" if self.regime != "in line" else "with"
+            regime_txt = f" ({self.regime} {connector} 90d {self.long_term_abs_move_pct:.2f}%)"
         return (
             f"Realized-vol baseline: next-day |GME return| ≈ {self.predicted_abs_move_pct:.2f}% "
-            f"({RECENT_WINDOW}d rolling mean){regime}; context only, not an options execution signal"
+            f"({RECENT_WINDOW}d rolling mean){regime_txt}; context only, not an options execution signal"
         )
 
 

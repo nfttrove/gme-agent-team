@@ -35,7 +35,7 @@ from message_formatters_v2 import (
     format_structure_burst, format_alert_burst, format_impact_burst,
     format_social_burst, format_watchdog_burst, format_summary_burst,
     format_update_burst, format_stale_burst, format_pattern_burst,
-    burst_signal_with_market, get_ny_time_short
+    format_options_brief, burst_signal_with_market, get_ny_time_short
 )
 from trading_glossary import add_emoji_definitions
 
@@ -244,6 +244,35 @@ def notify_max_pain(strike: float, current_price: float, friday_date: str,
         expiry_date=friday_date,
         oi_bias=net_oi_direction if net_oi_direction else None,
         timestamp_et=ts
+    )
+    return _send(msg)
+
+
+def notify_options_brief(
+    expiration: str,
+    spot_price: float,
+    candidates: list[dict],
+    candidate_personas: list[tuple[str, str]],
+    wow_diff: dict,
+    gone: list[float],
+    vol_predicted_pct: float | None,
+    vol_long_term_pct: float | None,
+    vol_regime: str,
+    shares_takeaway: str,
+) -> bool:
+    """Burst: Monday options brief with persona labels, WoW deltas, shares takeaway."""
+    msg = format_options_brief(
+        expiration=expiration,
+        spot_price=spot_price,
+        candidates=candidates,
+        candidate_personas=candidate_personas,
+        wow_diff=wow_diff,
+        gone=gone,
+        vol_predicted_pct=vol_predicted_pct,
+        vol_long_term_pct=vol_long_term_pct,
+        vol_regime=vol_regime,
+        shares_takeaway=shares_takeaway,
+        timestamp_et=get_ny_time_short(),
     )
     return _send(msg)
 

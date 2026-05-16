@@ -1843,11 +1843,41 @@ def run_options_update():
         feed = OptionsFeed()
         feed.update_db(send_telegram=True)
 
+        # Realized-vol context first so the brief can reference the regime.
+        vol_forecast = None
         try:
+            from volatility_forecast import forecast_next_abs_return
+
+            vol_forecast = forecast_next_abs_return(DB_PATH)
+            write_log("Options", vol_forecast.summary(), "realized_vol_forecast", "ok" if vol_forecast.ok else "warn")
+        except Exception as vol_err:
+            log.warning("[Options] Realized-vol baseline failed: %s", vol_err)
+            write_log("Options", str(vol_err), "realized_vol_forecast", "warn")
+
+        try:
+            from options_feed import save_watchlist_snapshot, load_previous_watchlist
+            from options_brief import (
+                persona_label, compute_wow_diff, gone_strikes, shares_translation,
+            )
+            from notifier import notify_options_brief
+            from datetime import date
+
             call_watchlist = feed.call_contract_candidates(n=5)
             candidates = call_watchlist.get("candidates", []) if call_watchlist else []
-            if candidates:
+            if not candidates:
+                write_log("Options", "No liquid call contract candidates passed filters", "call_contract_watchlist")
+            else:
                 expiry = call_watchlist.get("expiration", "")
+                spot = float(call_watchlist.get("current_price", 0.0))
+                today_iso = date.today().isoformat()
+
+                previous = load_previous_watchlist(expiry, today_iso)
+                wow = compute_wow_diff(candidates, previous)
+                gone = gone_strikes(candidates, previous)
+                personas = [persona_label(c, candidates) for c in candidates]
+                vol_regime = vol_forecast.regime if vol_forecast and vol_forecast.ok else ""
+                takeaway = shares_translation(candidates, vol_regime=vol_regime)
+
                 log_lines = [
                     f"{c['contract_symbol'] or 'call'} strike ${c['strike']:.2f}: "
                     f"score {c['score']:.1f}, bid/ask ${c['bid']:.2f}/${c['ask']:.2f}, "
@@ -1859,31 +1889,24 @@ def run_options_update():
                     "Call contract watchlist (not an execution recommendation):\n" + "\n".join(log_lines),
                     "call_contract_watchlist",
                 )
-                from notifier import notify
-                tg_lines = [
-                    f"<b>📅 Call watchlist {expiry}</b>",
-                    "<i>liquidity + spread + IV scored — not an execution rec</i>",
-                ]
-                for c in candidates[:3]:
-                    tg_lines.append(
-                        f"• ${c['strike']:.2f}  b/a ${c['bid']:.2f}/${c['ask']:.2f}  "
-                        f"IV {c['iv']:.0%}  OI {c['open_interest']}  score {c['score']:.0f}"
-                    )
-                notify("\n".join(tg_lines))
-            else:
-                write_log("Options", "No liquid call contract candidates passed filters", "call_contract_watchlist")
+
+                notify_options_brief(
+                    expiration=expiry,
+                    spot_price=spot,
+                    candidates=candidates[:3],
+                    candidate_personas=personas[:3],
+                    wow_diff=wow,
+                    gone=gone,
+                    vol_predicted_pct=vol_forecast.predicted_abs_move_pct if vol_forecast and vol_forecast.ok else None,
+                    vol_long_term_pct=vol_forecast.long_term_abs_move_pct if vol_forecast and vol_forecast.ok else None,
+                    vol_regime=vol_regime,
+                    shares_takeaway=takeaway,
+                )
+
+                save_watchlist_snapshot(call_watchlist, snapshot_date=today_iso)
         except Exception as wl_err:
             log.warning("[Options] Call contract watchlist failed: %s", wl_err)
             write_log("Options", str(wl_err), "call_contract_watchlist", "warn")
-
-        try:
-            from volatility_forecast import forecast_next_abs_return
-
-            vol_forecast = forecast_next_abs_return(DB_PATH)
-            write_log("Options", vol_forecast.summary(), "realized_vol_forecast", "ok" if vol_forecast.ok else "warn")
-        except Exception as vol_err:
-            log.warning("[Options] Realized-vol baseline failed: %s", vol_err)
-            write_log("Options", str(vol_err), "realized_vol_forecast", "warn")
     except Exception as e:
         log.error(f"[Options] Max pain update failed: {e}")
         write_log("Options", str(e), "max_pain", "error")

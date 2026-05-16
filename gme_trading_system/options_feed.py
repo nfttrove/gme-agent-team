@@ -423,9 +423,83 @@ def ensure_options_table():
             net_oi_bias      TEXT,
             UNIQUE(expiration)
         );
+
+        CREATE TABLE IF NOT EXISTS options_watchlists (
+            id              INTEGER PRIMARY KEY AUTOINCREMENT,
+            snapshot_date   TEXT NOT NULL,
+            expiration      TEXT NOT NULL,
+            contract_symbol TEXT,
+            strike          REAL NOT NULL,
+            bid             REAL,
+            ask             REAL,
+            iv              REAL,
+            open_interest   INTEGER,
+            volume          INTEGER,
+            score           REAL
+        );
+        CREATE INDEX IF NOT EXISTS idx_options_watchlists_date_strike
+            ON options_watchlists(snapshot_date, strike);
     """)
     conn.commit()
     conn.close()
+
+
+def save_watchlist_snapshot(watchlist: dict, snapshot_date: str | None = None) -> None:
+    """Persist a watchlist payload from call_contract_candidates() for WoW diffing."""
+    candidates = watchlist.get("candidates", []) if watchlist else []
+    if not candidates:
+        return
+    expiration = watchlist.get("expiration", "")
+    if snapshot_date is None:
+        from datetime import date
+        snapshot_date = date.today().isoformat()
+    conn = sqlite3.connect(DB_PATH)
+    try:
+        conn.executemany(
+            """INSERT INTO options_watchlists
+               (snapshot_date, expiration, contract_symbol, strike, bid, ask, iv,
+                open_interest, volume, score)
+               VALUES (?,?,?,?,?,?,?,?,?,?)""",
+            [
+                (
+                    snapshot_date, expiration, c.get("contract_symbol"), c["strike"],
+                    c["bid"], c["ask"], c["iv"], c["open_interest"], c["volume"], c["score"],
+                )
+                for c in candidates
+            ],
+        )
+        conn.commit()
+    finally:
+        conn.close()
+
+
+def load_previous_watchlist(expiration: str, before_date: str) -> list[dict]:
+    """Most recent watchlist snapshot for `expiration` strictly before `before_date`."""
+    conn = sqlite3.connect(DB_PATH)
+    try:
+        latest = conn.execute(
+            """SELECT MAX(snapshot_date) FROM options_watchlists
+                WHERE expiration=? AND snapshot_date < ?""",
+            (expiration, before_date),
+        ).fetchone()
+        if not latest or not latest[0]:
+            return []
+        rows = conn.execute(
+            """SELECT contract_symbol, strike, bid, ask, iv, open_interest, volume, score
+                 FROM options_watchlists
+                WHERE expiration=? AND snapshot_date=?
+                ORDER BY score DESC""",
+            (expiration, latest[0]),
+        ).fetchall()
+    finally:
+        conn.close()
+    return [
+        {
+            "contract_symbol": cs, "strike": s, "bid": b, "ask": a, "iv": iv,
+            "open_interest": oi, "volume": v, "score": sc,
+        }
+        for (cs, s, b, a, iv, oi, v, sc) in rows
+    ]
 
 
 # ── Standalone test ───────────────────────────────────────────────────────────
