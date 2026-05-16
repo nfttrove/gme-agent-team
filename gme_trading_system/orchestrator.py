@@ -783,6 +783,26 @@ def run_futurist_prediction_signal():
 
             # Log signal and notify (only if confidence is actionable)
             if prediction.confidence >= 0.60 and prediction.stop_loss and prediction.take_profit:
+                # /coach Futurist diagnosis (2026-05-16): high-conf BULL signals
+                # are inversely correlated with accuracy — Pro found the agent
+                # calls tops in low-vol chop. Invert BULL>75% conf to BEAR
+                # (flip bias + swap SL/TP). Stays gated by signal_gate so the
+                # inverted signals get scored before reaching Telegram, and
+                # the original prediction is already persisted upstream for
+                # the agent's own accuracy tracking.
+                emit_bias = prediction.bias
+                emit_sl = prediction.stop_loss
+                emit_tp = prediction.take_profit
+                inversion_tag = ""
+                if (prediction.bias or "").upper().startswith("BULL") and prediction.confidence > _FUTURIST_INVERT_BULL_CONF_FLOOR:
+                    emit_bias = "BEARISH"
+                    emit_sl, emit_tp = prediction.take_profit, prediction.stop_loss
+                    inversion_tag = f"[INVERTED: orig BULL conf={prediction.confidence:.0%}] "
+                    log.info(f"[Futurist] inverting high-conf BULL → BEAR (orig conf={prediction.confidence:.2f})")
+                    write_log("Futurist",
+                              f"INVERT high-conf BULL→BEAR (orig conf={prediction.confidence:.2%}) per /coach diagnosis",
+                              "prediction_signal", "inverted")
+
                 gate = signal_gate.evaluate("Futurist", DB_PATH)
                 gated = gate["decision"] != "EMIT"
 
@@ -793,9 +813,9 @@ def run_futurist_prediction_signal():
                     confidence=prediction.confidence,
                     severity="HIGH" if prediction.confidence >= 0.80 else ("MEDIUM" if prediction.confidence >= 0.65 else "LOW"),
                     entry_price=prediction.predicted_price * 0.99,
-                    stop_loss=prediction.stop_loss,
-                    take_profit=prediction.take_profit,
-                    reasoning=(f"[{gate['decision']}] " if gated else "") + prediction.reasoning[:480],
+                    stop_loss=emit_sl,
+                    take_profit=emit_tp,
+                    reasoning=inversion_tag + (f"[{gate['decision']}] " if gated else "") + prediction.reasoning[:480],
                     paper_trade=not gated,
                 )
                 if gated:
@@ -811,9 +831,9 @@ def run_futurist_prediction_signal():
                         signal_type=prediction.signal_type,
                         confidence=prediction.confidence,
                         entry_price=prediction.predicted_price * 0.99,
-                        stop_loss=prediction.stop_loss,
-                        take_profit=prediction.take_profit,
-                        reasoning=prediction.reasoning,
+                        stop_loss=emit_sl,
+                        take_profit=emit_tp,
+                        reasoning=inversion_tag + prediction.reasoning,
                         alert_id=alert_id,
                     )
                 except Exception as e:
@@ -1104,6 +1124,18 @@ _INTRADAY_PATTERN_CONFIDENCE_FLOOR = 0.80
 _INTRADAY_STOP_PCT = 0.015   # ±1.5% stop
 _INTRADAY_TARGET_PCT = 0.025  # ±2.5% target
 _INTRADAY_LOOKBACK_BARS = 60  # ~5 hours of 5-min bars
+# 0.3% of price per 5-min bar = the floor below which moves are noise. Set
+# from /coach Pattern Intraday diagnosis (2026-05-16): agent's BULL was at
+# 18% hit rate because it fired on 0.0% chop. Tune up if too restrictive.
+_INTRADAY_ATR_FLOOR_PCT = 0.003
+
+# /coach Futurist (2026-05-16) found high-conf BULL signals are inversely
+# correlated with accuracy — Pro hypothesis: the agent calls tops in low-vol
+# chop. Above this floor we flip BULL → BEAR (and swap SL/TP). Experimental;
+# revisit after 14d to see whether inverted signals score above the gate's
+# 30% suppress floor. The original prediction still lands in `predictions`
+# table for agent-accuracy tracking; only the emitted signal is flipped.
+_FUTURIST_INVERT_BULL_CONF_FLOOR = 0.75
 _INTRADAY_AGG_LOOKBACK_MINUTES = 360  # aggregate the last 6 hours of ticks
 _INTRADAY_DEDUPE_WINDOW_HOURS = 4  # don't re-emit same setup within this window
 _INTRADAY_DEDUPE_LEVEL_TOL = 0.015  # ±1.5% breakout-level tolerance for "same setup"
@@ -1213,6 +1245,18 @@ def _compute_intraday_pattern_signal():
     report = detect_patterns(candles, config={"MIN_CANDLES": 30})
     if report is None:
         return None, "intraday detector returned no report (data quality)"
+
+    # ATR chop filter (added 2026-05-16 per /coach diagnosis: BULL 18% on 50
+    # signals, agent was firing on low-volatility noise). Block when the 14-bar
+    # ATR is below 0.3% of price — that's low enough to call genuine chop on a
+    # ~$21 stock without filtering active sessions. Relative threshold so it
+    # scales if GME repirces.
+    atr14 = report.indicators.get("atr14") if report.indicators else None
+    last_close = report.indicators.get("price") if report.indicators else None
+    if atr14 and last_close and last_close > 0:
+        atr_pct = atr14 / last_close
+        if atr_pct < _INTRADAY_ATR_FLOOR_PCT:
+            return None, f"ATR chop filter: 5m ATR {atr_pct:.2%} < floor {_INTRADAY_ATR_FLOOR_PCT:.2%}"
 
     # No LLM narration on the intraday path — the cycle runs every 5 min so
     # a 30s Gemma call would dominate cost for cosmetic prose. Use the
