@@ -3,35 +3,42 @@ import math
 from volatility_forecast import forecast_next_abs_return_from_closes
 
 
-def _synthetic_closes(n=180):
+def _synthetic_closes(n: int = 120, vol: float = 0.02) -> list[float]:
+    """Persistent-vol walk so the rolling-mean baseline has a stable signal."""
     price = 20.0
-    closes = []
-    vol = 0.02
-    for i in range(n):
-        # Smooth, persistent absolute returns so the HAR-style features have a
-        # predictable signal without relying on random test data.
+    out = [price]
+    for i in range(n - 1):
         vol = 0.006 + 0.82 * vol + 0.002 * math.sin(i / 7)
         direction = -1 if i % 2 else 1
         price *= math.exp(direction * max(vol, 0.001))
-        closes.append((f"2025-01-{(i % 28) + 1:02d}-{i:03d}", price))
-    return closes
+        out.append(price)
+    return out
 
 
-def test_forecast_next_abs_return_from_closes_uses_chronological_holdout():
-    forecast = forecast_next_abs_return_from_closes(_synthetic_closes(), min_samples=80)
+def test_baseline_predicts_positive_next_day_move_and_includes_regime():
+    forecast = forecast_next_abs_return_from_closes(_synthetic_closes(120))
 
     assert forecast.ok is True
-    assert forecast.predicted_abs_move_pct is not None
     assert forecast.predicted_abs_move_pct > 0
-    assert forecast.validation_r2 is not None
-    assert forecast.holdout_samples >= 20
-    assert "walk-forward holdout R²" in forecast.summary()
-    assert "not an options execution signal" in forecast.summary()
+    assert forecast.sample_size == 21
+    assert forecast.long_term_abs_move_pct is not None
+    summary = forecast.summary()
+    assert "21d rolling mean" in summary
+    assert "not an options execution signal" in summary
+    assert "90d" in summary
 
 
-def test_forecast_next_abs_return_from_closes_soft_fails_on_small_samples():
-    forecast = forecast_next_abs_return_from_closes(_synthetic_closes(40), min_samples=80)
+def test_baseline_omits_regime_when_fewer_than_long_window_samples():
+    forecast = forecast_next_abs_return_from_closes(_synthetic_closes(40))
+
+    assert forecast.ok is True
+    assert forecast.long_term_abs_move_pct is None
+    assert "90d" not in forecast.summary()
+
+
+def test_baseline_soft_fails_on_too_few_closes():
+    forecast = forecast_next_abs_return_from_closes([20.0, 20.5, 21.0])
 
     assert forecast.ok is False
-    assert "need 80 supervised rows" in forecast.reason
-    assert forecast.summary().startswith("Realized-vol forecast unavailable")
+    assert "need 22 closes" in forecast.reason
+    assert forecast.summary().startswith("Realized-vol baseline unavailable")

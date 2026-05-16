@@ -127,7 +127,7 @@ Several agents have a **separate signal-emission cycle** that filters their anal
 
 Beyond the 12 agents, the orchestrator runs:
 - `synthesis_brief` every 5 min — the shared context layer
-- `options` Mon 08:30 ET — pulls the nearest-Friday options chain, computes max pain, total call/put OI, put/call ratio, and net OI bias; persists an `options_snapshots` row, sends the max-pain Telegram burst, and logs a liquid call-contract watchlist for Synthesis context, adds a chronological-holdout realized-volatility forecast from local GME daily candles, and optionally enriches the log with Unusual Whales API options-volume/recent-flow/OI-by-strike/net-premium/spot-GEX data when `UNUSUAL_WHALES_API_KEY` is set. The watchlist is explicitly **not** an execution recommendation; it ranks candidates by liquidity, bid/ask tightness, moneyness, and IV cost.
+- `options` Mon 08:30 ET — pulls the nearest-Friday options chain, computes max pain, total call/put OI, put/call ratio, and net OI bias; persists an `options_snapshots` row, sends the max-pain Telegram burst, ranks a liquid call-contract watchlist (top 3 surfaced to Telegram, top 5 logged) scored on bid/ask tightness, moneyness, OI, and IV cost, and logs a 21-day rolling-mean realized-volatility baseline from local GME daily candles. The watchlist is explicitly **not** an execution recommendation.
 - `aggregator_intraday` every 5 min — rolls ticks into candles
 - `voice_forwarder` every 1 min — outbound speech queue
 - `calibration` every 10 min — refreshes per-agent confidence multipliers

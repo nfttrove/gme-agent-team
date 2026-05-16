@@ -1843,22 +1843,38 @@ def run_options_update():
         feed = OptionsFeed()
         feed.update_db(send_telegram=True)
 
-        call_watchlist = feed.call_contract_candidates(n=5)
-        candidates = call_watchlist.get("candidates", []) if call_watchlist else []
-        if candidates:
-            lines = [
-                f"{c['contract_symbol'] or 'call'} strike ${c['strike']:.2f}: "
-                f"score {c['score']:.1f}, bid/ask ${c['bid']:.2f}/${c['ask']:.2f}, "
-                f"vol {c['volume']}, OI {c['open_interest']}, BE(mid) ${c['breakeven_mid']:.2f}"
-                for c in candidates
-            ]
-            write_log(
-                "Options",
-                "Call contract watchlist (not an execution recommendation):\n" + "\n".join(lines),
-                "call_contract_watchlist",
-            )
-        else:
-            write_log("Options", "No liquid call contract candidates passed filters", "call_contract_watchlist")
+        try:
+            call_watchlist = feed.call_contract_candidates(n=5)
+            candidates = call_watchlist.get("candidates", []) if call_watchlist else []
+            if candidates:
+                expiry = call_watchlist.get("expiration", "")
+                log_lines = [
+                    f"{c['contract_symbol'] or 'call'} strike ${c['strike']:.2f}: "
+                    f"score {c['score']:.1f}, bid/ask ${c['bid']:.2f}/${c['ask']:.2f}, "
+                    f"vol {c['volume']}, OI {c['open_interest']}, IV {c['iv']:.0%}, BE(mid) ${c['breakeven_mid']:.2f}"
+                    for c in candidates
+                ]
+                write_log(
+                    "Options",
+                    "Call contract watchlist (not an execution recommendation):\n" + "\n".join(log_lines),
+                    "call_contract_watchlist",
+                )
+                from notifier import notify
+                tg_lines = [
+                    f"<b>📅 Call watchlist {expiry}</b>",
+                    "<i>liquidity + spread + IV scored — not an execution rec</i>",
+                ]
+                for c in candidates[:3]:
+                    tg_lines.append(
+                        f"• ${c['strike']:.2f}  b/a ${c['bid']:.2f}/${c['ask']:.2f}  "
+                        f"IV {c['iv']:.0%}  OI {c['open_interest']}  score {c['score']:.0f}"
+                    )
+                notify("\n".join(tg_lines))
+            else:
+                write_log("Options", "No liquid call contract candidates passed filters", "call_contract_watchlist")
+        except Exception as wl_err:
+            log.warning("[Options] Call contract watchlist failed: %s", wl_err)
+            write_log("Options", str(wl_err), "call_contract_watchlist", "warn")
 
         try:
             from volatility_forecast import forecast_next_abs_return
@@ -1866,20 +1882,8 @@ def run_options_update():
             vol_forecast = forecast_next_abs_return(DB_PATH)
             write_log("Options", vol_forecast.summary(), "realized_vol_forecast", "ok" if vol_forecast.ok else "warn")
         except Exception as vol_err:
-            log.warning("[Options] Realized-vol forecast failed: %s", vol_err)
+            log.warning("[Options] Realized-vol baseline failed: %s", vol_err)
             write_log("Options", str(vol_err), "realized_vol_forecast", "warn")
-
-        try:
-            from unusual_whales import UnusualWhalesClient
-
-            uw_snapshot = UnusualWhalesClient.from_env().options_overview("GME", limit=5)
-            if uw_snapshot.get("ok"):
-                write_log("Options", uw_snapshot.get("summary", "Unusual Whales snapshot fetched"), "unusual_whales_options")
-            else:
-                log.info("[Options] Unusual Whales skipped: %s", uw_snapshot.get("error", "unavailable"))
-        except Exception as uw_err:
-            log.warning("[Options] Unusual Whales enrichment failed: %s", uw_err)
-            write_log("Options", str(uw_err), "unusual_whales_options", "warn")
     except Exception as e:
         log.error(f"[Options] Max pain update failed: {e}")
         write_log("Options", str(e), "max_pain", "error")

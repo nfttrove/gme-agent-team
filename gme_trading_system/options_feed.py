@@ -172,8 +172,8 @@ class OptionsFeed:
         expiration: str | None = None,
         n: int = 5,
         min_open_interest: int = 25,
-        min_volume: int = 1,
-        max_spread_pct: float = 0.35,
+        min_volume: int = 10,
+        max_spread_pct: float = 0.20,
         max_itm_pct: float = 0.08,
         max_otm_pct: float = 0.20,
     ) -> dict:
@@ -244,10 +244,10 @@ class OptionsFeed:
 
         filtered["score"] = (
             100 * (
-                0.45 * liquidity
+                0.30 * liquidity
                 + 0.25 * moneyness
                 + 0.20 * spread_quality
-                + 0.10 * iv_cost
+                + 0.25 * iv_cost
             )
         ).round(1)
 
