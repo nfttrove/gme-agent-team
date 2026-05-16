@@ -58,11 +58,11 @@ Every signal emitted to Telegram carries a 0.0–1.0 confidence score. The team 
 ### Futurist — Market Futurist
 - **Cadence:** every 2h, active window
 - **LLM:** DeepSeek-r1 / Gemini Pro for the reasoning step (not Gemma)
-- **Reads:** price history, options chain, max pain, Synthesis brief
+- **Reads:** live price/technical indicators, latest Synthesis, latest Newsie summary
 - **Writes:** `predictions` (1h/4h/EOD forecasts)
 - **Signals:** prediction signals on high-conviction setups
 - **Why it exists:** structured forward look that we can score against actuals via `confidence_calibration`
-- **Recent:** max pain surfaced in 4-hour periodic brief (commit 2dede38)
+- **Recent:** max pain surfaced in 4-hour periodic brief (commit 2dede38); Futurist signal prompt does not currently consume contract-level options data directly
 
 ### GeoRisk — GeoRisk Researcher
 - **Cadence:** every 1h, active window
@@ -127,6 +127,7 @@ Several agents have a **separate signal-emission cycle** that filters their anal
 
 Beyond the 12 agents, the orchestrator runs:
 - `synthesis_brief` every 5 min — the shared context layer
+- `options` Mon 08:30 ET — pulls the nearest-Friday options chain, computes max pain, total call/put OI, put/call ratio, and net OI bias; persists an `options_snapshots` row, sends the max-pain Telegram burst, and logs a liquid call-contract watchlist for Synthesis context, adds a chronological-holdout realized-volatility forecast from local GME daily candles, and optionally enriches the log with Unusual Whales API options-volume/recent-flow/OI-by-strike/net-premium/spot-GEX data when `UNUSUAL_WHALES_API_KEY` is set. The watchlist is explicitly **not** an execution recommendation; it ranks candidates by liquidity, bid/ask tightness, moneyness, and IV cost.
 - `aggregator_intraday` every 5 min — rolls ticks into candles
 - `voice_forwarder` every 1 min — outbound speech queue
 - `calibration` every 10 min — refreshes per-agent confidence multipliers

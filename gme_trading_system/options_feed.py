@@ -70,8 +70,14 @@ class OptionsFeed:
 
         try:
             chain = self._ticker.option_chain(expiration)
-            calls = chain.calls[["strike", "lastPrice", "bid", "ask", "volume", "openInterest", "impliedVolatility"]]
-            puts  = chain.puts[["strike", "lastPrice", "bid", "ask", "volume", "openInterest", "impliedVolatility"]]
+            cols = [
+                "contractSymbol", "strike", "lastPrice", "bid", "ask",
+                "volume", "openInterest", "impliedVolatility",
+            ]
+            call_cols = [col for col in cols if col in chain.calls.columns]
+            put_cols = [col for col in cols if col in chain.puts.columns]
+            calls = chain.calls[call_cols]
+            puts  = chain.puts[put_cols]
             calls = calls.rename(columns={"lastPrice": "last", "openInterest": "OI", "impliedVolatility": "IV"})
             puts  = puts.rename(columns={"lastPrice": "last", "openInterest": "OI", "impliedVolatility": "IV"})
             return {"calls": calls, "puts": puts, "expiration": expiration}
@@ -135,12 +141,7 @@ class OptionsFeed:
                 min_loss = total
                 max_pain_strike = s
 
-        # Current price
-        try:
-            hist = self._ticker.history(period="1d")
-            current_price = float(hist["Close"].iloc[-1]) if not hist.empty else 0.0
-        except Exception:
-            current_price = 0.0
+        current_price = self._current_price()
 
         total_call_oi = sum(call_oi.values())
         total_put_oi  = sum(put_oi.values())
@@ -155,6 +156,133 @@ class OptionsFeed:
             "put_oi_total":  int(total_put_oi),
             "put_call_ratio": pcr,
             "net_oi_bias": "puts" if pcr > 1 else "calls",
+        }
+
+
+    def _current_price(self) -> float:
+        """Latest available underlying price from yfinance, or 0.0 on failure."""
+        try:
+            hist = self._ticker.history(period="1d")
+            return float(hist["Close"].iloc[-1]) if not hist.empty else 0.0
+        except Exception:
+            return 0.0
+
+    def call_contract_candidates(
+        self,
+        expiration: str | None = None,
+        n: int = 5,
+        min_open_interest: int = 25,
+        min_volume: int = 1,
+        max_spread_pct: float = 0.35,
+        max_itm_pct: float = 0.08,
+        max_otm_pct: float = 0.20,
+    ) -> dict:
+        """Rank call contracts for a watchlist, not an execution recommendation.
+
+        The scorer favours liquid calls with tight bid/ask spreads and strikes
+        near the underlying. It deliberately returns a watchlist rather than a
+        BUY signal because contract selection still needs risk limits, account
+        suitability checks, and an execution plan.
+        """
+        chain = self.get_chain(expiration)
+        if not chain:
+            return {}
+
+        current_price = self._current_price()
+        if current_price <= 0:
+            return {}
+
+        calls = chain["calls"].copy()
+        if calls.empty:
+            return {
+                "expiration": chain["expiration"],
+                "current_price": round(current_price, 2),
+                "analysis": "watchlist_only_not_trade_recommendation",
+                "candidates": [],
+            }
+
+        for col in ("strike", "bid", "ask", "last", "volume", "OI", "IV"):
+            if col not in calls.columns:
+                calls[col] = 0
+            calls[col] = pd.to_numeric(calls[col], errors="coerce").fillna(0)
+
+        calls["mid"] = (calls["bid"] + calls["ask"]) / 2
+        calls["spread"] = calls["ask"] - calls["bid"]
+        calls["spread_pct"] = calls["spread"] / calls["mid"].where(calls["mid"] > 0)
+        calls["moneyness_pct"] = (calls["strike"] - current_price) / current_price
+        calls["breakeven_mid"] = calls["strike"] + calls["mid"]
+        calls["breakeven_ask"] = calls["strike"] + calls["ask"]
+        calls["intrinsic"] = (current_price - calls["strike"]).clip(lower=0)
+        calls["extrinsic_mid"] = (calls["mid"] - calls["intrinsic"]).clip(lower=0)
+
+        filtered = calls[
+            (calls["ask"] > 0)
+            & (calls["mid"] > 0)
+            & (calls["OI"] >= min_open_interest)
+            & (calls["volume"] >= min_volume)
+            & (calls["spread_pct"].fillna(999) <= max_spread_pct)
+            & (calls["moneyness_pct"] >= -max_itm_pct)
+            & (calls["moneyness_pct"] <= max_otm_pct)
+        ].copy()
+
+        if filtered.empty:
+            return {
+                "expiration": chain["expiration"],
+                "current_price": round(current_price, 2),
+                "analysis": "watchlist_only_not_trade_recommendation",
+                "candidates": [],
+            }
+
+        max_volume = max(float(filtered["volume"].max()), 1.0)
+        max_oi = max(float(filtered["OI"].max()), 1.0)
+        width = max(max_itm_pct, max_otm_pct, 0.01)
+
+        liquidity = 0.60 * (filtered["volume"] / max_volume) + 0.40 * (filtered["OI"] / max_oi)
+        moneyness = 1 - (filtered["moneyness_pct"].abs() / width).clip(upper=1)
+        spread_quality = 1 - (filtered["spread_pct"] / max_spread_pct).clip(upper=1)
+        iv_cost = 1 - (filtered["IV"].clip(lower=0, upper=2.0) / 2.0)
+
+        filtered["score"] = (
+            100 * (
+                0.45 * liquidity
+                + 0.25 * moneyness
+                + 0.20 * spread_quality
+                + 0.10 * iv_cost
+            )
+        ).round(1)
+
+        ranked = filtered.sort_values(["score", "volume", "OI"], ascending=False).head(n)
+        candidates = []
+        for row in ranked.to_dict("records"):
+            candidates.append({
+                "contract_symbol": row.get("contractSymbol"),
+                "strike": round(float(row["strike"]), 2),
+                "bid": round(float(row["bid"]), 2),
+                "ask": round(float(row["ask"]), 2),
+                "mid": round(float(row["mid"]), 2),
+                "spread_pct": round(float(row["spread_pct"]), 3),
+                "volume": int(row["volume"]),
+                "open_interest": int(row["OI"]),
+                "iv": round(float(row["IV"]), 3),
+                "moneyness_pct": round(float(row["moneyness_pct"]), 3),
+                "breakeven_mid": round(float(row["breakeven_mid"]), 2),
+                "breakeven_ask": round(float(row["breakeven_ask"]), 2),
+                "extrinsic_mid": round(float(row["extrinsic_mid"]), 2),
+                "score": float(row["score"]),
+                "reason": "liquid/tight-spread call watchlist candidate; not an execution recommendation",
+            })
+
+        return {
+            "expiration": chain["expiration"],
+            "current_price": round(current_price, 2),
+            "analysis": "watchlist_only_not_trade_recommendation",
+            "filters": {
+                "min_open_interest": min_open_interest,
+                "min_volume": min_volume,
+                "max_spread_pct": max_spread_pct,
+                "moneyness_window": f"-{max_itm_pct:.0%}/+{max_otm_pct:.0%}",
+            },
+            "candidates": candidates,
         }
 
     def top_strikes_by_oi(self, expiration: str | None = None, n: int = 10) -> dict:
@@ -316,6 +444,10 @@ if __name__ == "__main__":
     print("\n=== Max Pain (nearest Friday) ===")
     mp = feed.max_pain()
     print(json.dumps(mp, indent=2))
+
+    print("\n=== Top Call Contract Candidates ===")
+    calls = feed.call_contract_candidates(n=5)
+    print(json.dumps(calls, indent=2))
 
     print("\n=== Top OI Strikes ===")
     top = feed.top_strikes_by_oi(n=5)
