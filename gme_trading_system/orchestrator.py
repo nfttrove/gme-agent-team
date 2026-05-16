@@ -3224,101 +3224,91 @@ def run_paper_trade_checker():
 
 
 def run_standup_report():
-    """11 AM & 4 PM ET — Send agent performance standup to Telegram."""
+    """Mon-Fri 11 AM & 4 PM ET — verdict-first standup to Telegram.
+
+    Categorises agents into LISTEN (passing the bar) or MUTED (gated or no
+    sample), persists today's gate decisions to agent_gate_history, and
+    surfaces a one-line day-over-day status diff. Replaces the old jargon
+    dump (dir%/TP%/fade/trust/n=) with plain-English buckets.
+    """
     log.info("[Standup] === AGENT PERFORMANCE REPORT ===")
     try:
+        import signal_gate
         from paper_trader import get_trade_stats, ensure_paper_trades_table
+        from standup_brief import (
+            ensure_gate_history_table, categorize_all, save_gate_snapshot,
+            load_previous_gate_snapshot, compute_status_diff,
+        )
+        from notifier import format_standup_brief
+        from datetime import date
+
+        ensure_gate_history_table(DB_PATH)
+
         conn = sqlite3.connect(DB_PATH)
         conn.row_factory = sqlite3.Row
         ensure_paper_trades_table(conn)
 
-        # Per-agent paper trade stats (last 24h)
         pt_stats = get_trade_stats(conn, days=1)
 
-        # Per-agent historical signal accuracy (last 30d from signal_scores)
         acc_rows = conn.execute(
             """
             SELECT agent_name,
                    COUNT(*)                                              AS n,
                    AVG(directional_hit)                                 AS hit_rate,
-                   AVG(CASE WHEN tp_hit IS NOT NULL THEN tp_hit END)    AS tp_rate,
-                   AVG(brier_term)                                      AS brier
+                   AVG(CASE WHEN tp_hit IS NOT NULL THEN tp_hit END)    AS tp_rate
             FROM signal_scores
             WHERE validated_at > datetime('now', '-30 days')
+              AND baseline_price != end_price
             GROUP BY agent_name
             ORDER BY n DESC
             """
         ).fetchall()
         acc = {r["agent_name"]: dict(r) for r in acc_rows}
 
+        # Latest GME spot for the header
+        spot_row = conn.execute(
+            "SELECT close FROM price_ticks WHERE symbol='GME' AND close IS NOT NULL ORDER BY id DESC LIMIT 1"
+        ).fetchone()
+        spot = float(spot_row["close"]) if spot_row else None
         conn.close()
 
-        lines = ["<b>🤖 AGENT STANDUP</b>\n"]
+        # Gate decisions for every agent we have accuracy data for
+        gate_decisions = {
+            name: signal_gate.evaluate(name, DB_PATH)["decision"] for name in acc
+        }
 
-        # ── Paper trades (24h) ──────────────────────────────────────────────
-        if pt_stats:
-            lines.append("<b>📊 Hypothetical Trades — Last 24h</b>")
-            team_tp = team_sl = team_open = team_total = 0
-            team_pnl: list[float] = []
-            for s in pt_stats:
-                total = s["total"] or 0
-                tp = s["tp_hits"] or 0
-                sl = s["sl_hits"] or 0
-                exp = s["expired"] or 0
-                open_ = s["open"] or 0
-                closed = s["closed"] or 0
-                avg_pnl = s["avg_pnl"]
-                win_rate = (tp / closed * 100) if closed else 0
-                pnl_str = f"{avg_pnl:+.1f}%" if avg_pnl is not None else "—"
-                icon = "✅" if win_rate >= 60 else "⚠️" if closed else "🔹"
-                lines.append(
-                    f"{icon} <b>{s['agent_name']}</b>: {total} trades  "
-                    f"TP {tp} · SL {sl} · exp {exp} · open {open_}  "
-                    f"win {win_rate:.0f}% · avg {pnl_str}"
-                )
-                team_tp += tp
-                team_sl += sl
-                team_open += open_
-                team_total += total
-                if avg_pnl is not None:
-                    team_pnl.extend([avg_pnl] * max(1, closed))
-            team_closed = team_tp + team_sl + (team_total - team_tp - team_sl - team_open)
-            team_win = (team_tp / team_closed * 100) if team_closed else 0
-            team_avg = (sum(team_pnl) / len(team_pnl)) if team_pnl else None
-            pnl_line = f"  avg PnL {team_avg:+.1f}%" if team_avg is not None else ""
-            lines.append(
-                f"\n<b>Team: {team_tp}/{team_closed} TP wins ({team_win:.0f}%){pnl_line}</b>"
-            )
-        else:
-            lines.append("No paper trades in last 24h — signals fire at open.")
+        trusted, muted = categorize_all(acc, gate_decisions)
+        all_verdicts = trusted + muted
 
-        # ── 30-day signal accuracy ──────────────────────────────────────────
-        if acc:
-            lines.append("\n<b>📡 30-Day Signal Accuracy (scored)</b>")
-            import signal_gate
-            for agent_name, a in acc.items():
-                n = a["n"] or 0
-                if n < 3:
-                    continue
-                hit = a["hit_rate"]
-                tp_r = a["tp_rate"]
-                brier = a["brier"]
-                hit_str = f"{hit:.0%}" if hit is not None else "—"
-                tp_str = f"{tp_r:.0%}" if tp_r is not None else "—"
-                edge = abs((hit or 0.5) - 0.5)
-                verdict = "fade ⚠️" if (hit or 0.5) < 0.45 else "trust ✅" if (hit or 0.5) > 0.55 else "neutral"
-                # Surface the live gate decision so a "fade" agent on screen
-                # doesn't look broken when the system is already suppressing it.
-                gate_decision = signal_gate.evaluate(agent_name, DB_PATH)["decision"]
-                gate_chip = {"EMIT": "", "SHADOW": " · 🔇 shadow", "SUPPRESS": " · 🚫 suppressed"}.get(gate_decision, "")
-                lines.append(
-                    f"  <b>{agent_name}</b> (n={n}): "
-                    f"dir {hit_str} · TP {tp_str} · {verdict}{gate_chip}"
-                )
+        # Status diff against the previous saved snapshot, then save today's
+        today_iso = date.today().isoformat()
+        previous_decisions = load_previous_gate_snapshot(DB_PATH, today_iso)
+        status_diff = compute_status_diff(all_verdicts, previous_decisions)
+        save_gate_snapshot(DB_PATH, all_verdicts, snapshot_date=today_iso)
 
-        msg = "\n".join(lines)
-        from notifier import notify
-        notify(msg)
+        # Aggregate paper trade stats: team-level only, per-agent moved to /standup
+        team_tp = team_total = 0
+        team_pnl: list[float] = []
+        for s in pt_stats:
+            team_tp += s["tp_hits"] or 0
+            team_total += (s["total"] or 0) - (s["open"] or 0)
+            if s["avg_pnl"] is not None:
+                team_pnl.append(float(s["avg_pnl"]))
+        team_avg = (sum(team_pnl) / len(team_pnl)) if team_pnl else None
+
+        from notifier import _send
+        from message_formatters_v2 import get_ny_time_short
+        msg = format_standup_brief(
+            timestamp_et=get_ny_time_short(),
+            spot_price=spot,
+            trusted=trusted,
+            muted=muted,
+            last_24h_total=team_total,
+            last_24h_wins=team_tp,
+            last_24h_avg_pnl_pct=team_avg,
+            status_diff=status_diff,
+        )
+        _send(msg)
         log.info("[Standup] Report sent to Telegram")
         write_log("Standup", msg[:2000], "standup_report")
     except Exception as e:

@@ -35,7 +35,8 @@ from message_formatters_v2 import (
     format_structure_burst, format_alert_burst, format_impact_burst,
     format_social_burst, format_watchdog_burst, format_summary_burst,
     format_update_burst, format_stale_burst, format_pattern_burst,
-    format_options_brief, format_week_ahead, burst_signal_with_market, get_ny_time_short
+    format_options_brief, format_week_ahead, format_standup_brief,
+    burst_signal_with_market, get_ny_time_short
 )
 from trading_glossary import add_emoji_definitions
 

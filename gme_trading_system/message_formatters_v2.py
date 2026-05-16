@@ -853,6 +853,75 @@ def burst_signal_with_market(
     return [signal_msg, market_msg]
 
 
+def format_standup_brief(
+    timestamp_et: str,
+    spot_price: float | None,
+    trusted: list,
+    muted: list,
+    last_24h_total: int,
+    last_24h_wins: int,
+    last_24h_avg_pnl_pct: float | None,
+    status_diff: str,
+) -> str:
+    """Verdict-first standup: who to listen to / who's muted / 24h trades / diff.
+
+    trusted and muted are lists of standup_brief.AgentVerdict (duck-typed
+    here to avoid an import cycle).
+    """
+    header_bits = ["🤖 <b>STANDUP</b>"]
+    if spot_price is not None:
+        header_bits.append(f"GME ${spot_price:.2f}")
+    # get_ny_time_short() already includes "ET" suffix
+    header_bits.append(timestamp_et)
+    lines = [" · ".join(header_bits), ""]
+
+    # LISTEN bucket
+    if not trusted:
+        lines.append("⚠️ <b>NO TRUSTED AGENTS</b> — lean on price + structure, not signals")
+    else:
+        only = " · only agent passing" if len(trusted) == 1 else ""
+        for v in trusted:
+            pct = f"{(v.hit_rate or 0) * 100:.0f}%"
+            lines.append(
+                f"✅ <b>LISTEN: {escape_html(v.agent_name)}</b>"
+            )
+            lines.append(
+                f"   {v.hits_correct}/{v.sample_size} calls right ({pct}){only}"
+            )
+            if v.small_sample:
+                lines.append("   ⚠️ small sample — could be a hot streak")
+            only = ""  # only flag the first one
+
+    # MUTED bucket — collapse SHADOW + SUPPRESS into one block
+    if muted:
+        lines.append("")
+        lines.append("🔕 <b>MUTED</b> <i>(no Telegram alerts from these):</i>")
+        # Compute name padding for alignment
+        max_name = max(len(v.agent_name) for v in muted)
+        for v in muted:
+            pct = f"{(v.hit_rate or 0) * 100:.0f}%"
+            stats = f"{v.hits_correct}/{v.sample_size}".rjust(7)
+            lines.append(
+                f"   {escape_html(v.agent_name).ljust(max_name)}  {stats}  ({pct}) — {v.reason}"
+            )
+
+    # 24h paper trade summary — collapsed
+    lines.append("")
+    if last_24h_total:
+        avg_chip = f" · avg {last_24h_avg_pnl_pct:+.1f}%" if last_24h_avg_pnl_pct is not None else ""
+        lines.append(
+            f"Last 24h: <b>{last_24h_wins} of {last_24h_total}</b> hit profit{avg_chip}"
+        )
+    else:
+        lines.append("Last 24h: no paper trades closed")
+
+    # Status diff line
+    lines.append("")
+    lines.append(f"📊 <i>Status: {escape_html(status_diff)}</i>")
+
+    return "\n".join(lines)
+
+
 def format_week_ahead(snapshot, timestamp_et: str | None = None) -> str:
     """Sunday-evening week-ahead preview — calendar + the week's anchors.
 
