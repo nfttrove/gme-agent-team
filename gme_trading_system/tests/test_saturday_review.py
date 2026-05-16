@@ -470,24 +470,18 @@ class TestSaturdayReview:
         assert "THIS WEEK" in msg
         assert "LESSONS" in msg
 
-    def test_when_llm_narrative_fails_then_fallback_focus_line_appears(
-        self, empty_db, captured_telegram, stub_candidates, reset_breakers, monkeypatch,
+    def test_next_week_focus_uses_confluence_fallback_when_no_accuracy_data(
+        self, empty_db, captured_telegram, stub_candidates, reset_breakers,
     ):
         """
-        Given the LLM narrative call raises an exception (Ollama down)
+        Given an empty signal_scores table (no 30d accuracy data)
         When run_saturday_review fires
-        Then the brief still sends, with the hardcoded fallback focus line.
+        Then the NEXT WEEK line falls back to the confluence message.
 
-        Why this matters: same discipline as run_daily_briefing — if Gemma
-        falls over, the deterministic facts still ship. Telegram never
-        receives an empty message.
+        The focus line was previously LLM-generated; it's now deterministic
+        from the accuracy leader. With no accuracy data the confluence
+        fallback shows — same shape as the old Gemma-down fallback.
         """
-        # Given
-        import llm_config
-        def boom(*a, **kw):
-            raise RuntimeError("Ollama unavailable")
-        monkeypatch.setattr(llm_config, "llm_generate", boom)
-
         # When
         orchestrator.run_saturday_review()
 
@@ -495,4 +489,4 @@ class TestSaturdayReview:
         assert len(captured_telegram) == 1
         msg = captured_telegram[0]
         assert "NEXT WEEK" in msg
-        assert "confluence" in msg.lower()  # the fallback text mentions confluence
+        assert "confluence" in msg.lower()

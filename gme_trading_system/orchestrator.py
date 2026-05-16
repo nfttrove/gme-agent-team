@@ -1634,6 +1634,11 @@ def _compose_dv_section(conn, top_n: int | None = None) -> str:
         if not latest_date:
             return ""
 
+        total_in_snapshot = conn.execute(
+            "SELECT COUNT(*) FROM dv_score_history WHERE score_date = ?",
+            (latest_date,),
+        ).fetchone()[0]
+
         if top_n is None:
             latest = conn.execute(
                 "SELECT ticker, score, rating, price_at_score "
@@ -1684,6 +1689,8 @@ def _compose_dv_section(conn, top_n: int | None = None) -> str:
             lines.append(
                 f"• {ticker:<5} {float(score):.1f}  {rating}  {price_str}  {tag}"
             )
+        if top_n is not None and total_in_snapshot > len(latest):
+            lines.append(f"<i>+ {total_in_snapshot - len(latest)} more — use /dv for full list</i>")
         return "\n".join(lines)
     except Exception as e:
         log.warning(f"[SatReview] dv section failed: {e}")
@@ -1742,6 +1749,25 @@ def run_saturday_review():
         signal_counts = [(r["agent_name"], int(r["n"])) for r in signal_rows]
         top_agent = signal_counts[0] if signal_counts else None
 
+        # ---------- 3b. Accuracy leader (for next-week focus, NOT volume) ----------
+        # Volume-leader → focus recommendation used to surface fade-worthy agents
+        # because the worst agent is often the loudest. Pick the highest hit-rate
+        # agent (n>=10 to avoid noise; the focus text below acknowledges sample
+        # size). Below-coin-flip leaders trigger an honest "stand down" line
+        # instead of a fake recommendation.
+        try:
+            acc_row = conn.execute(
+                """SELECT agent_name, AVG(directional_hit) AS hit_rate, COUNT(*) AS n
+                     FROM signal_scores
+                    WHERE validated_at > datetime('now', '-30 days')
+                      AND baseline_price != end_price
+                    GROUP BY agent_name HAVING COUNT(*) >= 10
+                    ORDER BY hit_rate DESC LIMIT 1"""
+            ).fetchone()
+        except sqlite3.OperationalError:
+            acc_row = None
+        accuracy_leader = (acc_row["agent_name"], float(acc_row["hit_rate"]), int(acc_row["n"])) if acc_row else None
+
         # ---------- 4. Agent freshness (last run in past 24h, active-window only) ----------
         recency_rows = conn.execute(
             "SELECT agent_name, MAX(timestamp) AS last_ts FROM agent_logs "
@@ -1756,7 +1782,9 @@ def run_saturday_review():
         ]
 
         # ---------- 5. DV deep-value scores (rendered while conn is open) ----------
-        dv_section = _compose_dv_section(conn)
+        # Cap to top 15 — 45-ticker lists are unreadable in Telegram. Full list
+        # remains available via /dv.
+        dv_section = _compose_dv_section(conn, top_n=15)
 
         conn.close()
 
@@ -1772,28 +1800,25 @@ def run_saturday_review():
         breakers = list_breakers()
         open_breakers = [name for name, b in breakers.items() if b["state"] != "closed"]
 
-        # ---------- 8. Gemma fills next-week focus only ----------
-        prompt = (
-            "You are writing the closing line of a weekly trading review for a "
-            "non-technical CEO. Output ONE short sentence stating what to watch "
-            "next week given these facts. No preamble, no markdown, no quotes, "
-            "under 140 chars.\n\n"
-            f"- This week: {n_trades} closed paper trades, {win_rate:.0f}% win rate, "
-            f"PnL ${week_pnl_usd:+,.0f}\n"
-            f"- Predictions scored: {n_preds}, avg abs error {avg_err:.1f}%\n"
-            f"- Top signal generator: {top_agent[0] if top_agent else 'none'}\n"
-            f"- Lesson candidates pending: {n_candidates}\n"
-            f"- Open circuit breakers: {len(open_breakers)}\n"
-        )
-        focus_txt = "Watch for confluence between Pattern and Futurist on the open."
-        try:
-            from llm_config import llm_generate
-            raw = llm_generate(prompt, num_predict=80, temperature=0.4, timeout=30)
-            raw = " ".join((raw or "").strip().strip('"').strip("'").split())
-            if raw:
-                focus_txt = raw[:160]
-        except Exception as e:
-            log.warning(f"[SatReview] LLM focus line failed ({e}), using fallback")
+        # ---------- 8. Next-week focus, deterministic from accuracy leader ----------
+        # Replaced the LLM call: this line is too important to risk Gemma
+        # hallucinating a recommendation, and the accuracy data tells us
+        # what to say. Honest bands: strong (>=60%), edge (>=50%), or stand
+        # down (no agent above coin flip). Confluence fallback when no data.
+        if not accuracy_leader:
+            focus_txt = "Watch for confluence between Pattern and Futurist on the open — no 30d accuracy data yet."
+        else:
+            leader_name, leader_hit, leader_n = accuracy_leader
+            sample_chip = f"n={leader_n}{' — small sample' if leader_n < 20 else ''}"
+            if leader_hit >= 0.60:
+                focus_txt = f"Strong lead: {leader_name} at {leader_hit:.0%} 30d hit rate ({sample_chip}). Build setups around it."
+            elif leader_hit >= 0.50:
+                focus_txt = f"Edge: {leader_name} at {leader_hit:.0%} ({sample_chip}) — small but positive. Look for confluence."
+            else:
+                focus_txt = (
+                    f"No agent above coin flip (best is {leader_name} at {leader_hit:.0%}). "
+                    "Stand down on agent signals; lean on price + structure."
+                )
 
         # ---------- 9. Compose the Telegram message ----------
         week_start = (date.today() - timedelta(days=6)).isoformat()
@@ -3270,6 +3295,7 @@ def run_standup_report():
         # ── 30-day signal accuracy ──────────────────────────────────────────
         if acc:
             lines.append("\n<b>📡 30-Day Signal Accuracy (scored)</b>")
+            import signal_gate
             for agent_name, a in acc.items():
                 n = a["n"] or 0
                 if n < 3:
@@ -3281,9 +3307,13 @@ def run_standup_report():
                 tp_str = f"{tp_r:.0%}" if tp_r is not None else "—"
                 edge = abs((hit or 0.5) - 0.5)
                 verdict = "fade ⚠️" if (hit or 0.5) < 0.45 else "trust ✅" if (hit or 0.5) > 0.55 else "neutral"
+                # Surface the live gate decision so a "fade" agent on screen
+                # doesn't look broken when the system is already suppressing it.
+                gate_decision = signal_gate.evaluate(agent_name, DB_PATH)["decision"]
+                gate_chip = {"EMIT": "", "SHADOW": " · 🔇 shadow", "SUPPRESS": " · 🚫 suppressed"}.get(gate_decision, "")
                 lines.append(
                     f"  <b>{agent_name}</b> (n={n}): "
-                    f"dir {hit_str} · TP {tp_str} · {verdict}"
+                    f"dir {hit_str} · TP {tp_str} · {verdict}{gate_chip}"
                 )
 
         msg = "\n".join(lines)
@@ -3356,8 +3386,8 @@ class TradingSystemOrchestrator:
         # since BackgroundScheduler(timezone=...) default isn't being honored on
         # this host (suspected missing tzdata).
         self.scheduler.add_job(run_daily_huddle,      CronTrigger(hour=9,  minute=0,  timezone=ET), id="huddle")
-        self.scheduler.add_job(run_daily_briefing,    CronTrigger(hour=10, minute=0,  timezone=ET), id="briefing")
-        self.scheduler.add_job(run_standup_report,    CronTrigger(hour=11, minute=0,  timezone=ET), id="standup_midday")
+        self.scheduler.add_job(run_daily_briefing,    CronTrigger(day_of_week="mon-fri", hour=10, minute=0,  timezone=ET), id="briefing")
+        self.scheduler.add_job(run_standup_report,    CronTrigger(day_of_week="mon-fri", hour=11, minute=0,  timezone=ET), id="standup_midday")
         # 8 PM ET EOD analysis bypasses @active_window_required (window ends 17:00 ET).
         self.scheduler.add_job(run_daily_trend.__wrapped__, CronTrigger(hour=20, minute=0,  timezone=ET), id="trendy_eod")
         self.scheduler.add_job(run_daily_aggregation, CronTrigger(hour=16, minute=35, timezone=ET), id="aggregator")
@@ -3367,7 +3397,7 @@ class TradingSystemOrchestrator:
         self.scheduler.add_job(run_history_overwrite, CronTrigger(day_of_week="mon-fri", hour=16, minute=40, timezone=ET), id="history_overwrite")
         self.scheduler.add_job(run_intraday_aggregation, IntervalTrigger(minutes=5), id="aggregator_intraday")
         self.scheduler.add_job(run_voice_forwarder, IntervalTrigger(minutes=1), id="voice_forwarder")
-        self.scheduler.add_job(run_standup_report,    CronTrigger(hour=16, minute=0,  timezone=ET), id="standup_close")
+        self.scheduler.add_job(run_standup_report,    CronTrigger(day_of_week="mon-fri", hour=16, minute=0,  timezone=ET), id="standup_close")
 
         # Learning sessions — agents review their own performance and adapt
         self.scheduler.add_job(run_learning_debrief, CronTrigger(hour=16, minute=30, timezone=ET), id="debrief")
