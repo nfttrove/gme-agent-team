@@ -81,6 +81,7 @@ OWNER_ONLY_COMMANDS = {
     "/exchange",                                   # Polygon trades (paid feed)
     "/ftd",                                        # SEC zip downloads (multi-MB)
     "/lessons",                                    # subprocess + LLM recall
+    "/coach",                                      # Gemini Pro agent diagnosis (~10s, paid)
 }
 
 # Reply target for the request currently being handled. The single-threaded
@@ -1155,6 +1156,26 @@ def handle_command(text: str, user: str = "team"):
             _reply(f"❌ /ftd error: {str(e)[:200]}")
             log.error(f"[tgbot] /ftd failed: {e}")
 
+    elif cmd == "/coach":
+        # /coach <agent name> — Gemini Pro diagnoses why an agent is failing
+        if not args:
+            _reply(
+                "❌ Usage: <code>/coach &lt;agent name&gt;</code>\n"
+                "Example: <code>/coach Pattern Intraday</code>\n\n"
+                "Shows why a muted agent is failing and what to fix."
+            )
+            return
+        agent_query = " ".join(args).strip()
+        _reply(f"🎓 Coaching <b>{agent_query}</b>… (Gemini Pro, ~10s)")
+        try:
+            from agent_coach import diagnose_agent, format_coach_report
+            report = diagnose_agent(DB_PATH, agent_query)
+            _reply(format_coach_report(report))
+            log.info(f"[tgbot] /coach {agent_query} → ok={report.ok}")
+        except Exception as e:
+            _reply(f"❌ Coach error: {str(e)[:200]}")
+            log.error(f"[tgbot] /coach failed: {e}")
+
     elif cmd == "/lessons":
         import subprocess, sys
         import os as os_module
@@ -1906,6 +1927,7 @@ def _register_commands():
         {"command": "ftd",       "description": "SEC Fails-to-Deliver — /ftd [TICKER]"},
         {"command": "learn",     "description": "Teach agents a rule — /learn \"…\" --why \"…\""},
         {"command": "lessons",   "description": "Show rules agents have learned"},
+        {"command": "coach",     "description": "Diagnose why a muted agent is failing — /coach <agent name>"},
         {"command": "update",    "description": "Sync local SQLite → Supabase now"},
         {"command": "frequency", "description": "Notification volume — low | medium | high"},
         {"command": "test",      "description": "Run Telegram handler smoke tests (~1 sec)"},
