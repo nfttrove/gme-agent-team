@@ -558,14 +558,14 @@ def format_impact_burst(
     """
     lines = [format_header("📊", "IMPACT", timestamp_et), ""]
 
-    lines.append(f"Max Pain: ${max_pain:.2f}")
+    lines.append(f"Max Pain (strike where most options expire worthless): ${max_pain:.2f}")
 
     diff = current_price - max_pain
     diff_icon = "Below" if diff < 0 else "Above"
     lines.append(f"Current: ${current_price:.2f} ({diff_icon} by ${abs(diff):.2f})")
 
     if oi_bias:
-        lines.append(f"OI Bias: {oi_bias}")
+        lines.append(f"OI (open interest) Bias: {oi_bias}")
 
     if expiry_date:
         lines.append(f"Expiry: {expiry_date}")
@@ -941,7 +941,7 @@ def format_week_ahead(snapshot, timestamp_et: str | None = None) -> str:
         bias = f" · {escape_html(snapshot.last_oi_bias)} bias" if snapshot.last_oi_bias else ""
         lines.append(
             f"   Last snapshot ({escape_html(snapshot.last_snapshot_expiration or '')}): "
-            f"max pain ${snapshot.last_max_pain:.2f} vs spot (last price) ${snapshot.last_spot_at_snapshot:.2f}{bias}"
+            f"max pain (strike where most options expire worthless) ${snapshot.last_max_pain:.2f} vs spot (last price) ${snapshot.last_spot_at_snapshot:.2f}{bias}"
         )
     lines.append("   <i>Fresh brief Monday 13:30 BST.</i>")
     lines.append("")
@@ -1023,11 +1023,11 @@ def format_options_brief(
                 delta = info["oi_delta_pct"]
                 if abs(delta) >= 10:
                     arrow = "↑" if delta > 0 else "↓"
-                    diff_chip = f" · OI {arrow}{abs(delta):.0f}% WoW"
+                    diff_chip = f" · OI (open interest) {arrow}{abs(delta):.0f}% WoW (week-over-week)"
 
         lines.append(f"{emoji} <b>${strike:.2f}</b> · <i>{label}</i>")
         lines.append(
-            f"   ${per_contract:.0f}/contract · IV {iv:.0%} · OI {oi}{diff_chip}"
+            f"   ${per_contract:.0f}/contract · IV (implied vol) {iv:.0%} · OI (open interest) {oi}{diff_chip}"
         )
 
     if gone:

@@ -605,7 +605,7 @@ class TestOptionsBriefFormatting:
         assert "2.89%" in msg and "90d 2.01%" in msg
         assert "lottery ticket" in msg and "sensible" in msg and "balanced" in msg
         assert "$18/contract" in msg  # 0.18 * 100 rounded
-        assert "OI ↑35% WoW" in msg
+        assert "OI (open interest) ↑35% WoW (week-over-week)" in msg
         assert "Off the list this week" in msg and "$25.00" in msg
         assert "For shares" in msg
         assert "Not an execution rec" in msg
