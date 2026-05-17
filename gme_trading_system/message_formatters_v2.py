@@ -941,7 +941,7 @@ def format_week_ahead(snapshot, timestamp_et: str | None = None) -> str:
         bias = f" · {escape_html(snapshot.last_oi_bias)} bias" if snapshot.last_oi_bias else ""
         lines.append(
             f"   Last snapshot ({escape_html(snapshot.last_snapshot_expiration or '')}): "
-            f"max pain ${snapshot.last_max_pain:.2f} vs spot ${snapshot.last_spot_at_snapshot:.2f}{bias}"
+            f"max pain ${snapshot.last_max_pain:.2f} vs spot (last price) ${snapshot.last_spot_at_snapshot:.2f}{bias}"
         )
     lines.append("   <i>Fresh brief Monday 13:30 BST.</i>")
     lines.append("")
@@ -999,12 +999,12 @@ def format_options_brief(
     lines = [" · ".join(header_bits), ""]
 
     if vol_predicted_pct is not None:
-        vol_line = f"Spot <b>${spot_price:.2f}</b> · expecting ~{vol_predicted_pct:.2f}%/day"
+        vol_line = f"Spot (last price) <b>${spot_price:.2f}</b> · expecting ~{vol_predicted_pct:.2f}%/day"
         if vol_long_term_pct:
             vol_line += f" (90d {vol_long_term_pct:.2f}%)"
         lines.append(vol_line)
     else:
-        lines.append(f"Spot <b>${spot_price:.2f}</b>")
+        lines.append(f"Spot (last price) <b>${spot_price:.2f}</b>")
     lines.append("")
 
     for c, (emoji, label) in zip(candidates, candidate_personas):
