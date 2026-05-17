@@ -1579,7 +1579,7 @@ def run_sunday_support_message():
             "If the signals, briefs, and voices have earned their keep this week, "
             "a coffee helps keep the team running:\n"
             f"👉 <a href=\"{paypal_url}\">{paypal_url}</a>\n\n"
-            "<i>Send /supportme anytime. Happy Sunday.</i>"
+            "<i>Happy Sunday.</i>"
         )
         log.info("[Support] Sunday support message sent")
     except Exception as e:

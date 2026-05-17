@@ -959,12 +959,6 @@ def format_week_ahead(snapshot, timestamp_et: str | None = None) -> str:
         )
         lines.append("")
 
-    if snapshot.trading_days_to_deadline is not None:
-        lines.append(
-            f"🎯 <b>£5k target:</b> {snapshot.trading_days_to_deadline} trading days to 31 May"
-        )
-        lines.append("")
-
     lines.append("<i>Have a calm Sunday.</i>")
     return "\n".join(lines)
 
