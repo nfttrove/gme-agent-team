@@ -60,7 +60,7 @@
     .card { padding: 14px 16px 12px; }
     .grid { grid-template-columns: 1fr; column-gap: 0; }
     .date { font-size: 17px !important; }
-    .footer { font-size: 13px; }
+    .strip { font-size: 12px; }
   }
   .header {
     display: flex; justify-content: space-between; align-items: center;
@@ -85,17 +85,26 @@
   .delta { margin-left: 6px; font-size: 13px; font-variant-numeric: tabular-nums; }
   .delta.pos { color: var(--green); }
   .delta.neg { color: var(--red); }
-  .footer {
-    margin-top: 14px; padding-top: 10px;
+  /* Data strip — shared shape for Earnings / Max Pain / Dark Pool / FTDS.
+     Each row: bold uppercase label + optional muted date subscript on the
+     left, one or two tabular-num values on the right. Single source of
+     visual truth for all four rows so they stay aligned. */
+  .strip {
+    display: flex; justify-content: space-between; align-items: center;
+    margin-top: 6px; padding-top: 8px;
     border-top: 1px solid var(--rule);
-    font-size: 14px; color: var(--muted);
+    color: var(--muted); font-size: 13px; letter-spacing: 1px;
   }
-  .footer .line { margin: 3px 0; }
-  .footer strong { color: var(--ink); font-weight: 600; }
-  .footer .accent { color: var(--accent); font-weight: 600; }
+  .strip .label   { font-weight: 700; letter-spacing: 2px; }
+  .strip .sub     { color: var(--muted); font-weight: 500; letter-spacing: 1px; margin-left: 6px; }
+  .strip .value   { color: var(--ink); font-weight: 600; font-variant-numeric: tabular-nums; }
+  .strip .value-2 { color: var(--ink); font-variant-numeric: tabular-nums; }
+  /* First strip after the stats grid needs more breathing room than
+     strip-to-strip spacing. */
+  .strip.strip-first { margin-top: 14px; }
   /* Side-by-side: channel info on the left, SUBSCRIBE button on the right. */
   .subscribe {
-    margin: 12px 0 4px;
+    margin: 14px 0 4px;
     display: flex; align-items: center; justify-content: space-between;
     gap: 14px;
   }
@@ -125,31 +134,6 @@
     background: #ffffff; color: #000000;
   }
   .flag { max-height: 38px; width: auto; }
-  .darkpool {
-    display: flex; justify-content: space-between; align-items: center;
-    margin-top: 10px; padding-top: 8px;
-    border-top: 1px solid var(--rule);
-    color: var(--muted); font-size: 13px; letter-spacing: 1px;
-  }
-  .darkpool .dp-label { font-weight: 700; letter-spacing: 2px; }
-  /* T+1 publish date next to "DARK POOL" — visually subordinate so it's clear
-     this is FINRA's most recent file, not real-time. */
-  .darkpool .dp-date  { color: var(--muted); font-weight: 500; letter-spacing: 1px; margin-left: 6px; }
-  .darkpool .dp-pct { color: var(--ink); font-weight: 600; font-variant-numeric: tabular-nums; }
-  .darkpool .dp-vol { color: var(--ink); font-variant-numeric: tabular-nums; }
-  /* FTD strip mirrors DARK POOL — same row shape, settlement date
-     subordinate to the label, both numbers tabular. ~30-day SEC
-     publication lag is the data, not a freshness bug. */
-  .ftd {
-    display: flex; justify-content: space-between; align-items: center;
-    margin-top: 6px; padding-top: 8px;
-    border-top: 1px solid var(--rule);
-    color: var(--muted); font-size: 13px; letter-spacing: 1px;
-  }
-  .ftd .ftd-label  { font-weight: 700; letter-spacing: 2px; }
-  .ftd .ftd-date   { color: var(--muted); font-weight: 500; letter-spacing: 1px; margin-left: 6px; }
-  .ftd .ftd-30d    { color: var(--ink); font-weight: 600; font-variant-numeric: tabular-nums; }
-  .ftd .ftd-latest { color: var(--ink); font-variant-numeric: tabular-nums; }
 </style>
 </head>
 <body>
@@ -202,9 +186,26 @@
     </div>
   </div>
 
-  <div class="footer">
-    <div class="line">Earnings <span class="accent" data-f="earnings_quarter">—</span> <span data-f="earnings_verb">expected on</span> <strong data-f="next_earnings_date" data-fmt="dateOrdinal">—</strong></div>
-    <div class="line">The max pain for <strong data-f="symbol">GME</strong> on <strong data-f="max_pain_expiration" data-fmt="dateOrdinal">—</strong> is <strong data-f="max_pain_strike" data-fmt="usd">—</strong></div>
+  <div class="strip strip-first">
+    <span class="label">EARNINGS <span class="sub" data-f="earnings_quarter">—</span></span>
+    <span class="value" data-f="next_earnings_date" data-fmt="dateMaybeProjected">—</span>
+  </div>
+
+  <div class="strip">
+    <span class="label">MAX PAIN <span class="sub" data-f="max_pain_expiration" data-fmt="dateShort">—</span></span>
+    <span class="value" data-f="max_pain_strike" data-fmt="usd">—</span>
+  </div>
+
+  <div class="strip strip-darkpool">
+    <span class="label">DARK POOL <span class="sub" data-f="dark_pool_date" data-fmt="dateShort">—</span></span>
+    <span class="value"   data-f="dark_pool_pct"    data-fmt="pctSimple">—</span>
+    <span class="value-2" data-f="dark_pool_volume" data-fmt="int">—</span>
+  </div>
+
+  <div class="strip strip-ftd">
+    <span class="label">FTDS <span class="sub" data-f="ftd_latest_date" data-fmt="dateShort">—</span></span>
+    <span class="value"   data-f="ftd_30d_qty"    data-fmt="bignum">—</span>
+    <span class="value-2" data-f="ftd_latest_qty" data-fmt="bignum">—</span>
   </div>
 
   <div class="subscribe">
@@ -213,18 +214,6 @@
       <span class="sub-count"><span data-f="yt_subscribers" data-fmt="int">—</span> subscribers</span>
     </div>
     <a class="sub-btn" href="https://www.youtube.com/@TroveIsland?sub_confirmation=1" target="_blank" rel="noopener">SUBSCRIBE</a>
-  </div>
-
-  <div class="darkpool">
-    <span class="dp-label">DARK POOL <span class="dp-date" data-f="dark_pool_date" data-fmt="dateShort">—</span></span>
-    <span class="dp-pct" data-f="dark_pool_pct" data-fmt="pctSimple">—</span>
-    <span class="dp-vol" data-f="dark_pool_volume" data-fmt="int">—</span>
-  </div>
-
-  <div class="ftd">
-    <span class="ftd-label">FTDS <span class="ftd-date" data-f="ftd_latest_date" data-fmt="dateShort">—</span></span>
-    <span class="ftd-30d" data-f="ftd_30d_qty" data-fmt="bignum">—</span>
-    <span class="ftd-latest" data-f="ftd_latest_qty" data-fmt="bignum">—</span>
   </div>
 </div>
 
@@ -237,6 +226,10 @@
     const t = new URLSearchParams(location.search).get("theme");
     if (t === "white" || t === "mono") document.documentElement.dataset.theme = t;
   })();
+
+  // Stashed by render() before the format loop so date formatters can
+  // consult sibling fields (e.g. dateMaybeProjected reads next_earnings_projected).
+  let _payload = {};
 
   const fmt = {
     bignum(v) {
@@ -285,6 +278,13 @@
       // Short upper-case form ("MAY 13") to sit visually with "DARK POOL"
       return d.toLocaleDateString("en-US", { month: "short", day: "numeric" }).toUpperCase();
     },
+    // Like dateShort but prefixes "~" when the date is a projection
+    // (yfinance calendar was stale, so fundamentals_feed rolled forward).
+    dateMaybeProjected(v) {
+      const base = fmt.dateShort(v);
+      if (!base || base === "—") return base;
+      return _payload.next_earnings_projected ? "~" + base : base;
+    },
     range(v) { return v ?? "—"; },
   };
 
@@ -296,6 +296,7 @@
   }
 
   function render(payload) {
+    _payload = payload;
     document.getElementById("date").textContent = payload.date_header ?? "—";
 
     // Derived ranges
@@ -309,11 +310,6 @@
     // Prefix the handle with @ when present (raw column doesn't include it).
     payload.yt_handle_at = payload.yt_handle ? "@" + payload.yt_handle : "";
 
-    // When yfinance's calendar is stale we project the next earnings date
-    // forward ~one fiscal quarter; flag it as a guess so viewers don't take
-    // the day too literally.
-    payload.earnings_verb = payload.next_earnings_projected ? "projected for" : "expected on";
-
     // GME fiscal year ends in late Jan / early Feb, so the calendar quarter
     // of the earnings date maps to the fiscal quarter being reported:
     //   Mar earnings  → Q4 (prior FY)   |  Jun → Q1  |  Sep → Q2  |  Dec → Q3
@@ -323,10 +319,10 @@
       if (isNaN(d)) return "";
       const m = d.getMonth();  // 0-11
       const y = d.getFullYear();
-      if (m <= 3)  return `(Q4 ${y - 1})`;
-      if (m <= 6)  return `(Q1 ${y})`;
-      if (m <= 9)  return `(Q2 ${y})`;
-      return `(Q3 ${y})`;
+      if (m <= 3)  return `Q4 ${y - 1}`;
+      if (m <= 6)  return `Q1 ${y}`;
+      if (m <= 9)  return `Q2 ${y}`;
+      return `Q3 ${y}`;
     })();
 
     for (const el of document.querySelectorAll("[data-f]")) {
@@ -338,20 +334,16 @@
     }
 
     // Hide the dark pool strip entirely when FINRA has nothing for us —
-    // showing "DARK POOL — —" looks like a broken widget.
-    const dp = document.querySelector(".darkpool");
-    if (dp) {
-      const empty = payload.dark_pool_pct == null && payload.dark_pool_volume == null;
-      dp.style.display = empty ? "none" : "";
-    }
-    // Same treatment for the FTD strip — SEC publishes bi-weekly with
-    // ~30-day lag, so a fresh install or post-rollover gap will leave
-    // these fields null until the next file lands.
-    const ftd = document.querySelector(".ftd");
-    if (ftd) {
-      const empty = payload.ftd_latest_qty == null && payload.ftd_30d_qty == null;
-      ftd.style.display = empty ? "none" : "";
-    }
+    // showing "DARK POOL — —" looks like a broken widget. Same treatment
+    // for FTD (SEC bi-weekly publish, ~30-day lag).
+    const hideIfEmpty = (selector, ...keys) => {
+      const el = document.querySelector(selector);
+      if (!el) return;
+      const empty = keys.every(k => payload[k] == null);
+      el.style.display = empty ? "none" : "";
+    };
+    hideIfEmpty(".strip-darkpool", "dark_pool_pct", "dark_pool_volume");
+    hideIfEmpty(".strip-ftd",      "ftd_latest_qty", "ftd_30d_qty");
   }
 
   async function tick() {
