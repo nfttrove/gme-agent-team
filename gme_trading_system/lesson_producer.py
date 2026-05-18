@@ -4,10 +4,9 @@ graduated lessons.
 
 Why this exists: the consumer side of the learning loop is wired
 (orchestrator injects lessons into Futurist's task description) but for
-weeks only 3 hand-seeded lessons existed. The legacy producer pipelines
-in .agent/memory/auto_dream.py and root cluster_patterns.py both depend
-on .agent/memory/episodic/episodes.jsonl which is empty — no agent ever
-populated it. The real outcome data lives in SQLite (signal_scores,
+weeks only 3 hand-seeded lessons existed. Legacy producer pipelines
+(deleted 2026-05-18) depended on episodes.jsonl which was never
+populated. The real outcome data lives in SQLite (signal_scores,
 performance_scores, predictions, trade_decisions). This module reads
 SQLite directly, scores patterns, and emits new graduated/staged
 lessons in the same canonical schema learning.py already supports.

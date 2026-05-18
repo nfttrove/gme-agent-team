@@ -1,5 +1,7 @@
 # Agent Learning Brain — Setup & Usage
 
+> ⚠️ **Producer migrated 2026-05-18.** The "Dream" step is now handled by `gme_trading_system/lesson_producer.py`, scheduled at 16:35 ET in the orchestrator (not the deleted `.agent/auto_dream.py`). Cron setup sections below are **stale** — no manual cron needed. The CLI tools (`graduate.py`, `recall.py`, `list_candidates.py`) still work and still read/write the same `lessons.jsonl` and `candidates/` paths.
+
 ## What This Is
 
 A **bidirectional learning system** that makes your CrewAI trading agents autonomous and adaptive. Instead of just executing trades, they now:

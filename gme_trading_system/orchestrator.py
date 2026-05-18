@@ -781,6 +781,26 @@ def run_futurist_prediction_signal():
             write_log("Futurist", summary, "prediction_signal", "ok")
             log.info(f"[Futurist] {summary}")
 
+            # Episodic logging — soft-fail so a log issue never blocks signal
+            # emit. Mirrors the synthesis pattern. We bypass episodic_integration's
+            # `log_futurist_prediction(text)` wrapper because its
+            # extract_prediction_from_output regex expects an older nested JSON
+            # shape that no longer matches the orchestrator's `raw` output. We
+            # already have a validated Pydantic prediction, so call log_prediction
+            # directly — same destination, no parse step.
+            try:
+                from episodic_logger import log_prediction
+                log_prediction(
+                    agent_name="Futurist",
+                    predicted_price=prediction.predicted_price,
+                    confidence=prediction.confidence,
+                    horizon=str(prediction.horizon),
+                    bias=str(prediction.bias),
+                    reasoning=prediction.reasoning[:500],
+                )
+            except Exception as e:
+                log.warning(f"[Futurist] episodic log failed: {e}")
+
             # Log signal and notify (only if confidence is actionable)
             if prediction.confidence >= 0.60 and prediction.stop_loss and prediction.take_profit:
                 # /coach Futurist diagnosis (2026-05-16): high-conf BULL signals
@@ -1741,6 +1761,25 @@ def _compose_dv_section(conn, top_n: int | None = None) -> str:
         return ""
 
 
+def _format_recent_lessons(recent_lessons: list) -> str:
+    """Format the most recent 2 graduated lessons for the Saturday Review
+    LESSONS block. `recent_lessons` is a list of (ts, row_dict) tuples,
+    pre-sorted desc by ts. Returns a multi-line string or a clean-state
+    fallback when empty."""
+    if not recent_lessons:
+        return "• No new graduations this week — clean state."
+    top = recent_lessons[:2]
+    lines = ["• Recent graduations:"]
+    for _, row in top:
+        desc = (row.get("description") or row.get("outcome") or "").strip()
+        if not desc:
+            continue
+        if len(desc) > 120:
+            desc = desc[:117] + "..."
+        lines.append(f"  – {desc}")
+    return "\n".join(lines) if len(lines) > 1 else "• No new graduations this week — clean state."
+
+
 def run_saturday_review():
     """Saturday 09:00 ET — week-in-review digest sent to Telegram.
 
@@ -1749,7 +1788,8 @@ def run_saturday_review():
     next-week focus. Same discipline as run_daily_briefing — facts locked,
     narrative filled.
     """
-    from datetime import date, timedelta
+    import json
+    from datetime import date, timedelta, timezone
     from circuit_breaker import list_breakers
     from lesson_producer import list_staged_candidates
 
@@ -1840,6 +1880,31 @@ def run_saturday_review():
             candidates = []
         n_candidates = len(candidates)
 
+        # ---------- 5b. Recent graduated lessons (last 7 days) ----------
+        # Surfaces what lesson_producer actually shipped so the user sees the
+        # learning loop's output, not just the candidate count. Soft-fails to
+        # empty list — never blocks the brief.
+        recent_lessons = []
+        try:
+            from lesson_producer import LESSONS_PATH
+            if os.path.exists(LESSONS_PATH):
+                cutoff = datetime.now(timezone.utc) - timedelta(days=7)
+                with open(LESSONS_PATH) as f:
+                    for line in f:
+                        try:
+                            row = json.loads(line)
+                            grad_at = row.get("graduated_at")
+                            if not grad_at:
+                                continue
+                            ts = datetime.fromisoformat(grad_at.replace("Z", "+00:00"))
+                            if ts >= cutoff:
+                                recent_lessons.append((ts, row))
+                        except (json.JSONDecodeError, ValueError):
+                            continue
+                recent_lessons.sort(key=lambda x: x[0], reverse=True)
+        except Exception as e:
+            log.warning(f"[SatReview] lessons read failed: {e}")
+
         # ---------- 7. System health ----------
         breakers = list_breakers()
         open_breakers = [name for name, b in breakers.items() if b["state"] != "closed"]
@@ -1903,8 +1968,9 @@ def run_saturday_review():
             f"📅 <b>SATURDAY REVIEW</b> — week of {week_start} to {week_end}\n\n"
             f"<b>THIS WEEK</b>\n{signals_line}\n{top_line}\n{preds_line}\n\n"
             f"{dv_block}"
-            f"<b>LESSONS</b>\n"
-            f"• {n_candidates} candidate{'' if n_candidates == 1 else 's'} pending review (/candidates)\n\n"
+            f"📚 <b>LESSONS</b>\n"
+            f"• {n_candidates} candidate{'' if n_candidates == 1 else 's'} pending review (/candidates)\n"
+            f"{_format_recent_lessons(recent_lessons)}\n"
             f"<b>SYSTEM</b>\n{system_line}\n\n"
             f"<b>NEXT WEEK</b>\n{focus_txt}"
         )

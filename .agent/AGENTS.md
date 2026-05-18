@@ -18,7 +18,7 @@ Lessons inform decision-making without explicit instructions.
 
 ## Learning Loop
 1. **Episodic**: Trade outcomes logged to `memory/episodic/trades.jsonl`
-2. **Dream**: Nightly `auto_dream.py` clusters patterns → candidates
+2. **Dream**: Nightly `gme_trading_system/lesson_producer.py` (scheduled 16:35 ET) mines SQLite → candidates → graduated lessons
 3. **Review**: You graduate lessons daily via `graduate.py`
 4. **Recall**: Future cycles load graduated lessons automatically
 

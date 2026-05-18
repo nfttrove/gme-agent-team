@@ -1,7 +1,8 @@
 #!/usr/bin/env python3
 """List staged pattern candidates waiting for review.
 
-Shows patterns discovered by cluster_patterns.py with evidence/confidence.
+Shows patterns discovered by gme_trading_system/lesson_producer.py with
+evidence/confidence (scheduled 16:35 ET nightly).
 """
 import json
 import os
@@ -16,7 +17,7 @@ def list_candidates() -> None:
     candidates_path = os.path.join(CANDIDATES_DIR, "candidates.jsonl")
 
     if not os.path.exists(candidates_path):
-        print("No candidates found. Run: python3 .agent/cluster_patterns.py")
+        print("No candidates found. Lessons are produced nightly at 16:35 ET by gme_trading_system/lesson_producer.py — or trigger manually with: python3 gme_trading_system/lesson_producer.py")
         return
 
     candidates = []

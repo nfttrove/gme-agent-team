@@ -1,5 +1,7 @@
 # Integrating Episodic Memory into GME Tasks
 
+> ⚠️ **Producer migrated 2026-05-18.** The `auto_dream.py` / `cluster_patterns.py` scripts referenced below were deleted. The active producer is `gme_trading_system/lesson_producer.py` (scheduled at 16:35 ET in the orchestrator). Cron sections here are stale. The episodic logging hooks (`log_synthesis_brief`, `log_futurist_prediction`) ARE wired into the orchestrator — `log_signal` remains orphaned (see RUNBOOK item #8).
+
 ## Quick Start (3 steps)
 
 ### 1. Add logging import to `run_single_agent.py`

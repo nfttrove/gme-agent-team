@@ -1,5 +1,7 @@
 # Episodic Memory System for GME Intelligence
 
+> ⚠️ **Producer migrated 2026-05-18.** The `auto_dream.py` and `cluster_patterns.py` workflow described below is **deprecated**. The active producer is `gme_trading_system/lesson_producer.py`, scheduled at 16:35 ET in the orchestrator. It reads SQLite (`signal_scores`, `predictions`) directly — no episodic JSONL required. Cron setup instructions here are stale.
+
 This system auto-discovers trading patterns by logging agent predictions, trades, and signals—then clustering what works.
 
 ## Folder Structure

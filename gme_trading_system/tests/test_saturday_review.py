@@ -490,3 +490,63 @@ class TestSaturdayReview:
         msg = captured_telegram[0]
         assert "NEXT WEEK" in msg
         assert "confluence" in msg.lower()
+
+
+class TestFormatRecentLessons:
+    """The LESSONS block reads `.agent/memory/semantic/lessons.jsonl` and
+    surfaces the two most-recent graduations within the last 7 days, so the
+    user sees what lesson_producer has actually shipped this week. Older
+    graduations and missing files must not break the brief."""
+
+    def test_no_lessons_returns_clean_state(self):
+        """Given an empty list, When formatted, Then the clean-state line is shown."""
+        from orchestrator import _format_recent_lessons
+        assert _format_recent_lessons([]) == "• No new graduations this week — clean state."
+
+    def test_two_recent_lessons_surfaces_top_two(self):
+        """Given three lessons sorted desc, When formatted, Then the top two
+        are rendered as dashed sublines under 'Recent graduations'."""
+        from datetime import datetime, timezone, timedelta
+        from orchestrator import _format_recent_lessons
+        now = datetime.now(timezone.utc)
+        rows = [
+            (now, {"description": "When RSI <30 and price > VWAP, Trendy hits 78% on 1h calls"}),
+            (now - timedelta(hours=1), {"description": "Pattern Intraday is anti-signal — fade its calls"}),
+            (now - timedelta(hours=2), {"description": "Third lesson — should be dropped"}),
+        ]
+        out = _format_recent_lessons(rows)
+        assert "Recent graduations:" in out
+        assert "Trendy hits 78%" in out
+        assert "anti-signal" in out
+        assert "Third lesson" not in out  # only top 2
+
+    def test_long_description_is_truncated(self):
+        """Given a >120-char description, When formatted, Then it's truncated with ellipsis."""
+        from datetime import datetime, timezone
+        from orchestrator import _format_recent_lessons
+        long_desc = "X" * 200
+        rows = [(datetime.now(timezone.utc), {"description": long_desc})]
+        out = _format_recent_lessons(rows)
+        assert "..." in out
+        # 120 chars max body + the leading "  – " prefix
+        for line in out.split("\n"):
+            if line.startswith("  – "):
+                assert len(line) <= 4 + 120  # prefix + clamped body
+
+    def test_missing_description_falls_back_to_outcome(self):
+        """Given a lesson row with no `description` but an `outcome`, When
+        formatted, Then the outcome is shown (canonical-schema flexibility)."""
+        from datetime import datetime, timezone
+        from orchestrator import _format_recent_lessons
+        rows = [(datetime.now(timezone.utc), {"outcome": "EXIT ALL EQUITY — stage 5"})]
+        out = _format_recent_lessons(rows)
+        assert "EXIT ALL EQUITY" in out
+
+    def test_all_rows_with_no_text_returns_clean_state(self):
+        """Given rows but none have description OR outcome, When formatted,
+        Then we still emit the clean-state fallback rather than a stub header."""
+        from datetime import datetime, timezone
+        from orchestrator import _format_recent_lessons
+        rows = [(datetime.now(timezone.utc), {})]
+        out = _format_recent_lessons(rows)
+        assert out == "• No new graduations this week — clean state."

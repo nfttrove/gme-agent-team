@@ -88,8 +88,8 @@ def show_all_lessons() -> None:
     lessons = recall_lessons(limit=100)
 
     if not lessons:
-        print("No graduated lessons yet. Run: python3 .agent/cluster_patterns.py")
-        print("Then review candidates with: python3 .agent/list_candidates.py")
+        print("No graduated lessons yet. Lessons are produced nightly at 16:35 ET by gme_trading_system/lesson_producer.py — or trigger manually: python3 gme_trading_system/lesson_producer.py")
+        print("Review pending candidates with: python3 .agent/list_candidates.py")
         return
 
     print(f"\n📚 {len(lessons)} Graduated Lessons\n")

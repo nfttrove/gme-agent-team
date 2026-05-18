@@ -48,8 +48,7 @@ gme_trading_system/
 
 .agent/                     # Episodic memory + lesson lifecycle
 ├── episodic_logger.py
-├── cluster_patterns.py     # K-means on agent accuracy metrics
-├── auto_dream.py           # Note: also exists at .agent/memory/auto_dream.py — see RUNBOOK known issues
+├── (active producer lives at gme_trading_system/lesson_producer.py, scheduled 16:35 ET — legacy auto_dream/cluster_patterns deleted 2026-05-18)
 ├── init_memory.py
 ├── graduate.py, recall.py, list_candidates.py  # Candidate → staged → graduated lifecycle
 ├── tools/                  # Partial duplicate of root .agent/ scripts (cleanup pending — RUNBOOK)
