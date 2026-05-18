@@ -955,14 +955,22 @@ def _format(v: Voice, content: str, ts: str, prev_state: dict | None = None) -> 
     # Keep it readable — emoji prepends + bullet layout add bytes, raise the cap
     if len(safe) > 800:
         safe = safe[:797] + "..."
-    from datetime import date
+    from datetime import datetime
+    try:
+        from zoneinfo import ZoneInfo
+        _ET = ZoneInfo("America/New_York")
+        today_et = datetime.now(_ET).date().isoformat()
+    except Exception:
+        today_et = ""
     # Match the burst-formatter time format ("HH:MM ET") so legacy-path
     # voices (Chatty) carry the same tz suffix as Synthesis/Trendy/etc.
-    # Same readability contract — readers shouldn't have to guess the zone.
+    # Compare against today-in-ET (not server-local date) because the
+    # host is BST — near ET midnight, server date is already the next
+    # day and would mislabel "today" in ET timestamps.
     if len(ts) >= 16:
         ts_date = ts[:10]
         hhmm = ts[11:16]
-        time_part = f"{hhmm} ET" if ts_date == str(date.today()) else f"{ts_date[5:]} {hhmm} ET"
+        time_part = f"{hhmm} ET" if ts_date == today_et else f"{ts_date[5:]} {hhmm} ET"
     else:
         time_part = ts
     # Append plain-English glosses for any trading jargon (RSI/EMA/VWAP/MACD/...)
