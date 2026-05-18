@@ -607,10 +607,14 @@ def _latest_trendy_reasons(max_items: int = 3, max_age_min: int = 15) -> list[st
         return []
     # Trendy format: "SIDEWAYS (conf=40%) · S=$21.48 R=$23.19 · Price below VWAP, EMAs, RSI 38.6. 5d range."
     # Reasoning lives after the second " · "; everything before is metadata.
+    # If the format ever drifts (no `·` or fewer segments), fall back to
+    # sentence-splitting the whole content so bullets degrade rather than
+    # vanishing silently.
     parts = [p.strip() for p in content.split("·")]
-    if len(parts) < 3:
-        return []
-    prose = " ".join(parts[2:]).strip().rstrip(".")
+    if len(parts) >= 3:
+        prose = " ".join(parts[2:]).strip().rstrip(".")
+    else:
+        prose = content.strip().rstrip(".")
     if not prose:
         return []
     return _split_reasons(prose, max_items)
