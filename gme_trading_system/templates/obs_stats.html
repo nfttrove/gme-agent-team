@@ -115,26 +115,32 @@
   /* First strip after the stats grid needs more breathing room than
      strip-to-strip spacing. */
   .strip.strip-first { margin-top: 14px; }
-  /* Side-by-side: channel info on the left, SUBSCRIBE button on the right. */
+  /* Subscribe row uses the same 4-col grid as .strip so the handle, count
+     and CTA button align with the data rows above. Sub count sits in col 2
+     (centred, solid white) to mirror the strip date column. */
   .subscribe {
-    margin: 14px 0 4px;
-    display: flex; align-items: center; justify-content: space-between;
-    gap: 14px;
-  }
-  .subscribe .sub-info {
-    display: flex; flex-direction: column; gap: 1px; min-width: 0;
+    display: grid;
+    grid-template-columns: 1fr 1fr 1fr 1fr;
+    column-gap: 12px;
+    align-items: center;
+    margin-top: 14px; padding-top: 8px;
+    border-top: 1px solid var(--rule);
   }
   .subscribe .sub-handle {
+    grid-column: 1;
     color: var(--accent); font-weight: 600; font-size: 14px;
     white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
   }
   .subscribe .sub-count {
-    color: var(--muted); font-variant-numeric: tabular-nums;
+    grid-column: 2;
+    color: var(--ink); font-weight: 500; text-align: center;
+    font-variant-numeric: tabular-nums;
   }
   /* Styled YouTube-style SUBSCRIBE button. Mono theme keeps it white-on-black
      for the B&W look; other themes use the canonical YouTube red. */
   .subscribe .sub-btn {
-    flex-shrink: 0;
+    grid-column: 4;
+    justify-self: end;
     display: inline-block;
     background: #cc0000; color: #ffffff;
     text-decoration: none; font-weight: 700; letter-spacing: 1px;
@@ -226,10 +232,8 @@
   </div>
 
   <div class="subscribe">
-    <div class="sub-info">
-      <span class="sub-handle" data-f="yt_handle_at">@TroveIsland</span>
-      <span class="sub-count"><span data-f="yt_subscribers" data-fmt="int">—</span> subscribers</span>
-    </div>
+    <span class="sub-handle" data-f="yt_handle_at">@TroveIsland</span>
+    <span class="sub-count"><span data-f="yt_subscribers" data-fmt="int">—</span> subscribers</span>
     <a class="sub-btn" href="https://www.youtube.com/@TroveIsland?sub_confirmation=1" target="_blank" rel="noopener">SUBSCRIBE</a>
   </div>
 </div>
