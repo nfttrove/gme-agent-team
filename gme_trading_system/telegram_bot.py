@@ -1949,7 +1949,10 @@ def run_bot():
     _ensure_settings_table()
     _register_commands()
     log.info("[tgbot] Two-way Telegram bot started")
-    _broadcast("🤖 <b>GME Bot online.</b> Send /status for system health.")
+    # Owner-only — channel readers can't act on /status, so the lifecycle
+    # ping is noise to them and useful to the operator alone.
+    from notifier import _send_owner
+    _send_owner("🤖 <b>GME Bot online.</b> Send /status for system health.")
 
     offset = 0
     while True:

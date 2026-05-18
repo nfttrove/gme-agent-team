@@ -100,6 +100,33 @@ def _send(text: str, parse_mode: str = "HTML") -> bool:
     return success
 
 
+def _send_owner(text: str, parse_mode: str = "HTML") -> bool:
+    """Send to TELEGRAM_OWNER_CHAT_ID only. For admin/operator messages
+    that public channel readers cannot act on (bot lifecycle, debug)."""
+    if not _ENABLED:
+        log.info(f"[notify] Telegram not configured. Owner message would have been:\n{text}")
+        return False
+    if not TELEGRAM_OWNER_CHAT_ID:
+        log.info(f"[notify] No TELEGRAM_OWNER_CHAT_ID set — owner-only message dropped:\n{text}")
+        return False
+    breaker = get_breaker("telegram")
+    try:
+        resp = breaker.call(
+            requests.post,
+            f"{_BASE_URL}/sendMessage",
+            json={"chat_id": TELEGRAM_OWNER_CHAT_ID, "text": text, "parse_mode": parse_mode},
+            timeout=10,
+        )
+        if resp.status_code == 200:
+            return True
+        log.warning(f"[notify] Telegram error {resp.status_code} to owner: {resp.text[:200]}")
+    except CircuitOpenError:
+        log.warning("[notify] Telegram circuit open — skipping owner notification")
+    except requests.RequestException as e:
+        log.error(f"[notify] Telegram owner send failed: {e}")
+    return False
+
+
 def _send_burst(messages: list[str]) -> bool:
     """Send a list of messages in rapid succession. Returns True if at least one succeeds."""
     if not messages:

@@ -21,6 +21,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 from agent_voice import (  # noqa: E402
     _chatty_echoes_synthesis,
     _chatty_unchanged_state,
+    _futurist_unchanged_state,
     _newsie_zero_score_repeat,
     _synthesis_low_consensus,
     _synthesis_unchanged_state,
@@ -295,6 +296,27 @@ class TestSynthesisUnchangedState:
         cur_content = "NOW: PRICE: $22.11 | NEXT: CONSENSUS: BEARISH 67% | SIGNAL: WAIT"
         assert _synthesis_unchanged_state(conn, cur_id, cur_content, last_pushed) is False
 
+    def test_signal_flip_sell_to_wait_passes(self, conn):
+        """Same price/dir/conf but Signal flips SELL→WAIT — pass (the action
+        change is what readers care about)."""
+        _seed(conn, "Synthesis", "synthesis",
+              "NOW: PRICE: $22.11 | NEXT: CONSENSUS: BEARISH 67% | SIGNAL: SELL")
+        cur_id = _seed(conn, "Synthesis", "synthesis",
+                       "NOW: PRICE: $22.11 | NEXT: CONSENSUS: BEARISH 67% | SIGNAL: WAIT")
+        last_pushed = _utc_now() - timedelta(minutes=5)
+        cur_content = "NOW: PRICE: $22.11 | NEXT: CONSENSUS: BEARISH 67% | SIGNAL: WAIT"
+        assert _synthesis_unchanged_state(conn, cur_id, cur_content, last_pushed) is False
+
+    def test_signal_flip_buy_to_hold_passes(self, conn):
+        """BUY→HOLD with otherwise identical state — pass."""
+        _seed(conn, "Synthesis", "synthesis",
+              "NOW: PRICE: $22.11 | NEXT: CONSENSUS: BULLISH 67% | SIGNAL: BUY")
+        cur_id = _seed(conn, "Synthesis", "synthesis",
+                       "NOW: PRICE: $22.11 | NEXT: CONSENSUS: BULLISH 67% | SIGNAL: HOLD")
+        last_pushed = _utc_now() - timedelta(minutes=5)
+        cur_content = "NOW: PRICE: $22.11 | NEXT: CONSENSUS: BULLISH 67% | SIGNAL: HOLD"
+        assert _synthesis_unchanged_state(conn, cur_id, cur_content, last_pushed) is False
+
 
 # ── F: Chatty state-diff suppression ────────────────────────────────────────
 
@@ -359,3 +381,78 @@ class TestChattyUnchangedState:
         last_pushed = _utc_now() - timedelta(minutes=5)
         cur = "$22.11 sideways"
         assert _chatty_unchanged_state(conn, cur_id, cur, last_pushed) is False
+
+
+# ── G: Futurist state-diff suppression ──────────────────────────────────────
+
+
+class TestFuturistUnchangedState:
+    """Suppress Futurist when direction + target ± tolerance + confidence
+    are all within tolerance AND last push was inside heartbeat window."""
+
+    def test_identical_state_recent_push_suppressed(self, conn):
+        """Same dir/target/conf, pushed 5 min ago → suppressed."""
+        _seed(conn, "Futurist", "prediction_signal",
+              "BEARISH 1h → $21.95 (conf=55%) · Price below VWAP")
+        cur_id = _seed(conn, "Futurist", "prediction_signal",
+                       "BEARISH 1h → $21.95 (conf=55%) · Price below VWAP and EMA21")
+        last_pushed = _utc_now() - timedelta(minutes=5)
+        cur = "BEARISH 1h → $21.95 (conf=55%) · Price below VWAP and EMA21"
+        assert _futurist_unchanged_state(conn, cur_id, cur, last_pushed) is True
+
+    def test_direction_flip_passes(self, conn):
+        """BEARISH → BULLISH always passes — this IS the signal."""
+        _seed(conn, "Futurist", "prediction_signal",
+              "BEARISH 1h → $21.95 (conf=55%) · weak")
+        cur_id = _seed(conn, "Futurist", "prediction_signal",
+                       "BULLISH 1h → $21.95 (conf=55%) · reversal")
+        last_pushed = _utc_now() - timedelta(minutes=5)
+        cur = "BULLISH 1h → $21.95 (conf=55%) · reversal"
+        assert _futurist_unchanged_state(conn, cur_id, cur, last_pushed) is False
+
+    def test_target_moved_more_than_tolerance_passes(self, conn):
+        """Target moved 1.6% (>0.5% default tolerance) → forward."""
+        _seed(conn, "Futurist", "prediction_signal",
+              "BEARISH 1h → $21.95 (conf=55%) · weak")
+        cur_id = _seed(conn, "Futurist", "prediction_signal",
+                       "BEARISH 1h → $22.30 (conf=55%) · weaker still")
+        last_pushed = _utc_now() - timedelta(minutes=5)
+        cur = "BEARISH 1h → $22.30 (conf=55%) · weaker still"
+        assert _futurist_unchanged_state(conn, cur_id, cur, last_pushed) is False
+
+    def test_confidence_jump_passes(self, conn):
+        """Confidence moved from 55% → 75% (>10pp) → forward."""
+        _seed(conn, "Futurist", "prediction_signal",
+              "BEARISH 1h → $21.95 (conf=55%) · weak")
+        cur_id = _seed(conn, "Futurist", "prediction_signal",
+                       "BEARISH 1h → $21.95 (conf=75%) · strengthening")
+        last_pushed = _utc_now() - timedelta(minutes=5)
+        cur = "BEARISH 1h → $21.95 (conf=75%) · strengthening"
+        assert _futurist_unchanged_state(conn, cur_id, cur, last_pushed) is False
+
+    def test_heartbeat_after_long_silence_passes(self, conn):
+        """Identical state but >60 min since last push → fire so user sees agent is alive."""
+        _seed(conn, "Futurist", "prediction_signal",
+              "BEARISH 1h → $21.95 (conf=55%) · weak")
+        cur_id = _seed(conn, "Futurist", "prediction_signal",
+                       "BEARISH 1h → $21.95 (conf=55%) · weak")
+        last_pushed = _utc_now() - timedelta(minutes=75)
+        cur = "BEARISH 1h → $21.95 (conf=55%) · weak"
+        assert _futurist_unchanged_state(conn, cur_id, cur, last_pushed) is False
+
+    def test_no_prior_push_does_not_suppress(self, conn):
+        """First push ever → never suppress."""
+        _seed(conn, "Futurist", "prediction_signal",
+              "BEARISH 1h → $21.95 (conf=55%) · weak")
+        cur_id = _seed(conn, "Futurist", "prediction_signal",
+                       "BEARISH 1h → $21.95 (conf=55%) · weak")
+        cur = "BEARISH 1h → $21.95 (conf=55%) · weak"
+        assert _futurist_unchanged_state(conn, cur_id, cur, last_pushed_at=None) is False
+
+    def test_no_prior_futurist_row_does_not_suppress(self, conn):
+        """No previous Futurist to compare against → forward."""
+        cur_id = _seed(conn, "Futurist", "prediction_signal",
+                       "BEARISH 1h → $21.95 (conf=55%) · weak")
+        last_pushed = _utc_now() - timedelta(minutes=5)
+        cur = "BEARISH 1h → $21.95 (conf=55%) · weak"
+        assert _futurist_unchanged_state(conn, cur_id, cur, last_pushed) is False

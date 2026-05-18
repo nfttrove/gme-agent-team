@@ -199,11 +199,11 @@ def _synthesis_unchanged_state(
     price_tol_pct: float = 0.5,
     conf_tol_pp: int = 10,
 ) -> bool:
-    """Suppress Synthesis if price + consensus dir + consensus % are all
-    within tolerance of the last produced brief AND we've pushed something
-    within max_silence_min. Heartbeat after silence: if it's been longer
-    than max_silence_min since last push, we let it through so the user
-    knows the agent is alive."""
+    """Suppress Synthesis if price + consensus dir + consensus % + signal
+    action are all within tolerance of the last produced brief AND we've
+    pushed something within max_silence_min. Heartbeat after silence: if
+    it's been longer than max_silence_min since last push, we let it
+    through so the user knows the agent is alive."""
     if not content:
         return False
     if last_pushed_at is None:
@@ -232,6 +232,81 @@ def _synthesis_unchanged_state(
     if cur_dir != prev_dir:
         return False
     if abs(cur_pct - prev_pct) >= conf_tol_pp:
+        return False
+    # Signal action flip (e.g. SELL→WAIT, BUY→HOLD) is higher-information
+    # than ±conf_tol_pp wobble and should pass even when other dims match.
+    from message_formatters import _extract_signal_action
+    cur_signal = _extract_signal_action(content)
+    prev_signal = _extract_signal_action(prev[0])
+    if cur_signal and prev_signal and cur_signal != prev_signal:
+        return False
+    return True
+
+
+_FUTURIST_DIR_RE = _re_module.compile(r"\b(BULLISH|BEARISH|NEUTRAL)\b", _re_module.IGNORECASE)
+_FUTURIST_TARGET_RE = _re_module.compile(r"[→\->]+\s*\$?([\d.]+)")
+_FUTURIST_CONF_RE = _re_module.compile(r"conf[=:\s]+(\d+)%?", _re_module.IGNORECASE)
+
+
+def _extract_futurist_fields(text: str) -> tuple[str | None, float | None, int | None]:
+    """Returns (direction_upper, target_price, confidence_pct) from a
+    Futurist prediction row, or (None, None, None)-style tuple when fields
+    are missing. Mirrors the regexes used by `_try_futurist_burst` to keep
+    the dedup logic and the formatter in lockstep."""
+    if not text:
+        return None, None, None
+    dir_m = _FUTURIST_DIR_RE.search(text)
+    direction = dir_m.group(1).upper() if dir_m else None
+    target_m = _FUTURIST_TARGET_RE.search(text)
+    try:
+        target = float(target_m.group(1)) if target_m else None
+    except ValueError:
+        target = None
+    conf_m = _FUTURIST_CONF_RE.search(text)
+    try:
+        conf = int(conf_m.group(1)) if conf_m else None
+    except ValueError:
+        conf = None
+    return direction, target, conf
+
+
+def _futurist_unchanged_state(
+    conn: sqlite3.Connection, row_id: int, content: str,
+    last_pushed_at: datetime | None,
+    max_silence_min: int = 60,
+    target_tol_pct: float = 0.5,
+    conf_tol_pp: int = 10,
+) -> bool:
+    """Suppress Futurist if direction + target ± tolerance + confidence
+    are all within tolerance of the last produced prediction AND we've
+    pushed within max_silence_min. Heartbeat after silence: long enough
+    silence always passes so the user knows the agent is alive."""
+    if not content:
+        return False
+    if last_pushed_at is None:
+        return False
+    age_min = (datetime.now(timezone.utc) - last_pushed_at).total_seconds() / 60.0
+    if age_min > max_silence_min:
+        return False
+    prev = conn.execute(
+        "SELECT content FROM agent_logs "
+        "WHERE agent_name='Futurist' AND task_type='prediction_signal' AND status='ok' "
+        "AND id < ? ORDER BY id DESC LIMIT 1",
+        (row_id,),
+    ).fetchone()
+    if not prev or not prev[0]:
+        return False
+    cur_dir, cur_target, cur_conf = _extract_futurist_fields(content)
+    prev_dir, prev_target, prev_conf = _extract_futurist_fields(prev[0])
+    if None in (cur_dir, prev_dir, cur_target, prev_target, cur_conf, prev_conf):
+        return False
+    if prev_target == 0:
+        return False
+    if cur_dir != prev_dir:
+        return False
+    if abs(cur_target - prev_target) / prev_target * 100.0 >= target_tol_pct:
+        return False
+    if abs(cur_conf - prev_conf) >= conf_tol_pp:
         return False
     return True
 
@@ -924,6 +999,15 @@ def forward_pending(db_path: str = DB_PATH) -> dict[str, int]:
                     if _synthesis_unchanged_state(conn, row_id, content or "",
                                                     last_pushed_at):
                         log.info(f"[voice] Synthesis unchanged state — suppressed")
+                        new_watermark = row_id
+                        continue
+                # Futurist: state-diff. Same dir/target/conf within tolerance
+                # AND we've pushed recently → suppress. Heartbeat at most every
+                # 60 min if state stays unchanged.
+                if v.agent_name == "Futurist":
+                    if _futurist_unchanged_state(conn, row_id, content or "",
+                                                   last_pushed_at):
+                        log.info(f"[voice] Futurist unchanged state — suppressed")
                         new_watermark = row_id
                         continue
                 # Chatty echo suppression: if this Chatty row's bias matches
