@@ -208,7 +208,7 @@ def format_signal_burst(
             rr = reward / risk
             # Suppress degenerate ratios — they signal a bad setup, not info.
             if 0.1 <= rr <= 99:
-                price_parts.append(f"R:R 1:{rr:.1f}")
+                price_parts.append(f"R:R (risk:reward) 1:{rr:.1f}")
         lines.append(" · ".join(price_parts))
     else:
         # Fallback: bare direction line + optional Target. Legacy callers
@@ -222,6 +222,15 @@ def format_signal_burst(
     if confidence:
         clean_conf = strip_calibration(confidence)
         lines.append(f"Confidence: {clean_conf}")
+
+    # IF/THEN frame (only on full directional block — needs entry + stop).
+    # "Waiting for" tells the reader the trigger; "Invalidated if" tells
+    # them what would kill the setup. Mirrors the daily strategy brief
+    # structure so the reader can act on the same scaffolding everywhere.
+    if has_full_block:
+        lines.append("")
+        lines.append(f"⏳ WAITING FOR: Price to test ${entry:.2f}")
+        lines.append(f"⚠️ INVALIDATED IF: Move past ${stop:.2f}")
 
     # Reasons
     if reasons:

@@ -871,6 +871,15 @@ def _try_cto_burst(content: str, ts: str) -> str | None:
             imm_line += f" (✗ {', '.join(immunity_failing[:2])})"
         lines.append(imm_line)
 
+    # Plain-English read of the numbers (LLM-generated thesis interpretation
+    # written by orchestrator.run_cto_dv_score). Pulled out to its own labelled
+    # footer so a non-quant reader gets a one-line synthesis under the raw
+    # scorecard. Skipped silently when absent (deterministic non-GME tickers).
+    read_m = _re.search(r"READ:\s*(.+?)(?:\n|$)", content, flags=_re.IGNORECASE)
+    if read_m:
+        lines.append("")
+        lines.append(f"📝 READ: {read_m.group(1).strip()}")
+
     return "\n".join(lines)
 
 

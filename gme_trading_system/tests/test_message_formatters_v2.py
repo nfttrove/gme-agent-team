@@ -118,9 +118,11 @@ class TestBurstFormatting:
         assert "Bullish near $23.45" in msg
         assert "Stop: $22.80" in msg
         assert "Target: $25.50" in msg
-        assert "R:R 1:3.2" in msg
+        assert "R:R (risk:reward) 1:3.2" in msg
         assert "78%" in msg
-        assert self.count_lines(msg) <= 8
+        assert "WAITING FOR: Price to test $23.45" in msg
+        assert "INVALIDATED IF: Move past $22.80" in msg
+        assert self.count_lines(msg) <= 12
         assert self.count_emojis(msg) <= 4
         assert not self.has_calibration_metadata(msg)
 
@@ -141,7 +143,9 @@ class TestBurstFormatting:
         assert "Bearish near $23.45" in msg
         assert "Stop: $24.10" in msg
         assert "Target: $22.00" in msg
-        assert "R:R 1:2.2" in msg
+        assert "R:R (risk:reward) 1:2.2" in msg
+        assert "WAITING FOR: Price to test $23.45" in msg
+        assert "INVALIDATED IF: Move past $24.10" in msg
         assert "🔴" in msg
 
     def test_missing_entry_falls_back_to_target_only(self):

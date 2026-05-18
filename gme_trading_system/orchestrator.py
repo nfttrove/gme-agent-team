@@ -2378,7 +2378,7 @@ def _run_cto_dv_score_for(ticker: str):
         if ftd_line:
             brief += f"\n{ftd_line}"
         if interpretation:
-            brief += f"\n— {interpretation}"
+            brief += f"\nREAD: {interpretation}"
 
         log.info(f"[CTO] {ticker} DV: {total:.1f}/100 {delta_str}")
         write_log("CTO", brief, "dv_score", "ok")
