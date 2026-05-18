@@ -269,12 +269,12 @@ class TestSynthesisUnchangedState:
         assert _synthesis_unchanged_state(conn, cur_id, cur_content, last_pushed) is False
 
     def test_heartbeat_after_long_silence_passes(self, conn):
-        """Identical state but >30 min since last push → fire so user sees agent is alive."""
+        """Identical state but >60 min since last push → fire so user sees agent is alive."""
         _seed(conn, "Synthesis", "synthesis",
               "NOW: PRICE: $22.11 | NEXT: CONSENSUS: BEARISH 67% | SIGNAL: WAIT")
         cur_id = _seed(conn, "Synthesis", "synthesis",
                        "NOW: PRICE: $22.11 | NEXT: CONSENSUS: BEARISH 67% | SIGNAL: WAIT")
-        last_pushed = _utc_now() - timedelta(minutes=45)
+        last_pushed = _utc_now() - timedelta(minutes=75)
         cur_content = "NOW: PRICE: $22.11 | NEXT: CONSENSUS: BEARISH 67% | SIGNAL: WAIT"
         assert _synthesis_unchanged_state(conn, cur_id, cur_content, last_pushed) is False
 

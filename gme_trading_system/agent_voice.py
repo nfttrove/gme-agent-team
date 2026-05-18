@@ -195,7 +195,7 @@ def _synthesis_low_consensus(content: str, min_pct: int = 60) -> bool:
 def _synthesis_unchanged_state(
     conn: sqlite3.Connection, row_id: int, content: str,
     last_pushed_at: datetime | None,
-    max_silence_min: int = 30,
+    max_silence_min: int = 60,
     price_tol_pct: float = 0.5,
     conf_tol_pp: int = 10,
 ) -> bool:
@@ -919,7 +919,7 @@ def forward_pending(db_path: str = DB_PATH) -> dict[str, int]:
                         continue
                     # Synthesis: state-diff. Same price/dir/conf within tolerance
                     # AND we've pushed recently → suppress. Heartbeat at most every
-                    # 30 min if state stays unchanged.
+                    # 60 min if state stays unchanged.
                     if _synthesis_unchanged_state(conn, row_id, content or "",
                                                     last_pushed_at):
                         log.info(f"[voice] Synthesis unchanged state — suppressed")

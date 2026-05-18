@@ -3445,8 +3445,8 @@ class TradingSystemOrchestrator:
 
         # CTO structural intelligence — PE playbook monitoring and short side research
         self.scheduler.add_job(run_cto_daily_brief,    CronTrigger(hour=9,  minute=5,  timezone=ET),                   id="cto_brief")
-        self.scheduler.add_job(run_cto_dv_score,       CronTrigger(hour=9,  minute=10, timezone=ET),                   id="cto_dv")
-        self.scheduler.add_job(run_dv_history_log,     CronTrigger(hour=9,  minute=15, timezone=ET),                   id="dv_history_log")
+        self.scheduler.add_job(run_cto_dv_score,       CronTrigger(hour=9,  minute=10, day_of_week='mon-fri', timezone=ET), id="cto_dv")
+        self.scheduler.add_job(run_dv_history_log,     CronTrigger(hour=9,  minute=15, day_of_week='mon-fri', timezone=ET), id="dv_history_log")
         self.scheduler.add_job(run_dv_history_resolve, CronTrigger(hour=3, minute=30, timezone=ET),                    id="dv_history_resolve")
         self.scheduler.add_job(run_cto_structural_scan, CronTrigger(hour=8, minute=0, timezone=ET), id="cto_scan")
         self.scheduler.add_job(run_investor_intel_scan, CronTrigger(hour=8, minute=0, timezone=ET),                    id="investor_intel")
