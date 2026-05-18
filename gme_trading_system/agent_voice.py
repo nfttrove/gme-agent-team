@@ -898,7 +898,15 @@ def _format(v: Voice, content: str, ts: str, prev_state: dict | None = None) -> 
         try:
             burst = burst_fn(safe, ts)
             if burst:
-                return burst
+                # Append plain-English glosses for trading jargon on burst-formatted
+                # agents too — same machinery the legacy path uses below. Empty
+                # footer when no glossary terms detected.
+                try:
+                    from trading_glossary import glossary_footer
+                    burst_footer = glossary_footer(safe)
+                except Exception:
+                    burst_footer = ""
+                return f"{burst}\n\n<i>{burst_footer}</i>" if burst_footer else burst
         except Exception as e:
             log.warning(f"[voice] burst format failed for {v.agent_name}: {e} — falling through")
 
