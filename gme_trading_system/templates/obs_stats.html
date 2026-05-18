@@ -74,11 +74,19 @@
     column-gap: 28px;
   }
   .col { display: flex; flex-direction: column; }
+  /* Upper-grid rows mirror the strip rule: col 1 = label (yellow, left),
+     col 2 = value cluster. Left half left-aligns the value (cols 1-3
+     adhere to "left-align"); right half right-aligns it (col 4 = right). */
   .row {
-    display: flex; justify-content: space-between; align-items: baseline;
+    display: grid;
+    grid-template-columns: minmax(120px, auto) 1fr;
+    align-items: baseline;
+    column-gap: 8px;
     padding: 4px 0;
     border-bottom: 1px solid var(--rule);
   }
+  .col:first-child  .row > :nth-child(2) { text-align: left; }
+  .col:nth-child(2) .row > :nth-child(2) { text-align: right; }
   .col .row:last-child { border-bottom: none; }
   .label { color: var(--accent); font-weight: 600; font-size: 14px; }
   .value { font-variant-numeric: tabular-nums; font-weight: 500; }
