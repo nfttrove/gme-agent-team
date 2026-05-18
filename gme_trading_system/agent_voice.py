@@ -600,8 +600,9 @@ def _try_pattern_intraday_burst(content: str, ts: str) -> str | None:
         lines.append(timeframe)
 
     if direction or level is not None:
+        dir_word = {"UP": "Breakout", "DOWN": "Breakdown", "FLAT": "Flat"}.get(direction, direction)
         dir_emoji = {"UP": "📈", "DOWN": "📉", "FLAT": "↔️"}.get(direction, "")
-        sig_line = f"{dir_emoji} {direction}" if direction else ""
+        sig_line = f"{dir_emoji} {dir_word}" if direction else ""
         if level is not None:
             sig_line = (sig_line + f" @ ${level:.2f}") if sig_line else f"@ ${level:.2f}"
         if conf is not None:

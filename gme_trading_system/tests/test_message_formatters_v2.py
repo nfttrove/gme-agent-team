@@ -103,7 +103,7 @@ class TestBurstFormatting:
 
     def test_bullish_signal_with_full_price_block_renders_directive_and_rr(self):
         """Given entry=23.45, stop=22.80, target=25.50, direction=BULLISH,
-        When formatted, Then the burst contains a directive ("Buy near $X"),
+        When formatted, Then the burst contains a directional read ("Bullish near $X"),
         the full price block (Stop / Target), and the R:R ratio
         (computed: (25.50−23.45)/(23.45−22.80) ≈ 3.15)."""
         msg = format_signal_burst(
@@ -115,7 +115,7 @@ class TestBurstFormatting:
             reasons=["RSI oversold", "Volume spike", "Support hold"],
             timestamp_et="14:30 ET",
         )
-        assert "Buy near $23.45" in msg
+        assert "Bullish near $23.45" in msg
         assert "Stop: $22.80" in msg
         assert "Target: $25.50" in msg
         assert "R:R 1:3.2" in msg
@@ -126,7 +126,7 @@ class TestBurstFormatting:
 
     def test_bearish_signal_inverts_directive_and_rr(self):
         """Given direction=BEARISH and entry>target (short setup), When
-        formatted, Then the directive is "Sell near $X" and the R:R uses
+        formatted, Then the directional read is "Bearish near $X" and the R:R uses
         (entry−target)/(stop−entry). Example: entry=23.45, stop=24.10,
         target=22.00 → reward=1.45, risk=0.65, R:R≈2.2."""
         msg = format_signal_burst(
@@ -138,7 +138,7 @@ class TestBurstFormatting:
             reasons=["Below VWAP", "RSI weak"],
             timestamp_et="14:30 ET",
         )
-        assert "Sell near $23.45" in msg
+        assert "Bearish near $23.45" in msg
         assert "Stop: $24.10" in msg
         assert "Target: $22.00" in msg
         assert "R:R 1:2.2" in msg
@@ -156,7 +156,7 @@ class TestBurstFormatting:
         )
         assert "BULLISH" in msg            # bare direction line preserved
         assert "Target: $25.50" in msg
-        assert "Buy near" not in msg       # directive only appears with entry
+        assert "Bullish near" not in msg   # directional read only appears with entry
         assert "R:R" not in msg            # R:R only appears with full block
 
     def test_degenerate_rr_is_suppressed(self):

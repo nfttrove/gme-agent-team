@@ -154,12 +154,12 @@ def format_signal_burst(
 ) -> str:
     """Format a signal recommendation burst.
 
-    Returns ~5–8 line message with directive (Buy/Sell near $X), full price
-    block (stop · target · R:R), confidence, and up to 3 bullet reasons.
+    Returns ~5–8 line message with directional read (Bullish/Bearish near $X),
+    full price block (stop · target · R:R), confidence, and up to 3 bullet reasons.
 
     When `entry` is present and direction is BULLISH/BEARISH, the line is
-    rewritten as a directive ("🟢 Buy near $23.45") and a compact price
-    block is emitted on the next line. When `entry` or `stop` is missing,
+    rewritten as a directional read ("🟢 Bullish near $23.45") and a compact
+    price block is emitted on the next line. When `entry` or `stop` is missing,
     falls back to the bare "🟢 BULLISH" + "Target: $X" rendering for
     backward compatibility with legacy callers.
 
@@ -174,7 +174,7 @@ def format_signal_burst(
     Example (BUY/SELL with full block):
         🔮 14:30 ET
 
-        🟢 Buy near $23.45
+        🟢 Bullish near $23.45
         Stop: $22.80 · Target: $25.50 · R:R 1:3.2
         Confidence: 78%
 
@@ -196,7 +196,7 @@ def format_signal_burst(
     has_full_block = is_directional and entry is not None and stop is not None and target is not None
 
     if has_full_block:
-        verb = "Buy near" if dir_upper == "BULLISH" else "Sell near"
+        verb = "Bullish near" if dir_upper == "BULLISH" else "Bearish near"
         lines.append(f"{dir_emoji} {verb} ${entry:.2f}")
 
         price_parts = [f"Stop: ${stop:.2f}", f"Target: ${target:.2f}"]
