@@ -110,6 +110,7 @@ def _today_market_data(conn) -> dict:
     info = _yfinance_info()
     if info:
         return {
+            "price":      _f(info.get("regularMarketPrice") or info.get("currentPrice")),
             "day_open":   _f(info.get("regularMarketOpen") or info.get("open")),
             "day_high":   _f(info.get("regularMarketDayHigh") or info.get("dayHigh")),
             "day_low":    _f(info.get("regularMarketDayLow")  or info.get("dayLow")),
@@ -132,6 +133,7 @@ def _today_market_data(conn) -> dict:
         (SYMBOL, f"{today}%") * 4,
     ).fetchone()
     return {
+        "price":      None,  # no live source available in degraded path
         "day_open":   row["day_open"],
         "day_high":   row["day_high"],
         "day_low":    row["day_low"],
