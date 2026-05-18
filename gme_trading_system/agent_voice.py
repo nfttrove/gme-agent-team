@@ -147,12 +147,12 @@ _CONSENSUS_RE = _re_module.compile(r"CONSENSUS:\s*(\w+)\s+(\d+)", _re_module.IGN
 # they signal something material the user should see (volume spike, alarm,
 # regime change). Match on uppercased prose so case doesn't matter.
 #
-# RISING / FALLING removed 2026-05-18: Chatty uses them descriptively
-# in routine prose ("$21.97 rising on quiet volume") so they bypassed
-# dedup on every cycle. The remaining tokens are discrete events, not
-# continuous trend descriptors.
+# RISING / FALLING / CAUTION removed 2026-05-18: all three were used
+# descriptively in routine Chatty prose ("$21.97 rising on quiet volume",
+# "team caution at $21.8") so they bypassed dedup on every cycle. The
+# remaining tokens are discrete events, not continuous descriptors.
 _CHATTY_ALARM_TOKENS = (
-    "SPIKE", "ELEVATED VOLUME", "CAUTION",
+    "SPIKE", "ELEVATED VOLUME",
     "BREAKING", "BREAKOUT", "BREAKDOWN", "FLIP", "REVERSAL", "GAP",
 )
 
@@ -239,19 +239,27 @@ def _synthesis_unchanged_state(
     if abs(cur_pct - prev_pct) >= conf_tol_pp:
         return False
     # Signal action flip is higher-information than ±conf_tol_pp wobble
-    # and should pass even when other dims match — BUT only when the flip
-    # crosses the action/no-action boundary. {HOLD, WAIT, NEUTRAL} are all
-    # "do nothing" from a reader's perspective so churn within that set is
-    # noise, not signal. Real flips are BUY↔SELL or anything↔BUY/SELL.
+    # and should pass even when other dims match — BUT with two caveats:
+    #   1) churn within {HOLD, WAIT, NEUTRAL} is noise (all 'do nothing')
+    #   2) action↔idle flips inside a short window are LLM oscillation,
+    #      not market change. Today's stream had SELL→WAIT→SELL→WAIT every
+    #      ~5 min with identical dir/price/conf. Require ≥15 min between
+    #      such flips so the agent's first decision stands.
+    # Direction flips (BULLISH↔BEARISH) bypass this entirely via the
+    # earlier cur_dir != prev_dir check.
     from message_formatters import _extract_signal_action
     cur_signal = _extract_signal_action(content)
     prev_signal = _extract_signal_action(prev[0])
     _IDLE_SIGNALS = {"HOLD", "WAIT", "NEUTRAL"}
+    _MIN_FLIP_AGE_MIN = 15
     if cur_signal and prev_signal and cur_signal != prev_signal:
-        # Skip suppression only when the flip is meaningful (not idle↔idle).
         cur_idle = cur_signal in _IDLE_SIGNALS
         prev_idle = prev_signal in _IDLE_SIGNALS
-        if not (cur_idle and prev_idle):
+        # Suppress idle↔idle (HOLD↔WAIT) — same equivalence class
+        if cur_idle and prev_idle:
+            return True
+        # Action↔idle: only pass if enough time elapsed since last push
+        if age_min >= _MIN_FLIP_AGE_MIN:
             return False
     return True
 

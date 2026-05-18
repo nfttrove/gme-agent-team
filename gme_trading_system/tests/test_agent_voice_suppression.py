@@ -296,24 +296,36 @@ class TestSynthesisUnchangedState:
         cur_content = "NOW: PRICE: $22.11 | NEXT: CONSENSUS: BEARISH 67% | SIGNAL: WAIT"
         assert _synthesis_unchanged_state(conn, cur_id, cur_content, last_pushed) is False
 
-    def test_signal_flip_sell_to_wait_passes(self, conn):
-        """Same price/dir/conf but Signal flips SELL→WAIT — pass (the action
-        change is what readers care about)."""
+    def test_signal_flip_sell_to_wait_under_15min_suppressed(self, conn):
+        """SELL→WAIT within 15 min of last push = LLM oscillation, not real
+        market change. Suppressed. The first SELL is signal; rapid flips
+        back are noise."""
         _seed(conn, "Synthesis", "synthesis",
               "NOW: PRICE: $22.11 | NEXT: CONSENSUS: BEARISH 67% | SIGNAL: SELL")
         cur_id = _seed(conn, "Synthesis", "synthesis",
                        "NOW: PRICE: $22.11 | NEXT: CONSENSUS: BEARISH 67% | SIGNAL: WAIT")
         last_pushed = _utc_now() - timedelta(minutes=5)
         cur_content = "NOW: PRICE: $22.11 | NEXT: CONSENSUS: BEARISH 67% | SIGNAL: WAIT"
+        assert _synthesis_unchanged_state(conn, cur_id, cur_content, last_pushed) is True
+
+    def test_signal_flip_sell_to_wait_after_15min_passes(self, conn):
+        """SELL→WAIT after a 15+ min cool-off = real backing-off, not noise.
+        Pass through."""
+        _seed(conn, "Synthesis", "synthesis",
+              "NOW: PRICE: $22.11 | NEXT: CONSENSUS: BEARISH 67% | SIGNAL: SELL")
+        cur_id = _seed(conn, "Synthesis", "synthesis",
+                       "NOW: PRICE: $22.11 | NEXT: CONSENSUS: BEARISH 67% | SIGNAL: WAIT")
+        last_pushed = _utc_now() - timedelta(minutes=20)
+        cur_content = "NOW: PRICE: $22.11 | NEXT: CONSENSUS: BEARISH 67% | SIGNAL: WAIT"
         assert _synthesis_unchanged_state(conn, cur_id, cur_content, last_pushed) is False
 
-    def test_signal_flip_buy_to_hold_passes(self, conn):
-        """BUY→HOLD with otherwise identical state — pass."""
+    def test_signal_flip_buy_to_hold_after_15min_passes(self, conn):
+        """BUY→HOLD with 15+ min cool-off — pass (real backing-off)."""
         _seed(conn, "Synthesis", "synthesis",
               "NOW: PRICE: $22.11 | NEXT: CONSENSUS: BULLISH 67% | SIGNAL: BUY")
         cur_id = _seed(conn, "Synthesis", "synthesis",
                        "NOW: PRICE: $22.11 | NEXT: CONSENSUS: BULLISH 67% | SIGNAL: HOLD")
-        last_pushed = _utc_now() - timedelta(minutes=5)
+        last_pushed = _utc_now() - timedelta(minutes=20)
         cur_content = "NOW: PRICE: $22.11 | NEXT: CONSENSUS: BULLISH 67% | SIGNAL: HOLD"
         assert _synthesis_unchanged_state(conn, cur_id, cur_content, last_pushed) is False
 
