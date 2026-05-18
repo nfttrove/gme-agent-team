@@ -540,26 +540,104 @@ def _try_synthesis_burst(content: str, ts: str) -> str | None:
     trend_emoji = {"UP": "📈", "DOWN": "📉", "SIDEWAYS": "↔️"}.get(trend_dir, "↔️")
     struct_emoji = {"GREEN": "🟢", "CAUTION": "🟡", "YELLOW": "🟡", "RED": "🔴"}.get(struct_state, "⚪")
 
-    lines = [f"🧠 {_ny_hhmm(ts)}", ""]
+    # Header tag the brief so readers know what type of message they're
+    # looking at without parsing the body. Verdict block uses emoji-LEFT
+    # so the color signals direction at a glance, the label confirms.
+    lines = [f"🧠 SIGNAL | {_ny_hhmm(ts)}", ""]
     if consensus_dir and consensus_pct is not None:
-        lines.append(f"Consensus: {cons_emoji} {consensus_dir} ({consensus_pct}%)")
+        lines.append(f"{cons_emoji} Consensus: {consensus_dir} ({consensus_pct}%)")
     if signal_action:
-        lines.append(f"Signal: {sig_emoji} {signal_action}")
+        lines.append(f"{sig_emoji} Signal: {signal_action}")
     if trend_dir:
-        lines.append(f"Trend: {trend_emoji} {trend_dir}")
+        lines.append(f"{trend_emoji} Trend: {trend_dir}")
     if struct_state:
-        # Label: "Market backdrop" — clearer than the jargon "Structure"
-        # for non-quant readers. Reason word (if present) is shown in
-        # parens so the reader knows WHY the backdrop is e.g. cautious.
-        line = f"Market backdrop: {struct_emoji} {struct_state}"
-        if struct_reason:
-            line += f" ({struct_reason})"
-        lines.append(line)
+        # Promote the reason word to the value position (e.g. CONSOLIDATING)
+        # — the emoji color already carries GREEN/CAUTION/RED so the status
+        # word would be redundant. Fall back to status word when reason
+        # is missing.
+        backdrop_value = (struct_reason or struct_state).upper()
+        lines.append(f"{struct_emoji} Backdrop: {backdrop_value}")
 
     # Body must have at least one field beyond the header to be worth emitting
     if len(lines) <= 2:
         return None
+
+    # Optional enrichment: pull the most-recent Trendy reasoning bullets
+    # + a derived risk warning. Both are soft-fail — Synthesis brief
+    # stands on its own if Trendy is stale or the heuristic doesn't fire.
+    try:
+        trendy_bullets = _latest_trendy_reasons(max_items=3, max_age_min=15)
+    except Exception:
+        trendy_bullets = []
+    risk_line = _synthesis_risk_warning(signal_action, trend_dir, struct_state)
+
+    if trendy_bullets or risk_line:
+        lines.append("")
+        lines.append("━━━━━━━━━━━━━━━━")
+        if trendy_bullets:
+            lines.append("")
+            lines.extend(f"• {b}" for b in trendy_bullets)
+        if risk_line:
+            lines.append("")
+            lines.append(risk_line)
+
     return "\n".join(lines)
+
+
+def _latest_trendy_reasons(max_items: int = 3, max_age_min: int = 15) -> list[str]:
+    """Pull the most-recent Trendy trend_signal row (if fresh) and split
+    its reasoning into up to `max_items` short bullets. Returns [] when
+    Trendy is stale or absent — caller treats empty as 'skip the block'."""
+    try:
+        conn = sqlite3.connect(DB_PATH)
+        try:
+            row = conn.execute(
+                "SELECT timestamp, content FROM agent_logs "
+                "WHERE agent_name='Trendy' AND task_type='trend_signal' "
+                "AND status='ok' ORDER BY id DESC LIMIT 1"
+            ).fetchone()
+        finally:
+            conn.close()
+    except Exception:
+        return []
+    if not row or not row[1]:
+        return []
+    ts_str, content = row
+    if _is_stale(ts_str or "", max_age_min):
+        return []
+    # Trendy format: "SIDEWAYS (conf=40%) · S=$21.48 R=$23.19 · Price below VWAP, EMAs, RSI 38.6. 5d range."
+    # Reasoning lives after the second " · "; everything before is metadata.
+    parts = [p.strip() for p in content.split("·")]
+    if len(parts) < 3:
+        return []
+    prose = " ".join(parts[2:]).strip().rstrip(".")
+    if not prose:
+        return []
+    return _split_reasons(prose, max_items)
+
+
+def _synthesis_risk_warning(signal: str | None, trend: str | None,
+                              backdrop: str | None) -> str | None:
+    """Derive a one-line risk warning from the verdict combo. Heuristic,
+    not LLM — surfaces the obvious dangerous configurations a reader
+    should flag, without needing the agent to think about it.
+
+    Returns a formatted '⚠️ ...' line or None when no warning fires."""
+    if not signal:
+        return None
+    sig = signal.upper()
+    tr = (trend or "").upper()
+    bd = (backdrop or "").upper()
+    # Sideline signal + cautious backdrop on a directional trend = fakeout zone
+    if sig in {"WAIT", "HOLD"} and bd in {"CAUTION", "YELLOW"} and tr in {"UP", "DOWN"}:
+        return "⚠️ High fakeout risk"
+    # Action signal against a red backdrop — known structural problem
+    if sig in {"BUY", "SELL"} and bd == "RED":
+        return "⚠️ Acting against a red backdrop"
+    # Counter-trend trade
+    if (sig == "BUY" and tr == "DOWN") or (sig == "SELL" and tr == "UP"):
+        return "⚠️ Counter-trend setup"
+    return None
 
 
 def _split_reasons(prose: str, max_items: int = 3) -> list[str]:
