@@ -92,25 +92,26 @@
      how many values the row has (2-value rows skip col 2 via .strip-two). */
   .strip {
     display: grid;
-    /* Even thirds keep cols 2 + 3 visually centred in the card rather than
-       glued to the right edge. Right-side inset pulls col 3 inward so the
-       rightmost value doesn't hit the card border either. Values still
-       right-align within each cell so tabular-num digits stack cleanly. */
-    grid-template-columns: 1fr 1fr 1fr;
+    /* Four columns: label | date subscript | mid value | end value.
+       Cols 2 + 3 centred, col 4 right-aligned and hugs the right edge.
+       2-value rows put their single value in col 4 so the rightmost
+       column stays aligned across every row. */
+    grid-template-columns: 1fr 1fr 1fr 1fr;
     column-gap: 12px;
     align-items: baseline;
-    margin-top: 6px; padding: 8px 2.5em 0 0;
+    margin-top: 6px; padding-top: 8px;
     border-top: 1px solid var(--rule);
   }
   .strip .label   { grid-column: 1; color: var(--accent); font-weight: 600; font-size: 14px; }
-  .strip .sub     { color: var(--muted); font-weight: 500; margin-left: 6px; }
-  .strip .value   { grid-column: 2; text-align: right;
+  .strip .sub     { grid-column: 2; color: var(--ink);   font-weight: 500; text-align: center;
+                    font-variant-numeric: tabular-nums; }
+  .strip .value   { grid-column: 3; text-align: center;
                     font-variant-numeric: tabular-nums; font-weight: 500; }
-  .strip .value-2 { grid-column: 3; text-align: right;
+  .strip .value-2 { grid-column: 4; text-align: right;
                     font-variant-numeric: tabular-nums; font-weight: 500; }
-  /* 2-value rows: promote single value to col 3 so it lines up vertically
+  /* 2-value rows: promote single value to col 4 so it lines up vertically
      with the rightmost value on the 3-value rows. */
-  .strip.strip-two .value { grid-column: 3; }
+  .strip.strip-two .value { grid-column: 4; text-align: right; }
   /* First strip after the stats grid needs more breathing room than
      strip-to-strip spacing. */
   .strip.strip-first { margin-top: 14px; }
@@ -199,23 +200,27 @@
   </div>
 
   <div class="strip strip-two strip-first">
-    <span class="label">Earnings <span class="sub" data-f="earnings_quarter">—</span></span>
+    <span class="label">Earnings</span>
+    <span class="sub"   data-f="earnings_quarter">—</span>
     <span class="value" data-f="next_earnings_date" data-fmt="dateMaybeProjected">—</span>
   </div>
 
   <div class="strip strip-two">
-    <span class="label">Max Pain <span class="sub" data-f="max_pain_expiration" data-fmt="dateShort">—</span></span>
-    <span class="value" data-f="max_pain_strike" data-fmt="usd">—</span>
+    <span class="label">Max Pain</span>
+    <span class="sub"   data-f="max_pain_expiration" data-fmt="dateShort">—</span>
+    <span class="value" data-f="max_pain_strike"     data-fmt="usd">—</span>
   </div>
 
   <div class="strip strip-darkpool">
-    <span class="label">Dark Pool <span class="sub" data-f="dark_pool_date" data-fmt="dateShort">—</span></span>
+    <span class="label">Dark Pool</span>
+    <span class="sub"     data-f="dark_pool_date"   data-fmt="dateShort">—</span>
     <span class="value"   data-f="dark_pool_pct"    data-fmt="pctSimple">—</span>
     <span class="value-2" data-f="dark_pool_volume" data-fmt="int">—</span>
   </div>
 
   <div class="strip strip-ftd">
-    <span class="label">FTDs <span class="sub" data-f="ftd_latest_date" data-fmt="dateShort">—</span></span>
+    <span class="label">FTDs</span>
+    <span class="sub"     data-f="ftd_latest_date" data-fmt="dateShort">—</span>
     <span class="value"   data-f="ftd_30d_qty"    data-fmt="bignum">—</span>
     <span class="value-2" data-f="ftd_latest_qty" data-fmt="bignum">—</span>
   </div>
