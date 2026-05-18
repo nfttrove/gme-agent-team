@@ -85,20 +85,28 @@
   .delta { margin-left: 6px; font-size: 13px; font-variant-numeric: tabular-nums; }
   .delta.pos { color: var(--green); }
   .delta.neg { color: var(--red); }
-  /* Data strip — shared shape for Earnings / Max Pain / Dark Pool / FTDS.
-     Each row: bold uppercase label + optional muted date subscript on the
-     left, one or two tabular-num values on the right. Single source of
-     visual truth for all four rows so they stay aligned. */
+  /* Data strip — shared shape for Earnings / Max Pain / Dark Pool / FTDs.
+     Typography matches the upper grid (.row): yellow Title-Case label,
+     tabular-num values, no ALL-CAPS or extra tracking. Three-column grid
+     so every rightmost value sits in the same x-position regardless of
+     how many values the row has (2-value rows skip col 2 via .strip-two). */
   .strip {
-    display: flex; justify-content: space-between; align-items: center;
+    display: grid;
+    grid-template-columns: 1fr 6em 7em;
+    column-gap: 12px;
+    align-items: baseline;
     margin-top: 6px; padding-top: 8px;
     border-top: 1px solid var(--rule);
-    color: var(--muted); font-size: 13px; letter-spacing: 1px;
   }
-  .strip .label   { font-weight: 700; letter-spacing: 2px; }
-  .strip .sub     { color: var(--muted); font-weight: 500; letter-spacing: 1px; margin-left: 6px; }
-  .strip .value   { color: var(--ink); font-weight: 600; font-variant-numeric: tabular-nums; }
-  .strip .value-2 { color: var(--ink); font-variant-numeric: tabular-nums; }
+  .strip .label   { grid-column: 1; color: var(--accent); font-weight: 600; font-size: 14px; }
+  .strip .sub     { color: var(--muted); font-weight: 500; margin-left: 6px; }
+  .strip .value   { grid-column: 2; text-align: right;
+                    font-variant-numeric: tabular-nums; font-weight: 500; }
+  .strip .value-2 { grid-column: 3; text-align: right;
+                    font-variant-numeric: tabular-nums; font-weight: 500; }
+  /* 2-value rows: promote single value to col 3 so it lines up vertically
+     with the rightmost value on the 3-value rows. */
+  .strip.strip-two .value { grid-column: 3; }
   /* First strip after the stats grid needs more breathing room than
      strip-to-strip spacing. */
   .strip.strip-first { margin-top: 14px; }
@@ -112,11 +120,11 @@
     display: flex; flex-direction: column; gap: 1px; min-width: 0;
   }
   .subscribe .sub-handle {
-    color: var(--ink); font-weight: 600; font-size: 14px;
+    color: var(--accent); font-weight: 600; font-size: 14px;
     white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
   }
   .subscribe .sub-count {
-    color: var(--muted); font-size: 12px; font-variant-numeric: tabular-nums;
+    color: var(--muted); font-variant-numeric: tabular-nums;
   }
   /* Styled YouTube-style SUBSCRIBE button. Mono theme keeps it white-on-black
      for the B&W look; other themes use the canonical YouTube red. */
@@ -186,24 +194,24 @@
     </div>
   </div>
 
-  <div class="strip strip-first">
-    <span class="label">EARNINGS <span class="sub" data-f="earnings_quarter">—</span></span>
+  <div class="strip strip-two strip-first">
+    <span class="label">Earnings <span class="sub" data-f="earnings_quarter">—</span></span>
     <span class="value" data-f="next_earnings_date" data-fmt="dateMaybeProjected">—</span>
   </div>
 
-  <div class="strip">
-    <span class="label">MAX PAIN <span class="sub" data-f="max_pain_expiration" data-fmt="dateShort">—</span></span>
+  <div class="strip strip-two">
+    <span class="label">Max Pain <span class="sub" data-f="max_pain_expiration" data-fmt="dateShort">—</span></span>
     <span class="value" data-f="max_pain_strike" data-fmt="usd">—</span>
   </div>
 
   <div class="strip strip-darkpool">
-    <span class="label">DARK POOL <span class="sub" data-f="dark_pool_date" data-fmt="dateShort">—</span></span>
+    <span class="label">Dark Pool <span class="sub" data-f="dark_pool_date" data-fmt="dateShort">—</span></span>
     <span class="value"   data-f="dark_pool_pct"    data-fmt="pctSimple">—</span>
     <span class="value-2" data-f="dark_pool_volume" data-fmt="int">—</span>
   </div>
 
   <div class="strip strip-ftd">
-    <span class="label">FTDS <span class="sub" data-f="ftd_latest_date" data-fmt="dateShort">—</span></span>
+    <span class="label">FTDs <span class="sub" data-f="ftd_latest_date" data-fmt="dateShort">—</span></span>
     <span class="value"   data-f="ftd_30d_qty"    data-fmt="bignum">—</span>
     <span class="value-2" data-f="ftd_latest_qty" data-fmt="bignum">—</span>
   </div>
@@ -275,8 +283,8 @@
       if (!v) return "";
       const d = new Date(v + "T12:00:00");
       if (isNaN(d)) return v;
-      // Short upper-case form ("MAY 13") to sit visually with "DARK POOL"
-      return d.toLocaleDateString("en-US", { month: "short", day: "numeric" }).toUpperCase();
+      // Title-case form ("May 13") to match upper-grid label style.
+      return d.toLocaleDateString("en-US", { month: "short", day: "numeric" });
     },
     // Like dateShort but prefixes "~" when the date is a projection
     // (yfinance calendar was stale, so fundamentals_feed rolled forward).
