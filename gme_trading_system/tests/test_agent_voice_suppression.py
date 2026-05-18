@@ -517,3 +517,81 @@ class TestFuturistUnchangedState:
         last_pushed = _utc_now() - timedelta(minutes=5)
         cur = "BEARISH 1h → $21.95 (conf=55%) · weak"
         assert _futurist_unchanged_state(conn, cur_id, cur, last_pushed) is False
+
+
+# ── H: Zero-trusted warning chip on Synthesis bursts ────────────────────────
+
+
+class TestNoTrustedAgentsChip:
+    """The Synthesis burst formatter prepends a 'ALL AGENTS MUTED' chip
+    when _no_trusted_agents() is True, so every consensus brief carries
+    the meta-warning instead of only the 11/16 ET standup."""
+
+    @pytest.fixture
+    def gate_db(self, tmp_path, monkeypatch):
+        """Seed an agent_gate_history table at a tmp DB and point the
+        helper at it via DB_PATH monkey-patch."""
+        db = tmp_path / "test_gate.db"
+        conn = sqlite3.connect(str(db))
+        conn.execute("""
+            CREATE TABLE agent_gate_history (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                snapshot_date TEXT NOT NULL,
+                agent_name TEXT NOT NULL,
+                gate_decision TEXT NOT NULL,
+                hit_rate REAL,
+                sample_size INTEGER,
+                UNIQUE(snapshot_date, agent_name)
+            )
+        """)
+        conn.commit()
+        conn.close()
+        import agent_voice
+        monkeypatch.setattr(agent_voice, "DB_PATH", str(db))
+        return db
+
+    def _seed_gate(self, db, rows):
+        """rows: list of (date, agent, decision, hit_rate, n)"""
+        with sqlite3.connect(str(db)) as conn:
+            conn.executemany(
+                "INSERT INTO agent_gate_history "
+                "(snapshot_date, agent_name, gate_decision, hit_rate, sample_size) "
+                "VALUES (?, ?, ?, ?, ?)",
+                rows,
+            )
+
+    def test_no_snapshot_returns_false(self, gate_db):
+        """Empty table → no warning (don't false-positive on first install)."""
+        from agent_voice import _no_trusted_agents
+        assert _no_trusted_agents() is False
+
+    def test_all_agents_below_bar_returns_true(self, gate_db):
+        """When every agent in the latest snapshot is either SHADOW/SUPPRESS
+        or EMIT-but-below-0.55, _no_trusted_agents returns True."""
+        self._seed_gate(gate_db, [
+            ("2026-05-18", "Futurist", "SHADOW", 0.41, 34),
+            ("2026-05-18", "Pattern", "EMIT", 0.33, 6),  # n<10
+            ("2026-05-18", "Pattern Intraday", "SUPPRESS", 0.19, 129),
+            ("2026-05-18", "Trendy", "EMIT", 0.50, 12),  # below 0.55 bar
+        ])
+        from agent_voice import _no_trusted_agents
+        assert _no_trusted_agents() is True
+
+    def test_one_trusted_agent_returns_false(self, gate_db):
+        """Even one EMIT agent at >=0.55 with n>=10 → no warning."""
+        self._seed_gate(gate_db, [
+            ("2026-05-18", "Trendy", "EMIT", 0.79, 14),
+            ("2026-05-18", "Futurist", "SHADOW", 0.41, 34),
+        ])
+        from agent_voice import _no_trusted_agents
+        assert _no_trusted_agents() is False
+
+    def test_uses_latest_snapshot_date_only(self, gate_db):
+        """Old snapshot has a trusted agent; today's has none → True.
+        Don't let yesterday's good day mask today's bad one."""
+        self._seed_gate(gate_db, [
+            ("2026-05-17", "Trendy", "EMIT", 0.79, 14),  # yesterday — ignored
+            ("2026-05-18", "Trendy", "EMIT", 0.50, 14),  # today — below bar
+        ])
+        from agent_voice import _no_trusted_agents
+        assert _no_trusted_agents() is True

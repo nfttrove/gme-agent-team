@@ -544,6 +544,17 @@ def _try_synthesis_burst(content: str, ts: str) -> str | None:
     # looking at without parsing the body. Verdict block uses emoji-LEFT
     # so the color signals direction at a glance, the label confirms.
     lines = [f"🧠 SIGNAL | {_ny_hhmm(ts)}", ""]
+    # Zero-trusted warning chip — when no agent is currently passing the
+    # LISTEN bar (per the most recent standup snapshot), every Synthesis
+    # brief carries the meta-warning so the reader doesn't have to remember
+    # back to the 11/16 ET standup. Soft-fails to no chip if the lookup
+    # can't run.
+    try:
+        if _no_trusted_agents():
+            lines.append("⚠️ <i>ALL AGENTS MUTED — lean on price + structure, not signals</i>")
+            lines.append("")
+    except Exception:
+        pass
     if consensus_dir and consensus_pct is not None:
         lines.append(f"{cons_emoji} Consensus: {consensus_dir} ({consensus_pct}%)")
     if signal_action:
@@ -582,6 +593,33 @@ def _try_synthesis_burst(content: str, ts: str) -> str | None:
             lines.append(risk_line)
 
     return "\n".join(lines)
+
+
+def _no_trusted_agents() -> bool:
+    """True when the most recent standup snapshot in agent_gate_history has
+    ZERO agents in the trusted bucket (EMIT gate AND hit_rate >= LISTEN bar).
+    Returns False on missing table, no rows, or any error — never False-
+    positives the warning chip onto a healthy stream."""
+    try:
+        conn = sqlite3.connect(DB_PATH)
+        try:
+            latest_date = conn.execute(
+                "SELECT MAX(snapshot_date) FROM agent_gate_history"
+            ).fetchone()
+            if not latest_date or not latest_date[0]:
+                return False
+            row = conn.execute(
+                "SELECT COUNT(*) FROM agent_gate_history "
+                "WHERE snapshot_date = ? AND gate_decision = 'EMIT' "
+                "AND hit_rate IS NOT NULL AND hit_rate >= 0.55 "
+                "AND sample_size >= 10",
+                (latest_date[0],),
+            ).fetchone()
+        finally:
+            conn.close()
+    except Exception:
+        return False
+    return (row[0] if row else 0) == 0
 
 
 def _latest_trendy_reasons(max_items: int = 3, max_age_min: int = 15) -> list[str]:
