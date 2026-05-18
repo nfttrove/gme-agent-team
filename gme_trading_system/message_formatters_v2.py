@@ -888,6 +888,23 @@ def format_standup_brief(
     header_bits.append(timestamp_et)
     lines = [" · ".join(header_bits), ""]
 
+    def _form_chip(v) -> str:
+        """Build the '· 5/8 63% 7d ↑' suffix when we have 7d data.
+        Empty string when 7d sample is zero (silent — no fake data)."""
+        n_7d = getattr(v, "sample_size_7d", 0) or 0
+        if n_7d < 1:
+            return ""
+        hits_7d = getattr(v, "hits_correct_7d", 0) or 0
+        rate_7d = getattr(v, "hit_rate_7d", None)
+        if rate_7d is None:
+            return ""
+        # Direction arrow: ↑ improving by ≥5pp, ↓ worsening by ≥5pp, → flat.
+        # 5pp threshold filters noise — anything tighter is statistically
+        # indistinguishable from the 30d baseline at typical n.
+        delta = rate_7d - (v.hit_rate or 0)
+        arrow = "↑" if delta >= 0.05 else "↓" if delta <= -0.05 else "→"
+        return f" · 7d {hits_7d}/{n_7d} {rate_7d * 100:.0f}% {arrow}"
+
     # LISTEN bucket
     if not trusted:
         lines.append("⚠️ <b>NO TRUSTED AGENTS</b> — lean on price + structure, not signals")
@@ -899,7 +916,7 @@ def format_standup_brief(
                 f"✅ <b>LISTEN: {escape_html(v.agent_name)}</b>"
             )
             lines.append(
-                f"   {v.hits_correct}/{v.sample_size} calls right ({pct}){only}"
+                f"   {v.hits_correct}/{v.sample_size} calls right ({pct}){_form_chip(v)}{only}"
             )
             if v.small_sample:
                 lines.append("   ⚠️ small sample — could be a hot streak")
@@ -916,7 +933,7 @@ def format_standup_brief(
             pct = f"{(v.hit_rate or 0) * 100:.0f}%"
             stats = f"{v.hits_correct}/{v.sample_size}".rjust(7)
             lines.append(
-                f"   🔇 {escape_html(v.agent_name).ljust(max_name)}  {stats}  ({pct}) — {v.reason}"
+                f"   🔇 {escape_html(v.agent_name).ljust(max_name)}  {stats}  ({pct}){_form_chip(v)} — {v.reason}"
             )
 
     # 24h paper trade summary — collapsed

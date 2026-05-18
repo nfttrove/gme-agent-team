@@ -3393,6 +3393,22 @@ def run_standup_report():
         ).fetchall()
         acc = {r["agent_name"]: dict(r) for r in acc_rows}
 
+        # 7-day "recent form" — display-only, never used for bucket decisions.
+        # Hybrid lookback: 30d is statistically sound for the gate, 7d catches
+        # momentum the operator can use to spot turnarounds early.
+        acc_7d_rows = conn.execute(
+            """
+            SELECT agent_name,
+                   COUNT(*)                                              AS n,
+                   AVG(directional_hit)                                 AS hit_rate
+            FROM signal_scores
+            WHERE validated_at > datetime('now', '-7 days')
+              AND baseline_price != end_price
+            GROUP BY agent_name
+            """
+        ).fetchall()
+        acc_7d = {r["agent_name"]: dict(r) for r in acc_7d_rows}
+
         # Latest GME spot for the header
         spot_row = conn.execute(
             "SELECT close FROM price_ticks WHERE symbol='GME' AND close IS NOT NULL ORDER BY id DESC LIMIT 1"
@@ -3405,7 +3421,7 @@ def run_standup_report():
             name: signal_gate.evaluate(name, DB_PATH)["decision"] for name in acc
         }
 
-        trusted, muted = categorize_all(acc, gate_decisions)
+        trusted, muted = categorize_all(acc, gate_decisions, acc_7d_dict=acc_7d)
         all_verdicts = trusted + muted
 
         # Status diff against the previous saved snapshot, then save today's

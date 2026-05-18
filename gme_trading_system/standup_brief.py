@@ -31,22 +31,37 @@ class AgentVerdict:
     reason: str  # short tag explaining the bucket choice
     gate_decision: str  # "EMIT" | "SHADOW" | "SUPPRESS"
     small_sample: bool = False
+    # Optional 7-day "recent form" stats. None when there's no 7d data.
+    # These are NEVER used for bucket decisions (statistically too noisy at
+    # small n) — pure display so the operator can spot momentum without
+    # the gate flipping on a hot/cold streak.
+    sample_size_7d: int = 0
+    hits_correct_7d: int = 0
+    hit_rate_7d: float | None = None
 
 
 def categorize_agent(
     agent_name: str,
     acc: dict,
     gate_decision: str,
+    acc_7d: dict | None = None,
 ) -> AgentVerdict:
     """Decide which bucket an agent goes in and why.
 
     acc must have keys: n, hit_rate (None if unscored), tp_rate.
     gate_decision is one of EMIT, SHADOW, SUPPRESS.
+    acc_7d is the same dict shape but over the trailing 7 days; used
+    only for the display-side 'recent form' stat, never for bucketing.
     """
     n = int(acc.get("n") or 0)
     hit = acc.get("hit_rate")
     tp_rate = acc.get("tp_rate")
     hits_correct = int(round((hit or 0) * n))
+
+    # 7-day recent form (display only)
+    n_7d = int((acc_7d or {}).get("n") or 0)
+    hit_7d = (acc_7d or {}).get("hit_rate")
+    hits_correct_7d = int(round((hit_7d or 0) * n_7d))
 
     if gate_decision == "SUPPRESS":
         reason = "statistically broken"
@@ -64,19 +79,27 @@ def categorize_agent(
             agent_name=agent_name, bucket="LISTEN", sample_size=n,
             hits_correct=hits_correct, hit_rate=hit, tp_rate=tp_rate,
             reason="passing the bar", gate_decision=gate_decision, small_sample=small,
+            sample_size_7d=n_7d, hits_correct_7d=hits_correct_7d, hit_rate_7d=hit_7d,
         )
 
     return AgentVerdict(
         agent_name=agent_name, bucket="MUTED", sample_size=n,
         hits_correct=hits_correct, hit_rate=hit, tp_rate=tp_rate,
         reason=reason, gate_decision=gate_decision, small_sample=False,
+        sample_size_7d=n_7d, hits_correct_7d=hits_correct_7d, hit_rate_7d=hit_7d,
     )
 
 
-def categorize_all(acc_dict: dict, gate_decisions: dict) -> tuple[list[AgentVerdict], list[AgentVerdict]]:
-    """Returns (trusted, muted) lists sorted by hit_rate descending."""
+def categorize_all(acc_dict: dict, gate_decisions: dict,
+                     acc_7d_dict: dict | None = None) -> tuple[list[AgentVerdict], list[AgentVerdict]]:
+    """Returns (trusted, muted) lists sorted by hit_rate descending.
+
+    acc_7d_dict is optional — when provided, each verdict carries the
+    7-day recent-form stat for display alongside the 30d hit rate."""
+    acc_7d_dict = acc_7d_dict or {}
     verdicts = [
-        categorize_agent(name, acc_dict[name], gate_decisions.get(name, "EMIT"))
+        categorize_agent(name, acc_dict[name], gate_decisions.get(name, "EMIT"),
+                          acc_7d=acc_7d_dict.get(name))
         for name in acc_dict
     ]
     trusted = sorted([v for v in verdicts if v.bucket == "LISTEN"], key=lambda v: -(v.hit_rate or 0))
