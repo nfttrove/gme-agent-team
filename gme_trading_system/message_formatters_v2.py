@@ -570,8 +570,12 @@ def format_impact_burst(
     lines.append(f"Max Pain (strike where most options expire worthless): ${max_pain:.2f}")
 
     diff = current_price - max_pain
-    diff_icon = "Below" if diff < 0 else "Above"
-    lines.append(f"Current: ${current_price:.2f} ({diff_icon} by ${abs(diff):.2f})")
+    # Direction emoji leads so the reader sees above/below max-pain before
+    # the dollar figure. 🔻 = below (calls heavy / bearish for pin),
+    # 🔺 = above (puts heavy / bullish for pin).
+    diff_emoji = "🔻" if diff < 0 else "🔺"
+    diff_word = "below" if diff < 0 else "above"
+    lines.append(f"{diff_emoji} Current: ${current_price:.2f} ({diff_word} by ${abs(diff):.2f})")
 
     if oi_bias:
         lines.append(f"OI (open interest) Bias: {oi_bias}")
@@ -905,13 +909,14 @@ def format_standup_brief(
     if muted:
         lines.append("")
         lines.append("🔕 <b>MUTED</b> <i>(no Telegram alerts from these):</i>")
-        # Compute name padding for alignment
+        # Compute name padding for alignment. Per-row 🔇 prefix so muted
+        # state signals at a glance before the reader parses the metrics.
         max_name = max(len(v.agent_name) for v in muted)
         for v in muted:
             pct = f"{(v.hit_rate or 0) * 100:.0f}%"
             stats = f"{v.hits_correct}/{v.sample_size}".rjust(7)
             lines.append(
-                f"   {escape_html(v.agent_name).ljust(max_name)}  {stats}  ({pct}) — {v.reason}"
+                f"   🔇 {escape_html(v.agent_name).ljust(max_name)}  {stats}  ({pct}) — {v.reason}"
             )
 
     # 24h paper trade summary — collapsed

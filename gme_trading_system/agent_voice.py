@@ -989,9 +989,16 @@ def _try_cto_burst(content: str, ts: str) -> str | None:
         arrow = "↑" if delta > 2 else "↓" if delta < -2 else "→"
         lines.append(f"Short Vol: {short_vol_today:.0f}% {arrow} (30d {short_vol_avg:.0f}%)")
 
-    # Immunity (shown last so failing items pop)
+    # Immunity (shown last so failing items pop). Status emoji leads:
+    # 🟢 all checks pass (5/5), 🟡 any check fails. Color signals
+    # whether the thesis still has structural immunity at a glance.
     if immunity_passed and immunity_total:
-        imm_line = f"Immunity: {immunity_passed}/{immunity_total}"
+        try:
+            all_passing = int(immunity_passed) >= int(immunity_total)
+        except ValueError:
+            all_passing = True
+        imm_emoji = "🟢" if all_passing else "🟡"
+        imm_line = f"{imm_emoji} Immunity: {immunity_passed}/{immunity_total}"
         if immunity_failing:
             imm_line += f" (✗ {', '.join(immunity_failing[:2])})"
         lines.append(imm_line)

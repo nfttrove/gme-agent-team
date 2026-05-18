@@ -316,7 +316,8 @@ class TestBurstFormatting:
         assert self.count_lines(msg) <= 8
         assert "$24.50" in msg
         assert "$23.20" in msg
-        assert "Below" in msg  # Shows price is below max pain
+        assert "below" in msg  # Shows price is below max pain (lowercase since the emoji 🔻 now carries the direction)
+        assert "🔻" in msg     # direction emoji leads the row per emoji-left preference
         assert "2026-05-17" in msg
 
     # ─── SOCIAL BURST ────────────────────────────────────────────────────

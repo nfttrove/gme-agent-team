@@ -1979,13 +1979,13 @@ def run_saturday_review():
 
         brief = (
             f"📅 <b>SATURDAY REVIEW</b> — week of {week_start} to {week_end}\n\n"
-            f"<b>THIS WEEK</b>\n{signals_line}\n{top_line}\n{preds_line}\n\n"
+            f"📊 <b>THIS WEEK</b>\n{signals_line}\n{top_line}\n{preds_line}\n\n"
             f"{dv_block}"
             f"📚 <b>LESSONS</b>\n"
             f"• {n_candidates} candidate{'' if n_candidates == 1 else 's'} pending review (/candidates)\n"
             f"{_format_recent_lessons(recent_lessons)}\n"
-            f"<b>SYSTEM</b>\n{system_line}\n\n"
-            f"<b>NEXT WEEK</b>\n{focus_txt}"
+            f"🔧 <b>SYSTEM</b>\n{system_line}\n\n"
+            f"🔮 <b>NEXT WEEK</b>\n{focus_txt}"
         )
 
         write_log("SatReview", brief[:2000], "saturday_review")
@@ -2161,11 +2161,16 @@ def run_monday_weekend_digest():
 
         # ---------- 4. Top news headlines (deterministic — no Gemma rewriting) ----------
         if news_rows:
+            # Color emoji leads the row so direction scans before headline.
+            # Replaces the bracketed [neutral]/[bullish]/[bearish] tags
+            # that buried the signal behind text the reader had to parse.
+            _sentiment_emoji = {"bullish": "🟢", "bearish": "🔴", "neutral": "⚪"}
             headlines = []
             for r in news_rows[:5]:
                 hl = (r["headline"] or "")[:120]
-                label = r["sentiment_label"] or "neutral"
-                headlines.append(f"• [{label}] {hl}")
+                label = (r["sentiment_label"] or "neutral").lower()
+                emoji = _sentiment_emoji.get(label, "⚪")
+                headlines.append(f"• {emoji} {hl}")
             news_block = "\n".join(headlines)
         else:
             news_block = "• No news flagged since Friday close."
