@@ -57,8 +57,9 @@ def detect_terms(text: str) -> Set[str]:
 
     # Check each term in glossary (longer terms first to avoid partial matches)
     for term in sorted(TRADING_GLOSSARY.keys(), key=len, reverse=True):
-        # Match exact term or term-with-digits-suffix (e.g. EMA, EMA21, RSI14)
-        pattern = r'\b' + re.escape(term.lower()) + r'\d*\b'
+        # Match exact term, term-with-digits (EMA21, RSI14), or plural-s
+        # suffix (EMAs, RSIs). Agents commonly write any of these forms.
+        pattern = r'\b' + re.escape(term.lower()) + r'(?:\d+|s)?\b'
         if re.search(pattern, text_lower):
             found.add(term)
 
@@ -124,7 +125,7 @@ def glossary_footer(text: str, max_terms: int = 5) -> str:
         parts.append(f"{term}: {short_def}")
     if not parts:
         return ""
-    return "📚 " + " | ".join(parts)
+    return "📖 " + " | ".join(parts)
 
 
 def explain_signal_terms(text: str) -> str:

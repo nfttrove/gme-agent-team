@@ -368,7 +368,7 @@ class TestGlossaryFooter:
         """Given text with RSI/EMA/VWAP, when building footer, then all three glossed."""
         text = "Price above VWAP and EMA21, RSI 58, uptrend confirmed."
         footer = glossary_footer(text)
-        assert footer.startswith("📚")
+        assert footer.startswith("📖")  # inline glossary uses 📖; 📚 reserved for LESSONS
         assert "RSI:" in footer
         assert "EMA:" in footer
         assert "VWAP:" in footer

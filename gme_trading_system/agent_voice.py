@@ -956,10 +956,13 @@ def _format(v: Voice, content: str, ts: str, prev_state: dict | None = None) -> 
     if len(safe) > 800:
         safe = safe[:797] + "..."
     from datetime import date
+    # Match the burst-formatter time format ("HH:MM ET") so legacy-path
+    # voices (Chatty) carry the same tz suffix as Synthesis/Trendy/etc.
+    # Same readability contract — readers shouldn't have to guess the zone.
     if len(ts) >= 16:
         ts_date = ts[:10]
         hhmm = ts[11:16]
-        time_part = hhmm if ts_date == str(date.today()) else f"{ts_date[5:]} {hhmm}"
+        time_part = f"{hhmm} ET" if ts_date == str(date.today()) else f"{ts_date[5:]} {hhmm} ET"
     else:
         time_part = ts
     # Append plain-English glosses for any trading jargon (RSI/EMA/VWAP/MACD/...)
