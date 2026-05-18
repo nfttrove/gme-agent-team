@@ -251,7 +251,11 @@ def _synthesis_unchanged_state(
     cur_signal = _extract_signal_action(content)
     prev_signal = _extract_signal_action(prev[0])
     _IDLE_SIGNALS = {"HOLD", "WAIT", "NEUTRAL"}
-    _ACTION_SIGNALS = {"BUY", "SELL", "SHORT", "LONG"}
+    # Only BUY/SELL — Synthesis prompts at orchestrator.py:2730 explicitly
+    # constrain to BUY/SELL/HOLD/WAIT. LONG/SHORT belong to other agents'
+    # vocabularies (CTO short-rankings) and shouldn't be treated as flip
+    # synonyms here.
+    _ACTION_SIGNALS = {"BUY", "SELL"}
     _MIN_FLIP_AGE_MIN = 15
     if cur_signal and prev_signal and cur_signal != prev_signal:
         cur_idle = cur_signal in _IDLE_SIGNALS
