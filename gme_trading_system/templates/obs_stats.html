@@ -101,14 +101,15 @@
   .strip {
     display: grid;
     /* Four columns: label | date subscript | mid value | end value.
-       Cols 2 + 3 centred, col 4 right-aligned and hugs the right edge.
+       Cols 2 + 3 left-aligned, col 4 right-aligned to the card edge.
        2-value rows put their single value in col 4 so the rightmost
-       column stays aligned across every row. */
+       column stays aligned across every row.
+       Row spacing matches section 1 (.row): padding 4px + border-bottom. */
     grid-template-columns: 1fr 1fr 1fr 1fr;
     column-gap: 12px;
     align-items: baseline;
-    margin-top: 6px; padding-top: 8px;
-    border-top: 1px solid var(--rule);
+    padding: 4px 0;
+    border-bottom: 1px solid var(--rule);
   }
   .strip .label   { grid-column: 1; color: var(--accent); font-weight: 600; font-size: 14px; }
   .strip .sub     { grid-column: 2; color: var(--ink);   font-weight: 500; text-align: left;
@@ -120,18 +121,19 @@
   /* 2-value rows: promote single value to col 4 so it lines up vertically
      with the rightmost value on the 3-value rows. */
   .strip.strip-two .value { grid-column: 4; text-align: right; }
-  /* First strip after the stats grid needs more breathing room than
-     strip-to-strip spacing. */
-  .strip.strip-first { margin-top: 14px; }
+  /* First strip after the stats grid: section divider with extra breathing room. */
+  .strip.strip-first { margin-top: 14px; border-top: 1px solid var(--rule); }
   /* Subscribe row uses the same 4-col grid as .strip so the handle, count
      and CTA button align with the data rows above. Sub count sits in col 2
-     (centred, solid white) to mirror the strip date column. */
+     (left-aligned, solid white) to mirror the strip date column.
+     Same padding rhythm as section 1 / strips. */
   .subscribe {
     display: grid;
     grid-template-columns: 1fr 1fr 1fr 1fr;
     column-gap: 12px;
     align-items: center;
-    margin-top: 14px; padding-top: 8px;
+    padding: 4px 0;
+    margin-top: 14px;
     border-top: 1px solid var(--rule);
   }
   .subscribe .sub-handle {
