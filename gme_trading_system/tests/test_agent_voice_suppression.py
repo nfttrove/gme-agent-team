@@ -329,6 +329,20 @@ class TestSynthesisUnchangedState:
         cur_content = "NOW: PRICE: $22.11 | NEXT: CONSENSUS: BULLISH 67% | SIGNAL: HOLD"
         assert _synthesis_unchanged_state(conn, cur_id, cur_content, last_pushed) is False
 
+    def test_signal_flip_buy_to_sell_always_passes(self, conn):
+        """BUY↔SELL is a real reversal in action space — always pass
+        through, regardless of how recently the last push was. The
+        15-min cool-off only applies to action↔idle flips (LLM
+        oscillation). Real action↔action reversals are too important
+        to gate on time."""
+        _seed(conn, "Synthesis", "synthesis",
+              "NOW: PRICE: $22.11 | NEXT: CONSENSUS: BULLISH 67% | SIGNAL: BUY")
+        cur_id = _seed(conn, "Synthesis", "synthesis",
+                       "NOW: PRICE: $22.11 | NEXT: CONSENSUS: BULLISH 67% | SIGNAL: SELL")
+        last_pushed = _utc_now() - timedelta(minutes=2)  # very recent
+        cur_content = "NOW: PRICE: $22.11 | NEXT: CONSENSUS: BULLISH 67% | SIGNAL: SELL"
+        assert _synthesis_unchanged_state(conn, cur_id, cur_content, last_pushed) is False
+
     def test_signal_flip_wait_to_hold_suppressed(self, conn):
         """WAIT↔HOLD with otherwise identical state — SUPPRESSED. Both are
         'do nothing' for a reader, so flipping between them is noise. This

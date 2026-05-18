@@ -251,14 +251,22 @@ def _synthesis_unchanged_state(
     cur_signal = _extract_signal_action(content)
     prev_signal = _extract_signal_action(prev[0])
     _IDLE_SIGNALS = {"HOLD", "WAIT", "NEUTRAL"}
+    _ACTION_SIGNALS = {"BUY", "SELL", "SHORT", "LONG"}
     _MIN_FLIP_AGE_MIN = 15
     if cur_signal and prev_signal and cur_signal != prev_signal:
         cur_idle = cur_signal in _IDLE_SIGNALS
         prev_idle = prev_signal in _IDLE_SIGNALS
-        # Suppress idle↔idle (HOLD↔WAIT) — same equivalence class
+        cur_action = cur_signal in _ACTION_SIGNALS
+        prev_action = prev_signal in _ACTION_SIGNALS
+        # idle↔idle (HOLD↔WAIT↔NEUTRAL): noise — same equivalence class
         if cur_idle and prev_idle:
             return True
-        # Action↔idle: only pass if enough time elapsed since last push
+        # action↔action (BUY↔SELL): always pass — real reversal, never
+        # suppress regardless of how recently we pushed
+        if cur_action and prev_action:
+            return False
+        # action↔idle: pass only if enough time elapsed since last push
+        # (avoids LLM oscillation noise observed today)
         if age_min >= _MIN_FLIP_AGE_MIN:
             return False
     return True
