@@ -6,7 +6,7 @@ Defined in [gme_trading_system/agents.py](gme_trading_system/agents.py); schedul
 
 ## Active window
 
-Cycles decorated with `@active_window_required` **silently skip outside 08:30–17:00 ET, Mon–Fri** (excluding US market holidays). The decorated cycles are: Valerie, Trendy, Futurist, Synthesis, Pattern (incl. intraday), Newsie (signal cycle), GeoRisk, and Briefing (4-hour periodic brief). Chatty and Newsie's analysis cycle (`run_news`) run regardless of the window. Daily/weekly cron jobs (Boss huddle, CTO DV score, weekend digests, EOD reviews) also run regardless. The window is defined in [market_hours.py](gme_trading_system/market_hours.py) `is_active_window()`.
+Cycles decorated with `@active_window_required` **silently skip outside 08:30–17:00 ET, Mon–Fri** (excluding US market holidays). The decorated cycles are: Valerie, Trendy, Futurist, Synthesis, Pattern (incl. intraday), Newsie (signal cycle), GeoRisk, and Briefing (4-hour periodic brief). Chatty and Newsie's analysis cycle (`run_news`) run regardless of the window. CTO DV score and DV history log are gated Mon–Fri at the cron level (otherwise weekend rows sit in the voice-forwarder queue and double-push on Monday). Other daily/weekly cron jobs (Boss huddle, weekend digests, EOD reviews) run regardless. The window is defined in [market_hours.py](gme_trading_system/market_hours.py) `is_active_window()`.
 
 The mapping between agents and decorated cycle functions, plus the time literals, is enforced by [tests/test_docs_architecture.py](gme_trading_system/tests/test_docs_architecture.py) — if you change the decorator set or the window, update this paragraph (or vice versa) and the fitness test will tell you.
 
@@ -84,7 +84,7 @@ Every signal emitted to Telegram carries a 0.0–1.0 confidence score. The team 
 - **Why it exists:** sets the day's frame; reviews the previous day
 
 ### CTO — Chief Technology & Market Structure Officer
-- **Cadence:** 09:05 ET daily brief, 09:10 ET DV (deep-value) score, 09:15 ET DV history log, Sun 08:00 ET structural scan
+- **Cadence:** 09:05 ET daily brief, 09:10 ET DV (deep-value) score (Mon–Fri), 09:15 ET DV history log (Mon–Fri), Sun 08:00 ET structural scan
 - **LLM:** DeepSeek-r1 / Gemini Pro
 - **Reads:** PE playbook signals, short-side research, dark pool data
 - **Writes:** `cto_brief`, `dv_score_history`, `structural_signals`
