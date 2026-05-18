@@ -146,8 +146,13 @@ _CONSENSUS_RE = _re_module.compile(r"CONSENSUS:\s*(\w+)\s+(\d+)", _re_module.IGN
 # Words that always pass Chatty through, even when price barely moved —
 # they signal something material the user should see (volume spike, alarm,
 # regime change). Match on uppercased prose so case doesn't matter.
+#
+# RISING / FALLING removed 2026-05-18: Chatty uses them descriptively
+# in routine prose ("$21.97 rising on quiet volume") so they bypassed
+# dedup on every cycle. The remaining tokens are discrete events, not
+# continuous trend descriptors.
 _CHATTY_ALARM_TOKENS = (
-    "FALLING", "RISING", "SPIKE", "ELEVATED VOLUME", "CAUTION",
+    "SPIKE", "ELEVATED VOLUME", "CAUTION",
     "BREAKING", "BREAKOUT", "BREAKDOWN", "FLIP", "REVERSAL", "GAP",
 )
 
@@ -233,13 +238,21 @@ def _synthesis_unchanged_state(
         return False
     if abs(cur_pct - prev_pct) >= conf_tol_pp:
         return False
-    # Signal action flip (e.g. SELL→WAIT, BUY→HOLD) is higher-information
-    # than ±conf_tol_pp wobble and should pass even when other dims match.
+    # Signal action flip is higher-information than ±conf_tol_pp wobble
+    # and should pass even when other dims match — BUT only when the flip
+    # crosses the action/no-action boundary. {HOLD, WAIT, NEUTRAL} are all
+    # "do nothing" from a reader's perspective so churn within that set is
+    # noise, not signal. Real flips are BUY↔SELL or anything↔BUY/SELL.
     from message_formatters import _extract_signal_action
     cur_signal = _extract_signal_action(content)
     prev_signal = _extract_signal_action(prev[0])
+    _IDLE_SIGNALS = {"HOLD", "WAIT", "NEUTRAL"}
     if cur_signal and prev_signal and cur_signal != prev_signal:
-        return False
+        # Skip suppression only when the flip is meaningful (not idle↔idle).
+        cur_idle = cur_signal in _IDLE_SIGNALS
+        prev_idle = prev_signal in _IDLE_SIGNALS
+        if not (cur_idle and prev_idle):
+            return False
     return True
 
 

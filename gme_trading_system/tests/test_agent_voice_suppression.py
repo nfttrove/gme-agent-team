@@ -317,6 +317,29 @@ class TestSynthesisUnchangedState:
         cur_content = "NOW: PRICE: $22.11 | NEXT: CONSENSUS: BULLISH 67% | SIGNAL: HOLD"
         assert _synthesis_unchanged_state(conn, cur_id, cur_content, last_pushed) is False
 
+    def test_signal_flip_wait_to_hold_suppressed(self, conn):
+        """WAIT↔HOLD with otherwise identical state — SUPPRESSED. Both are
+        'do nothing' for a reader, so flipping between them is noise. This
+        was a real bug today: BEARISH 67% WAIT→HOLD→WAIT→HOLD over 15 min
+        all passed dedup before this fix landed."""
+        _seed(conn, "Synthesis", "synthesis",
+              "NOW: PRICE: $22.11 | NEXT: CONSENSUS: BEARISH 67% | SIGNAL: WAIT")
+        cur_id = _seed(conn, "Synthesis", "synthesis",
+                       "NOW: PRICE: $22.11 | NEXT: CONSENSUS: BEARISH 67% | SIGNAL: HOLD")
+        last_pushed = _utc_now() - timedelta(minutes=5)
+        cur_content = "NOW: PRICE: $22.11 | NEXT: CONSENSUS: BEARISH 67% | SIGNAL: HOLD"
+        assert _synthesis_unchanged_state(conn, cur_id, cur_content, last_pushed) is True
+
+    def test_signal_flip_wait_to_neutral_suppressed(self, conn):
+        """WAIT↔NEUTRAL also same equivalence class — SUPPRESSED."""
+        _seed(conn, "Synthesis", "synthesis",
+              "NOW: PRICE: $22.11 | NEXT: CONSENSUS: BEARISH 67% | SIGNAL: WAIT")
+        cur_id = _seed(conn, "Synthesis", "synthesis",
+                       "NOW: PRICE: $22.11 | NEXT: CONSENSUS: BEARISH 67% | SIGNAL: NEUTRAL")
+        last_pushed = _utc_now() - timedelta(minutes=5)
+        cur_content = "NOW: PRICE: $22.11 | NEXT: CONSENSUS: BEARISH 67% | SIGNAL: NEUTRAL"
+        assert _synthesis_unchanged_state(conn, cur_id, cur_content, last_pushed) is True
+
 
 # ── F: Chatty state-diff suppression ────────────────────────────────────────
 
@@ -334,13 +357,25 @@ class TestChattyUnchangedState:
         assert _chatty_unchanged_state(conn, cur_id, cur, last_pushed) is True
 
     def test_alarm_word_passes(self, conn):
-        """Prose contains FALLING — material change, forward even if price unchanged."""
+        """Prose contains BREAKDOWN — material event, forward even if price unchanged."""
         _seed(conn, "Chatty", "commentary", "$22.11 sideways quiet volume")
         cur_id = _seed(conn, "Chatty", "commentary",
-                       "$22.11 FALLING on elevated volume")
+                       "$22.11 breakdown confirmed on heavy tape")
         last_pushed = _utc_now() - timedelta(minutes=5)
-        cur = "$22.11 FALLING on elevated volume"
+        cur = "$22.11 breakdown confirmed on heavy tape"
         assert _chatty_unchanged_state(conn, cur_id, cur, last_pushed) is False
+
+    def test_rising_descriptive_no_longer_bypasses(self, conn):
+        """RISING/FALLING removed from alarm tokens 2026-05-18 — they were
+        triggering on Chatty's routine 'rising on quiet volume' prose, which
+        meant every cycle bypassed dedup. Now: descriptive rising with
+        unchanged price gets SUPPRESSED (the intended silence-as-signal)."""
+        _seed(conn, "Chatty", "commentary", "$22.11 holds quiet volume")
+        cur_id = _seed(conn, "Chatty", "commentary",
+                       "$22.11 rising on quiet volume")
+        last_pushed = _utc_now() - timedelta(minutes=5)
+        cur = "$22.11 rising on quiet volume"
+        assert _chatty_unchanged_state(conn, cur_id, cur, last_pushed) is True
 
     def test_volume_spike_word_passes(self, conn):
         """SPIKE in volume → material, forward."""
