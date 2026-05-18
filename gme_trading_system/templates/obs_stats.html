@@ -92,10 +92,14 @@
      how many values the row has (2-value rows skip col 2 via .strip-two). */
   .strip {
     display: grid;
-    grid-template-columns: 1fr 6em 7em;
+    /* Even thirds keep cols 2 + 3 visually centred in the card rather than
+       glued to the right edge. Right-side inset pulls col 3 inward so the
+       rightmost value doesn't hit the card border either. Values still
+       right-align within each cell so tabular-num digits stack cleanly. */
+    grid-template-columns: 1fr 1fr 1fr;
     column-gap: 12px;
     align-items: baseline;
-    margin-top: 6px; padding-top: 8px;
+    margin-top: 6px; padding: 8px 2.5em 0 0;
     border-top: 1px solid var(--rule);
   }
   .strip .label   { grid-column: 1; color: var(--accent); font-weight: 600; font-size: 14px; }
