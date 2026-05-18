@@ -550,3 +550,22 @@ class TestFormatRecentLessons:
         rows = [(datetime.now(timezone.utc), {})]
         out = _format_recent_lessons(rows)
         assert out == "• No new graduations this week — clean state."
+
+    def test_html_special_chars_are_escaped(self):
+        """Given a description with '<', '>', or '&' (e.g. 'RSI<30, AAPL&Co'),
+        When formatted, Then they are HTML-escaped — otherwise Telegram's
+        HTML parse mode rejects the message and the whole Saturday brief
+        fails to send. The seeded pe_playbook_stage5_critical lesson is
+        exactly this case ('≥2 Stage 5 signals')."""
+        from datetime import datetime, timezone
+        from orchestrator import _format_recent_lessons
+        rows = [(datetime.now(timezone.utc), {
+            "description": "RSI<30 and price>VWAP with M&M crowd",
+        })]
+        out = _format_recent_lessons(rows)
+        assert "&lt;30" in out
+        assert "&gt;VWAP" in out
+        assert "M&amp;M" in out
+        # The original raw chars must not survive to the Telegram payload
+        assert "<30" not in out
+        assert ">VWAP" not in out

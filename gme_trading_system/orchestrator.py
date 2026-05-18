@@ -789,7 +789,10 @@ def run_futurist_prediction_signal():
             # already have a validated Pydantic prediction, so call log_prediction
             # directly — same destination, no parse step.
             try:
-                from episodic_logger import log_prediction
+                # Import via episodic_integration (which adds .agent/ to
+                # sys.path) instead of directly — guarantees the import
+                # works under launchd regardless of cwd.
+                from episodic_integration import log_prediction
                 log_prediction(
                     agent_name="Futurist",
                     predicted_price=prediction.predicted_price,
@@ -1765,7 +1768,11 @@ def _format_recent_lessons(recent_lessons: list) -> str:
     """Format the most recent 2 graduated lessons for the Saturday Review
     LESSONS block. `recent_lessons` is a list of (ts, row_dict) tuples,
     pre-sorted desc by ts. Returns a multi-line string or a clean-state
-    fallback when empty."""
+    fallback when empty.
+
+    HTML-escapes the description because real lessons (e.g. the seeded
+    pe_playbook_stage5_critical row) contain raw '<' and '>' chars which
+    would break Telegram's HTML parse mode and abort the whole brief."""
     if not recent_lessons:
         return "• No new graduations this week — clean state."
     top = recent_lessons[:2]
@@ -1776,7 +1783,8 @@ def _format_recent_lessons(recent_lessons: list) -> str:
             continue
         if len(desc) > 120:
             desc = desc[:117] + "..."
-        lines.append(f"  – {desc}")
+        safe = desc.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
+        lines.append(f"  – {safe}")
     return "\n".join(lines) if len(lines) > 1 else "• No new graduations this week — clean state."
 
 
@@ -1897,6 +1905,11 @@ def run_saturday_review():
                             if not grad_at:
                                 continue
                             ts = datetime.fromisoformat(grad_at.replace("Z", "+00:00"))
+                            # Existing seeded rows have naive timestamps; treat
+                            # those as UTC so the comparison with `cutoff` (aware)
+                            # doesn't raise TypeError and abort the whole scan.
+                            if ts.tzinfo is None:
+                                ts = ts.replace(tzinfo=timezone.utc)
                             if ts >= cutoff:
                                 recent_lessons.append((ts, row))
                         except (json.JSONDecodeError, ValueError):
