@@ -523,13 +523,17 @@ def _try_synthesis_burst(content: str, ts: str) -> str | None:
     consensus = _grab(r"CONSENSUS:\s*(\w+)\s+(\d+)%?")
     signal = _grab(r"SIGNAL:\s*(\w+)")
     trend = _grab(r"TREND:\s*(UP|DOWN|SIDEWAYS)")
-    structural = _grab(r"STRUCTURAL:\s*(GREEN|CAUTION|YELLOW|RED)")
+    # Capture both the status word AND the parenthetical reason so the
+    # rendered line carries WHY the backdrop is cautious, not just THAT
+    # it is. e.g. STRUCTURAL: CAUTION (consolidating) → CAUTION + reason.
+    structural = _grab(r"STRUCTURAL:\s*(GREEN|CAUTION|YELLOW|RED)(?:\s*\(([^)]+)\))?")
 
     consensus_dir = consensus.group(1).upper() if consensus else None
     consensus_pct = int(consensus.group(2)) if consensus else None
     signal_action = signal.group(1).upper() if signal else None
     trend_dir = trend.group(1).upper() if trend else None
     struct_state = structural.group(1).upper() if structural else None
+    struct_reason = structural.group(2).strip() if structural and structural.group(2) else None
 
     cons_emoji = {"BULLISH": "🟢", "BEARISH": "🔴", "NEUTRAL": "⚪"}.get(consensus_dir, "⚪")
     sig_emoji = {"BUY": "🟢", "SELL": "🔴", "HOLD": "🟡", "WAIT": "⏳"}.get(signal_action, "⏳")
@@ -544,7 +548,13 @@ def _try_synthesis_burst(content: str, ts: str) -> str | None:
     if trend_dir:
         lines.append(f"Trend: {trend_emoji} {trend_dir}")
     if struct_state:
-        lines.append(f"Structure: {struct_emoji} {struct_state}")
+        # Label: "Market backdrop" — clearer than the jargon "Structure"
+        # for non-quant readers. Reason word (if present) is shown in
+        # parens so the reader knows WHY the backdrop is e.g. cautious.
+        line = f"Market backdrop: {struct_emoji} {struct_state}"
+        if struct_reason:
+            line += f" ({struct_reason})"
+        lines.append(line)
 
     # Body must have at least one field beyond the header to be worth emitting
     if len(lines) <= 2:
