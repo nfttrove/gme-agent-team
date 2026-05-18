@@ -36,6 +36,18 @@ gme_trading_system/.insider_cache/
 supabase_sync_state.json
 gme_trading_system/supabase_sync_state.json
 
+# Episodic memory runtime artifacts — per-snapshot JSON files written by
+# the synthesis/futurist hooks on every cycle. The aggregated jsonl files
+# (episodes.jsonl, lessons.jsonl) ARE tracked because they hold the seeded
+# baselines + accumulated graduated knowledge. The candidates/ dir is
+# pure staging — entries either graduate (into lessons.jsonl) or get
+# rejected, so the dir itself doesn't need to be in git.
+.agent/memory/episodic/synthesis_*.json
+.agent/memory/episodic/prediction_*.json
+.agent/memory/episodic/trade_*.json
+.agent/memory/episodic/signal_*.json
+.agent/memory/candidates/
+
 # Claude
 .claude/worktrees/
 
